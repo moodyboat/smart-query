@@ -37,7 +37,8 @@ df = pd.read_csv(f"{_workspace}/cleaned_data.csv")
 这样可以在多次执行间传递数据，无需每次重新查询数据库。
 
 ## 编写指南
-1. 代码必须完整可执行（包含所有 import）
+1. **每次调用是独立进程，变量不跨调用保留**。数据查询和绘图/分析必须写在同一次调用中。如需跨调用传递数据，通过工作区文件（CSV/Pickle）中转
+2. 代码必须完整可执行（包含所有 import）
 2. 以下模块已自动注入，无需 import 即可使用: `pandas`(pd), `numpy`(np), `matplotlib.pyplot`(plt), `json`, `os`, `sys`, `engine`(数据库连接)
 3. 使用 `print()` 输出分析结果
 4. 图表使用 `matplotlib` 自动保存（`plt.show()` 和 `plt.savefig()` 都会自动追踪为图片产物）
