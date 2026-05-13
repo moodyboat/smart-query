@@ -95,9 +95,11 @@ public class ExecuteSqlTool implements LlmTool {
     @Override
     public boolean isConcurrencySafe() { return true; }
 
+    private static final java.util.regex.Pattern LIMIT_PATTERN =
+        java.util.regex.Pattern.compile("\\bLIMIT\\b", java.util.regex.Pattern.CASE_INSENSITIVE);
+
     private String applyAutoLimit(String sql) {
-        String upper = sql.toUpperCase().trim();
-        if (!upper.contains(" LIMIT ") && !upper.contains(" LIMIT\n") && !upper.endsWith("LIMIT")) {
+        if (!LIMIT_PATTERN.matcher(sql.trim()).find()) {
             return sql + " LIMIT 1000";
         }
         return sql;

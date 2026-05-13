@@ -78,8 +78,9 @@ public class ChartController {
             return Result.error("SQL 安全检查未通过: " + validation.reason());
         }
 
-        // 自动添加 LIMIT
-        if (!sql.toUpperCase().contains(" LIMIT ")) {
+        // 自动添加 LIMIT（正则检测已存在的 LIMIT 子句）
+        if (!java.util.regex.Pattern.compile("\\bLIMIT\\b", java.util.regex.Pattern.CASE_INSENSITIVE)
+                .matcher(sql).find()) {
             sql += " LIMIT 1000";
         }
 

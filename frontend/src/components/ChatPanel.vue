@@ -168,15 +168,20 @@ async function sendMessage() {
   scrollToBottom()
 
   const controller = new AbortController()
-  const safetyTimeout = setTimeout(() => {
-    if (loading.value) {
-      assistantMsg.loading = false
-      assistantMsg._streaming = false
-      loading.value = false
-      connectionState.value = 'error'
-      controller.abort()
-    }
-  }, 180000)
+  let safetyTimeout = null
+  const resetSafety = () => {
+    if (safetyTimeout) clearTimeout(safetyTimeout)
+    safetyTimeout = setTimeout(() => {
+      if (loading.value) {
+        assistantMsg.loading = false
+        assistantMsg._streaming = false
+        loading.value = false
+        connectionState.value = 'error'
+        controller.abort()
+      }
+    }, 300000)
+  }
+  resetSafety()
 
   try {
     const url = buildChatUrl(convId, dsId)
@@ -210,6 +215,7 @@ async function sendMessage() {
         if (!jsonStr) continue
         try {
           const evt = JSON.parse(jsonStr)
+          resetSafety()
           handleEvent(evt, assistantMsg)
           if (evt.type === 'Done') {
             clearTimeout(safetyTimeout)
@@ -230,7 +236,7 @@ async function sendMessage() {
       })
     }
   } finally {
-    clearTimeout(safetyTimeout)
+    if (safetyTimeout) clearTimeout(safetyTimeout)
     assistantMsg.loading = false
     assistantMsg._streaming = false
     assistantMsg.spinnerTip = ''
@@ -267,10 +273,10 @@ function handleEvent(evt, assistantMsg) {
 
     case 'Result': {
       const sqlBlocks = assistantMsg.content.filter(b => b.name === 'execute_sql')
-      const lastSql = sqlBlocks[sqlBlocks.length - 1]
-      if (lastSql) {
-        lastSql.result = { summary: evt.summary, totalRows: evt.totalRows, rows: evt.data || [], error: evt.error }
-        lastSql.status = evt.error ? 'error' : 'success'
+      const targetSql = sqlBlocks.find(b => b.status === 'running') || sqlBlocks[sqlBlocks.length - 1]
+      if (targetSql) {
+        targetSql.result = { summary: evt.summary, totalRows: evt.totalRows, rows: evt.data || [], error: evt.error }
+        targetSql.status = evt.error ? 'error' : 'success'
       }
       break
     }
