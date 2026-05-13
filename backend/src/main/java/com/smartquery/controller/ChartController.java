@@ -69,8 +69,8 @@ public class ChartController {
             }
         }
 
-        // 清除未替换的占位符
-        sql = sql.replaceAll("\\{\\{filter\\.[^}]+}}", "1=1");
+        // 清除未替换的占位符（移除占位符及前面多余的空格）
+        sql = sql.replaceAll(" ?\\{\\{filter\\.[^}]+}}", "");
 
         // 安全检查
         SqlSafetyValidator.ValidationResult validation = sqlSafetyValidator.validate(sql);

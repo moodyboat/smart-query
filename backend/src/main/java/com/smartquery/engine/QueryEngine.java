@@ -293,14 +293,31 @@ public class QueryEngine {
             if (conv == null) return;
             if (conv.getTitle() != null && !"新对话".equals(conv.getTitle()) && !conv.getTitle().isBlank()) return;
 
-            String title = userMessage.length() > 30
-                ? userMessage.substring(0, 30) + "..."
-                : userMessage;
+            String title = extractTitle(userMessage);
             conv.setTitle(title);
             conversationMapper.updateById(conv);
         } catch (Exception e) {
             log.debug("[QUERY] auto-title update skipped: {}", e.getMessage());
         }
+    }
+
+    private String extractTitle(String message) {
+        String t = message.trim();
+        // Strip common filler prefixes
+        t = t.replaceAll("^(请)?(帮我|帮我来|帮忙)?(用|使用)?", "");
+        // Strip tool mentions
+        t = t.replaceAll("^(Python|python|SQL|sql)\\s*(分析|画|写|生成|执行)?\\s*", "");
+        t = t.replaceAll("^(帮我|请|麻烦|能不能|可以)\\s*", "");
+        // Take first sentence (up to 。！？, or newline)
+        int cut = t.indexOf('。');
+        if (cut > 0 && cut < t.length() - 1) t = t.substring(0, cut);
+        cut = t.indexOf('！');
+        if (cut > 0 && cut < t.length() - 1) t = t.substring(0, cut);
+        int nl = t.indexOf('\n');
+        if (nl > 0) t = t.substring(0, nl);
+        // Cap at 20 chars
+        if (t.length() > 20) t = t.substring(0, 20) + "...";
+        return t.isBlank() ? message.substring(0, Math.min(message.length(), 20)) : t;
     }
 
     private List<Map<String, Object>> loadHistory(Long conversationId, Long excludeAfterId) {

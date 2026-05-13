@@ -19,6 +19,10 @@ export async function deleteConversation(id) {
   await api.delete(`/conversation/${id}`)
 }
 
+export async function renameConversation(id, title) {
+  await api.put(`/conversation/${id}/title`, { title })
+}
+
 export async function fetchConversationMessages(conversationId) {
   const { data } = await api.get(`/conversation/${conversationId}/messages`)
   return data.data

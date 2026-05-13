@@ -62,6 +62,18 @@ public class ConversationController {
         return Result.ok(null);
     }
 
+    @PutMapping("/{id}/title")
+    public Result<Void> updateTitle(@PathVariable Long id, @RequestBody java.util.Map<String, String> body) {
+        String title = body.get("title");
+        if (title == null || title.isBlank()) return Result.error("标题不能为空");
+        if (title.length() > 100) title = title.substring(0, 100);
+        Conversation conv = conversationMapper.selectById(id);
+        if (conv == null) return Result.error("对话不存在");
+        conv.setTitle(title);
+        conversationMapper.updateById(conv);
+        return Result.ok(null);
+    }
+
     @GetMapping("/{id}/messages")
     public Result<List<ChatMessage>> getMessages(@PathVariable Long id) {
         List<ChatMessage> messages = chatMessageMapper.selectList(

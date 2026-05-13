@@ -63,7 +63,7 @@
 
     <div class="input-area">
       <div v-if="!conversationId || !dataSourceId" class="input-hint">
-        请先选择数据源和数据集
+        {{ !dataSourceId ? '请先在左侧选择数据源' : '请新建或选择一个对话' }}
       </div>
       <div v-else class="input-row">
         <el-input

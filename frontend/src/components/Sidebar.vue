@@ -17,18 +17,39 @@
       </el-select>
     </div>
 
+    <div v-if="conversations.length > 5" class="search-bar">
+      <input
+        v-model="searchQuery"
+        class="search-input"
+        placeholder="搜索对话..."
+      />
+    </div>
+
     <div class="conversation-list">
       <div
-        v-for="conv in conversations"
+        v-for="conv in filteredConversations"
         :key="conv.id"
         class="conv-item"
         :class="{ active: conv.id === currentConvId }"
         @click="$emit('selectConversation', conv.id)"
       >
         <span class="conv-icon">💬</span>
-        <span class="conv-title">{{ conv.title || '新对话' }}</span>
+        <template v-if="editingId === conv.id">
+          <input
+            ref="editInput"
+            v-model="editTitle"
+            class="conv-edit-input"
+            @keydown.enter="saveRename(conv.id)"
+            @keydown.escape="cancelRename"
+            @blur="saveRename(conv.id)"
+          />
+        </template>
+        <template v-else>
+          <span class="conv-title" @dblclick="startRename(conv)">{{ conv.title || '新对话' }}</span>
+        </template>
         <span class="conv-delete" @click.stop="handleDelete(conv.id)" title="删除">×</span>
       </div>
+      <div v-if="!filteredConversations.length && conversations.length" class="conv-empty">未找到匹配对话</div>
       <div v-if="!conversations.length" class="conv-empty">暂无对话</div>
     </div>
 
@@ -41,16 +62,26 @@
 </template>
 
 <script setup>
-import { ref, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { Plus } from '@element-plus/icons-vue'
-import { fetchConversations, fetchDataSources, createConversation, deleteConversation } from '../api'
+import { fetchConversations, fetchDataSources, createConversation, deleteConversation, renameConversation } from '../api'
 
 const conversations = ref([])
 const dataSources = ref([])
 const currentConvId = ref(null)
 const selectedDsId = ref(null)
+const searchQuery = ref('')
+const editingId = ref(null)
+const editTitle = ref('')
+const editInput = ref(null)
 
 const emit = defineEmits(['selectConversation', 'conversationCreated', 'conversationDeleted', 'dataSourceChanged'])
+
+const filteredConversations = computed(() => {
+  if (!searchQuery.value.trim()) return conversations.value
+  const q = searchQuery.value.toLowerCase()
+  return conversations.value.filter(c => (c.title || '新对话').toLowerCase().includes(q))
+})
 
 watch(selectedDsId, (val) => {
   emit('dataSourceChanged', val)
@@ -62,7 +93,6 @@ onMounted(async () => {
     conversations.value = convs || []
     dataSources.value = dss || []
     if (dss?.length > 0) {
-      // Prefer non-system data sources (business data)
       const business = dss.find(ds => ds.databaseName !== 'smart_query') || dss[0]
       selectedDsId.value = business.id
       emit('dataSourceChanged', business.id)
@@ -88,6 +118,35 @@ async function handleDelete(convId) {
     }
     emit('conversationDeleted', convId)
   } catch { /* ignore */ }
+}
+
+function startRename(conv) {
+  editingId.value = conv.id
+  editTitle.value = conv.title || '新对话'
+  nextTick(() => {
+    const input = document.querySelector('.conv-edit-input')
+    if (input) { input.focus(); input.select() }
+  })
+}
+
+async function saveRename(convId) {
+  const title = editTitle.value.trim()
+  if (!title || editingId.value !== convId) {
+    cancelRename()
+    return
+  }
+  const conv = conversations.value.find(c => c.id === convId)
+  if (conv && conv.title !== title) {
+    try {
+      await renameConversation(convId, title)
+      conv.title = title
+    } catch { /* ignore */ }
+  }
+  editingId.value = null
+}
+
+function cancelRename() {
+  editingId.value = null
 }
 
 function setCurrentConversation(id) {
@@ -121,6 +180,14 @@ defineExpose({ setCurrentConversation, getSelectedDataSourceId, conversations, r
 }
 .ds-select { width: 100%; }
 
+.search-bar { padding: 8px 12px 4px; }
+.search-input {
+  width: 100%; padding: 6px 10px; border: 1px solid #e0e0e0;
+  border-radius: 6px; font-size: 12px; outline: none;
+  transition: border-color 0.2s;
+}
+.search-input:focus { border-color: #409eff; }
+
 .conversation-list {
   flex: 1; overflow-y: auto; padding: 8px;
 }
@@ -134,6 +201,10 @@ defineExpose({ setCurrentConversation, getSelectedDataSourceId, conversations, r
 .conv-icon { font-size: 14px; flex-shrink: 0; }
 .conv-title {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
+}
+.conv-edit-input {
+  flex: 1; padding: 2px 6px; font-size: 13px; border: 1px solid #409eff;
+  border-radius: 4px; outline: none; min-width: 0;
 }
 .conv-delete {
   display: none; width: 20px; height: 20px; border-radius: 50%;
