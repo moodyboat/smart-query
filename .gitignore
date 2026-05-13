@@ -1,0 +1,33 @@
+# Backend
+backend/target/
+backend/logs/
+*.class
+*.jar
+*.war
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+*.env.local
+
+# Screenshots (test artifacts)
+screenshots/
+
+# Temp
+*.log
+*.tmp
+.claude/

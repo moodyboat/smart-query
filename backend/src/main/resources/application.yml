@@ -1,0 +1,138 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /
+
+spring:
+  application:
+    name: smart-query
+
+  # 主数据源 (系统库)
+  datasource:
+    url: jdbc:mysql://localhost:3306/smart_query?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
+    username: root
+    password: ${MYSQL_PASSWORD:}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+
+  # Redis
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      database: 0
+
+  # Flyway
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+  # Jackson
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+    serialization:
+      write-dates-as-timestamps: false
+
+# MyBatis-Plus
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+
+# Knife4j
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+  api-docs:
+    path: /v3/api-docs
+
+# ==================== 智能问数配置 ====================
+
+smart-query:
+  # LLM 配置
+  llm:
+    default-model: glm-5.1
+    models:
+      glm-5.1:
+        api-url: https://open.bigmodel.cn/api/coding/paas/v4/chat/completions
+        api-key: ${GLM_API_KEY:}
+        max-tokens: 8192
+        temperature: 0.1
+      glm-4:
+        api-url: https://open.bigmodel.cn/api/coding/paas/v4/chat/completions
+        api-key: ${GLM_API_KEY:}
+        max-tokens: 4096
+        temperature: 0.1
+      gpt-4o:
+        api-url: https://api.openai.com/v1/chat/completions
+        api-key: ${OPENAI_API_KEY:}
+        max-tokens: 4096
+        temperature: 0.1
+      deepseek:
+        api-url: https://api.deepseek.com/v1/chat/completions
+        api-key: ${DEEPSEEK_API_KEY:}
+        max-tokens: 4096
+        temperature: 0.1
+      ollama:
+        api-url: http://localhost:11434/api/chat
+        model-name: qwen2.5:7b
+        max-tokens: 4096
+        temperature: 0.1
+    retry:
+      max-attempts: 3
+      backoff-multiplier: 2
+      initial-delay-ms: 1000
+
+  # ReAct 引擎
+  react:
+    max-turns: 15
+    max-tokens-per-turn: 8000
+    auto-compact-threshold: 80000
+
+  # Python 执行环境
+  python:
+    execution-mode: docker
+    docker-image: smart-query-python:latest
+    default-timeout-ms: 60000
+    max-timeout-ms: 600000
+    max-output-bytes: 65536
+
+  # SQL 安全
+  sql-safety:
+    level: normal
+    allowed-statements: SELECT,SHOW,DESCRIBE,EXPLAIN
+    denied-keywords: DROP,DELETE,UPDATE,INSERT,ALTER,CREATE,TRUNCATE,GRANT,REVOKE
+    max-rows: 1000
+    query-timeout-seconds: 30
+
+  # 日志
+  logging:
+    structured: true
+    trace-all-requests: true
+    ring-buffer-size: 100
+
+logging:
+  level:
+    com.smartquery: DEBUG
+    com.smartquery.logging: TRACE
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    name: logs/smart-query.log
+    max-size: 100MB
+    max-history: 30
