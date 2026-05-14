@@ -146,6 +146,114 @@ public class MiningService {
         return model;
     }
 
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> predictModel(Long modelId, List<Map<String, Object>> inputRows, String saveTable) {
+        MiningModel model = miningModelMapper.selectById(modelId);
+        if (model == null) throw new IllegalArgumentException("模型不存在: " + modelId);
+        if (model.getModelPath() == null || model.getModelPath().isBlank()) {
+            throw new IllegalStateException("模型尚未训练或模型文件丢失");
+        }
+        if (!"published".equals(model.getStatus()) && !"trained".equals(model.getStatus())) {
+            throw new IllegalStateException("模型状态为 " + model.getStatus() + "，无法预测");
+        }
+
+        String pythonCode = buildPredictionScript(model, inputRows, saveTable);
+        PythonResult result = pythonExecutor.execute(pythonCode, model.getDataSourceId(), 120000);
+
+        if (result.exitCode() != 0) {
+            throw new RuntimeException("预测执行失败: " + (result.stderr().isBlank() ? result.stdout() : result.stderr()));
+        }
+
+        Map<String, Object> parsed = new HashMap<>();
+        for (String line : result.stdout().split("\n")) {
+            if (line.contains("[PREDICT_RESULT]")) {
+                try {
+                    String json = line.substring(line.indexOf("[PREDICT_RESULT]") + 16).trim();
+                    parsed = objectMapper.readValue(json, Map.class);
+                    break;
+                } catch (Exception e) {
+                    log.warn("[MINING] Failed to parse prediction result: {}", e.getMessage());
+                }
+            }
+        }
+        return parsed;
+    }
+
+    private String buildPredictionScript(MiningModel model, List<Map<String, Object>> inputRows, String saveTable) {
+        DataSource ds = dataSourceMapper.selectById(model.getDataSourceId());
+        String dbUrl = ds != null ? buildSqlalchemyUrl(ds) : "";
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("import pandas as pd\n");
+        sb.append("import numpy as np\n");
+        sb.append("import json\n");
+        sb.append("import joblib\n");
+        sb.append("import os\n\n");
+
+        // Load model
+        sb.append("model_path = '").append(model.getModelPath()).append("'\n");
+        sb.append("if not os.path.exists(model_path):\n");
+        sb.append("    print('[PREDICT_RESULT] ' + json.dumps({'error': '模型文件不存在: ' + model_path}))\n");
+        sb.append("    exit(1)\n");
+        sb.append("clf = joblib.load(model_path)\n\n");
+
+        // Build input DataFrame
+        sb.append("input_data = ").append(objectMapper.valueToTree(inputRows).toString()).append("\n");
+        sb.append("df = pd.DataFrame(input_data)\n");
+        sb.append("print(f'[INFO] Predicting {len(df)} rows')\n\n");
+
+        // Apply same preprocessing as training
+        sb.append("preprocessing = ").append(model.getPreprocessing() != null ? model.getPreprocessing() : "{}").append("\n");
+        sb.append("_enc = preprocessing.get('encoding', 'label')\n");
+        sb.append("cat_cols = df.select_dtypes(include=['object']).columns.tolist()\n");
+        sb.append("if cat_cols:\n");
+        sb.append("    if _enc == 'onehot':\n");
+        sb.append("        df = pd.get_dummies(df, columns=cat_cols)\n");
+        sb.append("    else:\n");
+        sb.append("        from sklearn.preprocessing import LabelEncoder\n");
+        sb.append("        le = LabelEncoder()\n");
+        sb.append("        for c in cat_cols:\n");
+        sb.append("            df[c] = le.fit_transform(df[c].astype(str))\n\n");
+
+        sb.append("_sc = preprocessing.get('scaling', 'none')\n");
+        sb.append("num_cols = df.select_dtypes(include=['number']).columns.tolist()\n");
+        sb.append("if _sc == 'standard' and num_cols:\n");
+        sb.append("    from sklearn.preprocessing import StandardScaler\n");
+        sb.append("    df[num_cols] = StandardScaler().fit_transform(df[num_cols])\n");
+        sb.append("elif _sc == 'minmax' and num_cols:\n");
+        sb.append("    from sklearn.preprocessing import MinMaxScaler\n");
+        sb.append("    df[num_cols] = MinMaxScaler().fit_transform(df[num_cols])\n\n");
+
+        // Predict
+        sb.append("predictions = clf.predict(df)\n");
+        sb.append("result = {'predictions': predictions.tolist()}\n\n");
+
+        // Probabilities if available
+        sb.append("if hasattr(clf, 'predict_proba'):\n");
+        sb.append("    try:\n");
+        sb.append("        proba = clf.predict_proba(df)\n");
+        sb.append("        result['probabilities'] = proba.tolist()\n");
+        sb.append("    except: pass\n\n");
+
+        // Save to database table if specified
+        if (saveTable != null && !saveTable.isBlank() && !dbUrl.isEmpty()) {
+            sb.append("from sqlalchemy import create_engine\n");
+            sb.append("engine = create_engine('").append(dbUrl).append("')\n");
+            sb.append("save_df = pd.DataFrame(input_data)\n");
+            sb.append("save_df['prediction'] = predictions\n");
+            sb.append("if 'probabilities' in result:\n");
+            sb.append("    import numpy as np\n");
+            sb.append("    save_df['prediction_proba'] = [max(p) for p in result['probabilities']]\n");
+            sb.append("save_df.to_sql('").append(saveTable).append("', engine, if_exists='append', index=False)\n");
+            sb.append("result['saved_to'] = '").append(saveTable).append("'\n");
+            sb.append("result['saved_rows'] = len(save_df)\n");
+            sb.append("print(f'[INFO] Saved {len(save_df)} rows to ").append(saveTable).append("')\n\n");
+        }
+
+        sb.append("print('[PREDICT_RESULT] ' + json.dumps(result))\n");
+        return sb.toString();
+    }
+
     private String buildTrainingScript(MiningModel model) {
         DataSource ds = dataSourceMapper.selectById(model.getDataSourceId());
         String dbUrl = ds != null ? buildSqlalchemyUrl(ds) : "";

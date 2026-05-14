@@ -138,4 +138,21 @@ public class MiningModelController {
         log.info("[MINING] Schedule updated for model {}: cron={}, enabled={}", id, model.getScheduleCron(), model.getScheduleEnabled());
         return Result.ok(model);
     }
+
+    @PostMapping("/{id}/predict")
+    public Result<Map<String, Object>> predict(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        try {
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> inputRows = (List<Map<String, Object>>) body.get("input");
+            if (inputRows == null || inputRows.isEmpty()) {
+                return Result.error("input 不能为空");
+            }
+            String saveTable = (String) body.get("saveTable");
+            Map<String, Object> result = miningService.predictModel(id, inputRows, saveTable);
+            return Result.ok(result);
+        } catch (Exception e) {
+            log.error("[MINING] Predict failed for model {}: {}", id, e.getMessage());
+            return Result.error("预测失败: " + e.getMessage());
+        }
+    }
 }

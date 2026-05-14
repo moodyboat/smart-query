@@ -65,12 +65,15 @@
               @click.stop="handlePublish(model.id)">发布</el-button>
             <el-button v-if="model.status === 'published'" size="small" type="warning"
               @click.stop="handleOffline(model.id)">下线</el-button>
+            <el-button v-if="model.status === 'published' || model.status === 'trained'" size="small" type="primary"
+              @click.stop="openPredict(model)">预测</el-button>
             <el-dropdown trigger="click" @command="cmd => onActionCmd(cmd, model)" @click.stop>
               <el-button size="small" @click.stop>更多 ▾</el-button>
               <template #dropdown>
                 <el-dropdown-menu>
                   <el-dropdown-item command="params">调参</el-dropdown-item>
                   <el-dropdown-item command="schedule">{{ model.scheduleEnabled ? '调度设置 (已启用)' : '调度设置' }}</el-dropdown-item>
+                  <el-dropdown-item v-if="model.status === 'published' || model.status === 'trained'" command="predict">预测</el-dropdown-item>
                   <el-dropdown-item command="delete" divided style="color: var(--el-color-danger)">删除</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
@@ -261,7 +264,36 @@
       </template>
     </el-dialog>
 
-    <!-- Detail Drawer -->
+    <!-- Prediction Dialog -->
+    <el-dialog v-model="showPredictDialog" title="模型预测" width="660px" destroy-on-close>
+      <div v-if="predictModel_ref">
+        <p style="color: var(--text-secondary); margin-bottom: 12px">
+          使用「{{ predictModel_ref.name }}」进行预测，输入数据格式为 JSON 数组
+        </p>
+        <el-form label-width="100px" size="default">
+          <el-form-item label="输入数据">
+            <el-input v-model="predictInput" type="textarea" :rows="6" placeholder='[{"dept_id": 1, "salary": 15000}]' />
+          </el-form-item>
+          <el-form-item label="保存到表">
+            <el-input v-model="predictSaveTable" placeholder="留空不保存，填写表名则自动建表并写入预测结果" />
+          </el-form-item>
+        </el-form>
+        <div v-if="predictResult" class="predict-result">
+          <h4>预测结果</h4>
+          <div v-if="predictResult.saved_to" style="margin-bottom: 8px; color: var(--color-success)">
+            已保存 {{ predictResult.saved_rows }} 条到表 {{ predictResult.saved_to }}
+          </div>
+          <el-table :data="predictRows" size="small" stripe border max-height="300">
+            <el-table-column type="index" label="#" width="50" />
+            <el-table-column v-for="(_, key) in (predictRows[0] || {})" :key="key" :prop="key" :label="key" />
+          </el-table>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="showPredictDialog = false">关闭</el-button>
+        <el-button type="primary" :loading="predictLoading" @click="handlePredict">执行预测</el-button>
+      </template>
+    </el-dialog>
     <el-drawer v-model="showDetail" :title="detailModel?.name || '模型详情'" size="480px" direction="rtl">
       <template v-if="detailModel">
         <el-descriptions :column="1" border size="small">
@@ -335,6 +367,8 @@
             @click="handlePublish(detailModel.id); refreshDetail()">发布</el-button>
           <el-button v-if="detailModel.status === 'published'" size="small" type="warning"
             @click="handleOffline(detailModel.id); refreshDetail()">下线</el-button>
+          <el-button v-if="detailModel.status === 'published' || detailModel.status === 'trained'" size="small" type="primary"
+            @click="showDetail = false; openPredict(detailModel)">预测</el-button>
           <el-button size="small" @click="showDetail = false; editModel(detailModel)">调参</el-button>
         </div>
       </template>
@@ -350,7 +384,7 @@ import {
   fetchMiningModels, fetchMiningModel, createMiningModel, updateMiningModel,
   deleteMiningModel, trainMiningModel, publishMiningModel, offlineMiningModel,
   updateModelHyperparams, fetchModelExecutions, fetchDataSources,
-  fetchDataSourceTables, fetchTableColumns, updateModelSchedule
+  fetchDataSourceTables, fetchTableColumns, updateModelSchedule, predictMiningModel
 } from '../api'
 
 const emit = defineEmits(['close'])
@@ -391,6 +425,14 @@ const showScheduleDialog = ref(false)
 const scheduleModel = ref(null)
 const scheduleCron = ref('*/60')
 const scheduleEnabled = ref(false)
+
+// Prediction dialog
+const showPredictDialog = ref(false)
+const predictModel_ref = ref(null)
+const predictInput = ref('[{"dept_id": 1, "salary": 15000}]')
+const predictSaveTable = ref('')
+const predictLoading = ref(false)
+const predictResult = ref(null)
 
 // Detail drawer
 const showDetail = ref(false)
@@ -486,6 +528,14 @@ const sortedImportance = computed(() => {
 const maxImportance = computed(() => {
   const vals = Object.values(sortedImportance.value)
   return vals.length ? Math.max(...vals) : 1
+})
+
+const predictRows = computed(() => {
+  if (!predictResult.value) return []
+  let inputRows = []
+  try { inputRows = JSON.parse(predictInput.value) } catch { return [] }
+  const preds = predictResult.value.predictions || []
+  return inputRows.map((row, i) => ({ ...row, prediction: preds[i], probability: predictResult.value.probabilities?.[i] ? (Math.max(...predictResult.value.probabilities[i]) * 100).toFixed(1) + '%' : '' }))
 })
 
 async function loadModels() {
@@ -845,7 +895,53 @@ async function selectModel(model) {
 function onActionCmd(cmd, model) {
   if (cmd === 'params') editModel(model)
   else if (cmd === 'schedule') openSchedule(model)
+  else if (cmd === 'predict') openPredict(model)
   else if (cmd === 'delete') handleDelete(model.id, model.name)
+}
+
+function openPredict(model) {
+  predictModel_ref.value = model
+  predictInput.value = '[\n  '
+  try {
+    const cols = JSON.parse(model.featureColumns || '[]')
+    const sample = {}
+    cols.forEach(c => { sample[c] = 0 })
+    predictInput.value = JSON.stringify([sample], null, 2)
+  } catch { predictInput.value = '[{"col1": 0}]' }
+  predictSaveTable.value = model.sourceTable ? model.sourceTable + '_prediction' : ''
+  predictResult.value = null
+  showPredictDialog.value = true
+}
+
+async function handlePredict() {
+  let inputRows
+  try {
+    inputRows = JSON.parse(predictInput.value)
+    if (!Array.isArray(inputRows) || inputRows.length === 0) throw new Error()
+  } catch {
+    ElMessage.error('输入数据格式错误，需要JSON数组')
+    return
+  }
+
+  predictLoading.value = true
+  predictResult.value = null
+  try {
+    const result = await predictMiningModel(
+      predictModel_ref.value.id,
+      inputRows,
+      predictSaveTable.value || null
+    )
+    predictResult.value = result
+    if (result.saved_to) {
+      ElMessage.success(`预测完成，${result.saved_rows} 条结果已写入 ${result.saved_to}`)
+    } else {
+      ElMessage.success(`预测完成，共 ${result.predictions?.length || 0} 条结果`)
+    }
+  } catch (e) {
+    ElMessage.error('预测失败: ' + (e.message || '未知错误'))
+  } finally {
+    predictLoading.value = false
+  }
 }
 
 function goToPipeline(pipelineId) {
@@ -970,6 +1066,9 @@ function goToPipeline(pipelineId) {
 .imp-track { flex: 1; height: 8px; background: var(--border-light); border-radius: 4px; overflow: hidden; }
 .imp-fill { height: 100%; background: var(--primary); border-radius: 4px; transition: width 0.3s; }
 .imp-value { width: 40px; font-size: var(--font-sm); color: var(--text-muted); text-align: right; }
+
+.predict-result { margin-top: 16px; }
+.predict-result h4 { font-size: var(--font-md); color: var(--text-primary); margin-bottom: 8px; }
 
 .execution-list { display: flex; flex-direction: column; gap: var(--space-xs); }
 .execution-item {

@@ -32,7 +32,7 @@ public class MiningModelTool implements LlmTool {
     public Map<String, Object> getJsonSchema() {
         Map<String, Object> props = new LinkedHashMap<>();
         props.put("action", Map.of("type", "string", "description",
-            "操作类型: list=查看模型列表, get=查看模型详情, create=创建新模型, update=更新模型配置, update_params=修改超参数, train=训练, publish=发布, offline=下线"));
+            "操作类型: list=查看模型列表, get=查看模型详情, create=创建新模型, update=更新模型配置, update_params=修改超参数, train=训练, publish=发布, offline=下线, predict=预测"));
         props.put("model_id", Map.of("type", "integer", "description", "模型ID (list操作不需要)"));
         props.put("name", Map.of("type", "string", "description", "模型名称"));
         props.put("algorithm", Map.of("type", "string", "description", "算法: random_forest, xgboost, decision_tree, logistic_regression, svm, knn, kmeans"));
@@ -42,6 +42,8 @@ public class MiningModelTool implements LlmTool {
         props.put("target_column", Map.of("type", "string", "description", "目标列名"));
         props.put("hyperparameters", Map.of("type", "object", "description", "超参数"));
         props.put("description", Map.of("type", "string", "description", "模型描述"));
+        props.put("predict_input", Map.of("type", "array", "description", "预测输入数据(JSON数组), 每个元素是一个特征键值对"));
+        props.put("save_table", Map.of("type", "string", "description", "预测结果保存到的表名, 留空则不保存"));
         return Map.of("type", "object", "properties", props, "required", List.of("action"));
     }
 
@@ -60,6 +62,7 @@ public class MiningModelTool implements LlmTool {
                 case "train" -> handleTrain(input, start);
                 case "publish" -> handlePublish(input, start);
                 case "offline" -> handleOffline(input, start);
+                case "predict" -> handlePredict(input, start);
                 default -> ToolResult.error(getName(), "未知操作: " + action, System.currentTimeMillis() - start);
             };
         } catch (Exception e) {
@@ -210,6 +213,46 @@ public class MiningModelTool implements LlmTool {
         MiningModel model = miningService.offlineModel(id);
         return new ToolResult(getName(), true, "模型「" + model.getName() + "」已下线",
             null, System.currentTimeMillis() - start, List.of());
+    }
+
+    @SuppressWarnings("unchecked")
+    private ToolResult handlePredict(Map<String, Object> input, long start) {
+        Long id = toLong(input.get("model_id"));
+        if (id == null) return ToolResult.error(getName(), "需要 model_id", System.currentTimeMillis() - start);
+        Object inputObj = input.get("predict_input");
+        if (inputObj == null) return ToolResult.error(getName(), "需要 predict_input (JSON数组)", System.currentTimeMillis() - start);
+
+        List<Map<String, Object>> inputRows;
+        if (inputObj instanceof List) {
+            inputRows = (List<Map<String, Object>>) inputObj;
+        } else {
+            try { inputRows = objectMapper.readValue(objectMapper.writeValueAsString(inputObj), List.class); }
+            catch (Exception e) { return ToolResult.error(getName(), "predict_input 格式错误", System.currentTimeMillis() - start); }
+        }
+
+        String saveTable = input.get("save_table") != null ? input.get("save_table").toString() : null;
+        try {
+            Map<String, Object> result = miningService.predictModel(id, inputRows, saveTable);
+            StringBuilder sb = new StringBuilder("预测结果:\n");
+            List<Object> preds = (List<Object>) result.get("predictions");
+            for (int i = 0; i < inputRows.size() && i < preds.size(); i++) {
+                sb.append("  第").append(i + 1).append("条: ").append(inputRows.get(i)).append(" → 预测值: ").append(preds.get(i));
+                if (result.get("probabilities") != null) {
+                    List<List<Number>> probs = (List<List<Number>>) result.get("probabilities");
+                    if (i < probs.size()) {
+                        double maxP = probs.get(i).stream().mapToDouble(Number::doubleValue).max().orElse(0);
+                        sb.append(" (置信度: ").append(String.format("%.1f%%", maxP * 100)).append(")");
+                    }
+                }
+                sb.append("\n");
+            }
+            if (result.get("saved_to") != null) {
+                sb.append("\n已保存 ").append(result.get("saved_rows")).append(" 条到表 ").append(result.get("saved_to"));
+            }
+            return new ToolResult(getName(), true, sb.toString(), null, System.currentTimeMillis() - start, List.of());
+        } catch (Exception e) {
+            return ToolResult.error(getName(), "预测失败: " + e.getMessage(), System.currentTimeMillis() - start);
+        }
     }
 
     private Long toLong(Object val) {

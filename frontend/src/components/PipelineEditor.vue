@@ -645,7 +645,7 @@ async function runPipeline() {
     if (dsNode?.config?.table && trainNode?.config?.algorithm) {
       const features = featNode?.config?.featureColumns ? JSON.parse(featNode.config.featureColumns) : []
       const payload = {
-        name: editingPipeline.value.name + ' (Pipeline)',
+        name: editingPipeline.value.name,
         dataSourceId: editingPipeline.value.dataSourceId,
         sourceTable: dsNode.config.table,
         modelType: trainNode.config.modelType || 'classification',
@@ -661,11 +661,22 @@ async function runPipeline() {
         })
       }
       const apiBase = axios.create({ baseURL: '/api/v1', timeout: 180000 })
-      const { data: { data: model } } = await apiBase.post('/mining/model', payload)
-      if (model?.id) {
-        const { data: { data: trained } } = await apiBase.post(`/mining/model/${model.id}/train`)
-        // Fetch full model with metrics
-        const { data: { data: fullModel } } = await apiBase.get(`/mining/model/${model.id}`)
+
+      // Reuse existing model for this pipeline, or create new one
+      let modelId = null
+      const { data: { data: existingModels } } = await apiBase.get('/mining/model', { params: { dataSourceId: editingPipeline.value.dataSourceId } })
+      const existing = (existingModels || []).find(m => m.pipelineId === editingPipeline.value.id)
+      if (existing) {
+        await apiBase.put(`/mining/model/${existing.id}`, payload)
+        modelId = existing.id
+      } else {
+        const { data: { data: created } } = await apiBase.post('/mining/model', payload)
+        modelId = created?.id
+      }
+
+      if (modelId) {
+        const { data: { data: trained } } = await apiBase.post(`/mining/model/${modelId}/train`)
+        const { data: { data: fullModel } } = await apiBase.get(`/mining/model/${modelId}`)
         lastRunResult.value = fullModel || trained
       }
     }

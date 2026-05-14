@@ -133,6 +133,13 @@ export async function fetchModelExecutions(modelId) {
   return data.data
 }
 
+export async function predictMiningModel(id, input, saveTable) {
+  const body = { input }
+  if (saveTable) body.saveTable = saveTable
+  const { data } = await api.post(`/mining/model/${id}/predict`, body)
+  return data.data
+}
+
 // Mining Pipeline APIs
 export async function fetchMiningPipelines(dataSourceId) {
   const params = dataSourceId ? `?dataSourceId=${dataSourceId}` : ''
