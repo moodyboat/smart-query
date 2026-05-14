@@ -859,7 +859,7 @@ function goToPipeline(pipelineId) {
 
 <style scoped>
 .mining-manager {
-  position: fixed; inset: 0; z-index: 1000;
+  flex: 1; min-width: 0;
   background: var(--bg); display: flex; flex-direction: column;
 }
 .mining-tabs {

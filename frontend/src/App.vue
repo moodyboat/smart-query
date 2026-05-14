@@ -9,6 +9,7 @@
     @openMining="miningVisible = true"
   />
   <ChatPanel
+    v-show="!miningVisible"
     ref="chatPanel"
     :conversationId="currentConvId"
     :dataSourceId="currentDsId"
