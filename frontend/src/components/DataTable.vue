@@ -5,7 +5,7 @@
       <button v-if="rows.length > pageSize" class="toggle-btn" @click="expanded = !expanded">
         {{ expanded ? '收起' : `展开全部 (${rows.length} 行)` }}
       </button>
-      <button class="copy-btn" @click="copyAsCSV">复制 CSV</button>
+      <button class="copy-btn" @click="copyAsCSV">{{ csvCopied ? '已复制' : '复制 CSV' }}</button>
     </div>
     <div class="table-scroll">
       <table class="data-table">
@@ -43,6 +43,7 @@ const props = defineProps({
 const expanded = ref(false)
 const sortKey = ref(null)
 const sortOrder = ref(1)
+const csvCopied = ref(false)
 
 const columns = computed(() => {
   if (!props.rows.length) return []
@@ -88,49 +89,67 @@ function copyAsCSV() {
     const v = r[c] == null ? '' : String(r[c]).replace(/"/g, '""')
     return `"${v}"`
   }).join(','))
-  navigator.clipboard.writeText([header, ...body].join('\n'))
+  const text = [header, ...body].join('\n')
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(text).then(() => {
+      csvCopied.value = true
+      setTimeout(() => { csvCopied.value = false }, 2000)
+    }).catch(() => {
+      const ta = document.createElement('textarea')
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'
+      document.body.appendChild(ta); ta.select()
+      try { document.execCommand('copy'); csvCopied.value = true; setTimeout(() => { csvCopied.value = false }, 2000) } catch { /* copy failed */ }
+      document.body.removeChild(ta)
+    })
+  } else {
+    const ta = document.createElement('textarea')
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'
+    document.body.appendChild(ta); ta.select()
+    try { document.execCommand('copy'); csvCopied.value = true; setTimeout(() => { csvCopied.value = false }, 2000) } catch { /* copy failed */ }
+    document.body.removeChild(ta)
+  }
 }
 </script>
 
 <style scoped>
 .data-table-wrapper {
-  margin-top: 8px;
-  border: 1px solid #e8e8e8;
-  border-radius: 6px;
+  margin-top: var(--space-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
   overflow: hidden;
-  font-size: 12px;
+  font-size: var(--font-sm);
 }
 .table-toolbar {
-  display: flex; align-items: center; gap: 8px;
-  padding: 6px 10px; background: #fafafa; border-bottom: 1px solid #e8e8e8;
+  display: flex; align-items: center; gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-sm); background: var(--border-lighter); border-bottom: 1px solid var(--border);
 }
-.row-count { color: #999; }
+.row-count { color: var(--text-muted); }
 .toggle-btn, .copy-btn {
-  padding: 2px 8px; font-size: 11px;
-  background: transparent; color: #409eff; border: 1px solid #d9ecff;
-  border-radius: 4px; cursor: pointer;
+  padding: 2px var(--space-sm); font-size: var(--font-xs);
+  background: transparent; color: var(--primary); border: 1px solid var(--primary-light);
+  border-radius: var(--radius-sm); cursor: pointer;
 }
-.toggle-btn:hover, .copy-btn:hover { background: #f0f7ff; }
+.toggle-btn:hover, .copy-btn:hover { background: var(--primary-light); }
 .table-scroll { overflow-x: auto; max-height: 400px; overflow-y: auto; }
 .data-table {
   width: 100%; border-collapse: collapse; white-space: nowrap;
 }
 .data-table th {
   position: sticky; top: 0; z-index: 1;
-  background: #f5f7fa; padding: 6px 10px; text-align: left;
-  font-weight: 600; border-bottom: 2px solid #e0e0e0; user-select: none;
+  background: var(--color-info-light); padding: var(--space-xs) var(--space-sm); text-align: left;
+  font-weight: 600; border-bottom: 2px solid var(--border); user-select: none;
 }
 .data-table th.sortable { cursor: pointer; }
-.data-table th.sortable:hover { background: #ecf0f5; }
-.sort-arrow { color: #409eff; font-size: 10px; }
+.data-table th.sortable:hover { background: var(--border-light); }
+.sort-arrow { color: var(--primary); font-size: 10px; }
 .data-table td {
-  padding: 5px 10px; border-bottom: 1px solid #f0f0f0;
+  padding: 5px var(--space-sm); border-bottom: 1px solid var(--border-light);
   max-width: 300px; overflow: hidden; text-overflow: ellipsis;
 }
-.row-num { color: #ccc; width: 30px; text-align: right; }
-.data-table tr:hover td { background: #f8fbff; }
+.row-num { color: var(--border); width: 30px; text-align: right; }
+.data-table tr:hover td { background: var(--primary-light); }
 .table-footer {
-  padding: 6px 10px; text-align: center; font-size: 11px; color: #999;
-  border-top: 1px solid #f0f0f0; background: #fafafa;
+  padding: var(--space-xs) var(--space-sm); text-align: center; font-size: var(--font-xs); color: var(--text-muted);
+  border-top: 1px solid var(--border-light); background: var(--border-lighter);
 }
 </style>

@@ -54,16 +54,25 @@ public class ChartController {
 
         String sql = chart.getBaseSql();
 
-        // 替换筛选占位符
+        // Build alias map from SELECT clause (e.g. "d.name as dept_name" → dept_name → d.name)
+        Map<String, String> aliasMap = parseSelectAliases(sql);
+
+        // Replace filter placeholders — only allow fields present in the template
         if (filterValues != null) {
             for (Map.Entry<String, Object> entry : filterValues.entrySet()) {
-                String placeholder = "{{filter." + entry.getKey() + "}}";
+                String field = entry.getKey();
+                // Validate field name: only alphanumeric + underscore allowed
+                if (!field.matches("[a-zA-Z_]\\w*")) {
+                    return Result.error("筛选字段名不合法: " + field);
+                }
+                String placeholder = "{{filter." + field + "}}";
                 if (!sql.contains(placeholder)) continue;
 
                 Object val = entry.getValue();
-                String replacement = resolveFilterValue(entry.getKey(), val);
+                String actualColumn = aliasMap.getOrDefault(field, field);
+                String replacement = resolveFilterValue(actualColumn, val);
                 if (replacement == null) {
-                    return Result.error("筛选值包含非法字符: " + entry.getKey());
+                    return Result.error("筛选值包含非法字符: " + field);
                 }
                 sql = sql.replace(placeholder, replacement);
             }
@@ -263,5 +272,30 @@ public class ChartController {
         if (strVal.isEmpty()) return "";
         if (!isValidFilterValue(strVal)) return null;
         return "AND " + field + " = '" + strVal.replace("'", "''") + "'";
+    }
+
+    /**
+     * Parse SELECT clause to find column aliases (e.g. "d.name as dept_name" → dept_name → d.name).
+     * This allows filter placeholders to use alias names while the actual SQL uses real column refs.
+     */
+    private Map<String, String> parseSelectAliases(String sql) {
+        Map<String, String> aliases = new HashMap<>();
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+            "(?i)\\bSELECT\\b(.+?)\\bFROM\\b", java.util.regex.Pattern.DOTALL
+        ).matcher(sql);
+        if (!m.find()) return aliases;
+        String selectClause = m.group(1);
+        for (String part : selectClause.split(",")) {
+            part = part.trim();
+            java.util.regex.Matcher am = java.util.regex.Pattern.compile(
+                "(?i)\\bAS\\s+([a-zA-Z_]\\w*)\\s*$"
+            ).matcher(part);
+            if (am.find()) {
+                String alias = am.group(1);
+                String expression = part.substring(0, am.start()).trim();
+                aliases.put(alias, expression);
+            }
+        }
+        return aliases;
     }
 }

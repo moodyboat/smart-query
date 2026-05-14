@@ -47,6 +47,10 @@
       <div v-if="loading" class="dashboard-loading">
         <span class="spinner"></span> 加载图表...
       </div>
+      <div v-if="loadError" class="dashboard-error">
+        <span>图表加载失败</span>
+        <el-button size="small" @click="loadChartsFromBackend">重试</el-button>
+      </div>
     </div>
   </div>
 </template>
@@ -69,6 +73,7 @@ const emit = defineEmits(['filterApplied'])
 
 const loading = ref(false)
 const filterLoading = ref(false)
+const loadError = ref(false)
 const fetchedCharts = ref([])
 const filterValues = ref({})
 const chartOverrides = reactive({})
@@ -116,7 +121,7 @@ async function applyFilters() {
             chartOverrides[chart.id] = newOption
           }
         }
-      } catch { /* skip failed charts */ }
+      } catch (e) { console.warn('Chart rerender failed:', e) }
     })
     await Promise.all(updates)
     emit('filterApplied', filterValues.value)
@@ -158,6 +163,7 @@ async function loadChartsFromBackend() {
     }
   } catch (e) {
     console.warn('Dashboard chart fetch failed:', e)
+    loadError.value = true
   } finally {
     loading.value = false
   }
@@ -178,20 +184,20 @@ watch(() => props.charts, (newCharts) => {
 
 <style scoped>
 .dashboard-container {
-  background: #fff;
-  border-radius: 8px;
+  background: var(--surface);
+  border-radius: var(--radius-lg);
   overflow: hidden;
 }
 .dashboard-header {
-  padding: 12px 16px;
-  font-size: 15px;
+  padding: var(--space-md) var(--space-lg);
+  font-size: var(--font-lg);
   font-weight: 600;
-  color: #333;
-  border-bottom: 1px solid #f0f0f0;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-light);
 }
 .dashboard-filters {
-  display: flex; gap: 8px; padding: 8px 12px; flex-wrap: wrap;
-  align-items: center; border-bottom: 1px solid #f5f5f5;
+  display: flex; gap: var(--space-sm); padding: var(--space-sm) var(--space-md); flex-wrap: wrap;
+  align-items: center; border-bottom: 1px solid var(--border-lighter);
 }
 .dashboard-grid {
   padding: 12px;
@@ -211,12 +217,22 @@ watch(() => props.charts, (newCharts) => {
 .dashboard-loading {
   padding: 20px;
   text-align: center;
-  color: #999;
-  font-size: 13px;
+  color: var(--text-muted);
+  font-size: var(--font-md);
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: var(--space-sm);
+}
+.dashboard-error {
+  padding: 20px;
+  text-align: center;
+  color: var(--color-warning);
+  font-size: var(--font-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
 }
 .spinner {
   width: 14px; height: 14px; border: 2px solid #ddd; border-top-color: #409eff;

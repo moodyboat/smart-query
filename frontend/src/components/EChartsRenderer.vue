@@ -60,12 +60,20 @@ function parseOption(raw) {
   return opt
 }
 
+function ensureToolbox(opt) {
+  if (!opt.toolbox) {
+    opt = { ...opt, toolbox: { feature: { saveAsImage: { title: '保存图片' } }, right: 10, top: 5 } }
+  }
+  return opt
+}
+
 function renderChart() {
   if (!chartEl.value) return
   chartError.value = null
-  const opt = parseOption(props.option)
-  if (!opt) return
+  const parsed = parseOption(props.option)
+  if (!parsed) return
 
+  const opt = ensureToolbox(parsed)
   try {
     if (!chartInstance) {
       chartInstance = echarts.init(chartEl.value)
@@ -95,15 +103,15 @@ watch(() => props.option, renderChart, { deep: true })
 
 <style scoped>
 .chart-container {
-  background: #fff;
-  border-radius: 8px;
+  background: var(--surface);
+  border-radius: var(--radius-lg);
   overflow: hidden;
 }
 .chart-title {
-  padding: 10px 14px 0;
-  font-size: 14px;
+  padding: var(--space-md) 14px var(--space-xs);
+  font-size: var(--font-base);
   font-weight: 600;
-  color: #333;
+  color: var(--text-regular);
 }
 .chart-wrapper {
   width: 100%;
@@ -113,15 +121,15 @@ watch(() => props.option, renderChart, { deep: true })
 .chart-error {
   padding: 20px 14px;
   text-align: center;
-  color: #e6a23c;
-  font-size: 13px;
+  color: var(--color-warning);
+  font-size: var(--font-md);
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  background: #fdf6ec;
-  margin: 8px 12px;
-  border-radius: 6px;
+  gap: var(--space-sm);
+  background: var(--color-warning-light);
+  margin: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-md);
 }
-.chart-error-icon { font-size: 16px; }
+.chart-error-icon { font-size: var(--font-xl); }
 </style>

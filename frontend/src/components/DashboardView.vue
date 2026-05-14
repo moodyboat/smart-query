@@ -54,6 +54,10 @@
       <div v-if="loading" class="dashboard-full-loading">
         <span class="spinner"></span> 加载仪表盘数据...
       </div>
+      <div v-else-if="loadError" class="dashboard-full-loading">
+        <span>加载失败</span>
+        <el-button size="small" @click="loadDashboard">重试</el-button>
+      </div>
     </div>
   </div>
 </template>
@@ -73,6 +77,7 @@ const emit = defineEmits(['close'])
 const dashboard = ref(null)
 const charts = ref([])
 const loading = ref(false)
+const loadError = ref(false)
 const filterLoading = ref(false)
 const filterValues = ref({})
 const filterWidgets = computed(() => {
@@ -101,7 +106,11 @@ const layoutClass = computed(() => {
 
 async function loadDashboard() {
   if (!props.dashboardId) return
+  dashboard.value = null
+  charts.value = []
+  filterValues.value = {}
   loading.value = true
+  loadError.value = false
   try {
     const result = await fetchDashboardWithCharts(props.dashboardId)
     if (result) {
@@ -114,7 +123,7 @@ async function loadDashboard() {
       }))
     }
   } catch (e) {
-    console.warn('Dashboard load failed:', e)
+    loadError.value = true
   } finally {
     loading.value = false
   }
@@ -138,7 +147,7 @@ async function applyAllFilters() {
             )
           }
         }
-      } catch { /* skip failed charts */ }
+      } catch (e) { console.warn('Dashboard chart rerender failed:', e) }
     })
     await Promise.all(updates)
   } finally {
@@ -165,6 +174,10 @@ function rebuildOption(chart, rows) {
   return opt
 }
 
+onMounted(() => {
+  if (props.visible && props.dashboardId) loadDashboard()
+})
+
 watch(() => props.visible, (v) => {
   if (v && props.dashboardId) loadDashboard()
 })
@@ -177,34 +190,41 @@ watch(() => props.dashboardId, (id) => {
 <style scoped>
 .dashboard-fullscreen {
   position: fixed; inset: 0; z-index: 1000;
-  background: #f5f6fa; display: flex; flex-direction: column;
+  background: var(--bg); display: flex; flex-direction: column;
 }
 .dashboard-toolbar {
-  height: 52px; background: #fff; border-bottom: 1px solid #e0e0e0;
+  height: 52px; background: var(--surface); border-bottom: 1px solid var(--border);
   display: flex; align-items: center; justify-content: space-between;
-  padding: 0 20px; flex-shrink: 0;
+  padding: 0 var(--space-xl); flex-shrink: 0;
 }
-.toolbar-left, .toolbar-right { display: flex; align-items: center; gap: 8px; }
-.toolbar-center { display: flex; align-items: center; gap: 10px; }
-.dashboard-fullscreen-title { font-size: 15px; font-weight: 600; color: #333; }
+.toolbar-left, .toolbar-right { display: flex; align-items: center; gap: var(--space-sm); }
+.toolbar-center { display: flex; align-items: center; gap: var(--space-sm); }
+.dashboard-fullscreen-title { font-size: var(--font-lg); font-weight: 600; color: var(--text-regular); }
 
 .dashboard-body {
-  flex: 1; padding: 16px; gap: 16px; overflow-y: auto;
+  flex: 1; padding: var(--space-lg); gap: var(--space-lg); overflow-y: auto;
 }
 .grid-2col { display: grid; grid-template-columns: repeat(2, 1fr); }
 .grid-3col { display: grid; grid-template-columns: repeat(3, 1fr); }
 
+@media (max-width: 900px) {
+  .grid-3col { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 600px) {
+  .grid-2col, .grid-3col { grid-template-columns: 1fr; }
+}
+
 .dashboard-chart-card {
-  background: #fff; border-radius: 8px; overflow: hidden;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  background: var(--surface); border-radius: var(--radius-lg); overflow: hidden;
+  box-shadow: var(--shadow-sm);
 }
 
 .dashboard-full-loading {
   grid-column: 1 / -1; padding: 40px; text-align: center;
-  color: #999; display: flex; align-items: center; justify-content: center; gap: 8px;
+  color: var(--text-muted); display: flex; align-items: center; justify-content: center; gap: var(--space-sm);
 }
 .spinner {
-  width: 14px; height: 14px; border: 2px solid #ddd; border-top-color: #409eff;
+  width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--primary);
   border-radius: 50%; animation: spin 0.6s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }

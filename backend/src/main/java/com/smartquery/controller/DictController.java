@@ -71,8 +71,9 @@ public class DictController {
 
         for (String table : tables) {
             try {
+                String safeTable = "`" + table.replace("`", "``") + "`";
                 List<Map<String, Object>> sampleRows = jdbc.queryForList(
-                    "SELECT * FROM " + table + " LIMIT 3");
+                    "SELECT * FROM " + safeTable + " LIMIT 3");
                 if (!sampleRows.isEmpty()) {
                     String sampleJson = new com.fasterxml.jackson.databind.ObjectMapper()
                         .writeValueAsString(sampleRows);

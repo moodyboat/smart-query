@@ -125,22 +125,22 @@ public class QueryEngine {
                 try {
                     List<Map<String, Object>> blocks = List.copyOf(toolBlocks);
                     String json = objectMapper.writeValueAsString(blocks);
-                    if (json.length() > 65536) {
+                    if (json.length() > 262144) {
                         // Step 1: Trim large SQL data rows
                         List<Map<String, Object>> trimmed = trimMetadataBlocks(blocks);
                         json = objectMapper.writeValueAsString(trimmed);
                     }
-                    if (json != null && json.length() > 65536) {
+                    if (json != null && json.length() > 262144) {
                         // Step 2: Trim report section content and Python stdout
                         List<Map<String, Object>> trimmed = trimLargeTextFields(blocks);
                         json = objectMapper.writeValueAsString(trimmed);
                     }
-                    if (json != null && json.length() > 65536) {
+                    if (json != null && json.length() > 262144) {
                         // Step 3: Strip ECharts options, keep only IDs and titles
                         List<Map<String, Object>> trimmed = stripEchartsOptions(blocks);
                         json = objectMapper.writeValueAsString(trimmed);
                     }
-                    if (json != null && json.length() > 65536) {
+                    if (json != null && json.length() > 262144) {
                         log.warn("[QUERY] metadata still too large after trimming ({} chars), skipping", json.length());
                         json = null;
                     }

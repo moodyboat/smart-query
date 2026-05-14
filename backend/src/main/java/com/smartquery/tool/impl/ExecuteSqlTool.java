@@ -69,6 +69,8 @@ public class ExecuteSqlTool implements LlmTool {
         try {
             sql = applyAutoLimit(sql);
             sql = replaceFilterPlaceholders(sql, input);
+            // Strip any remaining {{filter.xxx}} placeholders the LLM added for future filtering
+            sql = sql.replaceAll(" ?\\{\\{filter\\.[^}]+}}", "");
 
             DataSourceContextHolder.set(dsId);
             JdbcTemplate jdbc = dataSourceManager.getJdbcTemplate(dsId);

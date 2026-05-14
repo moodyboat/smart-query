@@ -61,7 +61,8 @@ public class ToolRegistry {
         "generate_report", "report-generate",
         "generate_dashboard", "dashboard-generate",
         "generate_filter_widgets", "filter-widget",
-        "schema_explore", "schema-explore"
+        "schema_explore", "schema-explore",
+        "mining_model", "mining-model"
     );
 
     private String getDetailedDescription(LlmTool tool) {

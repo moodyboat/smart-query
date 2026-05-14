@@ -1,32 +1,43 @@
 <template>
   <Sidebar
     ref="sidebar"
-    @selectConversation="onSelectConversation"
+    :class="{ 'sidebar-open': sidebarOpen }"
+    @selectConversation="(id) => { onSelectConversation(id); sidebarOpen = false }"
     @conversationCreated="onConversationCreated"
     @conversationDeleted="onConversationDeleted"
     @dataSourceChanged="onDataSourceChanged"
+    @openMining="miningVisible = true"
   />
   <ChatPanel
     ref="chatPanel"
     :conversationId="currentConvId"
     :dataSourceId="currentDsId"
+    :showSidebarToggle="isMobile"
     @openDashboard="openDashboard"
     @messageCompleted="onMessageCompleted"
+    @toggleSidebar="sidebarOpen = !sidebarOpen"
   />
+  <div v-if="isMobile && sidebarOpen" class="sidebar-backdrop" @click="sidebarOpen = false"></div>
   <DashboardView
-    v-show="dashboardVisible"
+    v-if="dashboardVisible"
     :visible="dashboardVisible"
     :dashboardId="dashboardId"
     @close="dashboardVisible = false"
   />
+  <MiningManager
+    v-if="miningVisible"
+    @close="miningVisible = false"
+  />
 </template>
 
 <script setup>
-import { ref, defineAsyncComponent } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import Sidebar from './components/Sidebar.vue'
 import ChatPanel from './components/ChatPanel.vue'
-const DashboardView = defineAsyncComponent(() => import('./components/DashboardView.vue'))
-import { fetchConversationMessages, fetchReport, fetchConversations } from './api'
+import DashboardView from './components/DashboardView.vue'
+import MiningManager from './components/MiningManager.vue'
+import { fetchConversationMessages, fetchReport, fetchConversations,
+  fetchConversationCharts, fetchConversationReports, fetchConversationDashboards } from './api'
 
 const sidebar = ref(null)
 const chatPanel = ref(null)
@@ -34,7 +45,17 @@ const currentConvId = ref(null)
 const currentDsId = ref(null)
 const dashboardVisible = ref(false)
 const dashboardId = ref(null)
+const miningVisible = ref(false)
+const sidebarOpen = ref(false)
+const isMobile = ref(window.innerWidth < 768)
 let historyMsgCounter = 0
+
+function onResize() {
+  isMobile.value = window.innerWidth < 768
+  if (!isMobile.value) sidebarOpen.value = false
+}
+onMounted(() => window.addEventListener('resize', onResize))
+onUnmounted(() => window.removeEventListener('resize', onResize))
 
 function onDataSourceChanged(dsId) {
   currentDsId.value = dsId
@@ -111,7 +132,7 @@ async function onSelectConversation(convId) {
                     block.result = { ...block.result, content: report.sections }
                   }
                 }
-              }).catch(() => {})
+              }).catch(e => console.warn('Failed to fetch report sections:', e))
             }
           }
         }
@@ -126,12 +147,17 @@ async function onSelectConversation(convId) {
         }
       })
       chatPanel.value?.clearMessages()
-      // Restore history via exposed method
+
+      // Fallback: load reports/charts/dashboards for messages without metadata BEFORE rendering
+      await restoreLegacyArtifacts(convId, formatted, chartsToRestore)
+
+      // Restore history via exposed method (renders everything)
       chatPanel.value?.restoreHistory(formatted, chartsToRestore)
     } else {
       chatPanel.value?.clearMessages()
     }
-  } catch {
+  } catch (e) {
+    console.error('Failed to load conversation messages:', e)
     chatPanel.value?.clearMessages()
   }
 }
@@ -153,7 +179,112 @@ function openDashboard(id) {
   dashboardVisible.value = true
 }
 
+async function restoreLegacyArtifacts(convId, formatted, chartsToRestore) {
+  // Find assistant messages that have no tool blocks (plain text only)
+  const plainTextAssistants = formatted.filter(
+    m => m.type === 'assistant' && m.content.every(b => b.type === 'text')
+  )
+  if (plainTextAssistants.length === 0) return
+
+  try {
+    const [reports, charts, dashboards] = await Promise.all([
+      fetchConversationReports(convId).catch(() => []),
+      fetchConversationCharts(convId).catch(() => []),
+      fetchConversationDashboards(convId).catch(() => [])
+    ])
+
+    // Already-collected chart IDs from metadata
+    const knownChartIds = new Set(
+      formatted.flatMap(m => m.content)
+        .filter(b => b.name === 'generate_chart' && b.result?.chartId)
+        .map(b => b.result.chartId)
+    )
+
+    // Add charts not already restored via metadata
+    const newCharts = (charts || []).filter(c => !knownChartIds.has(c.id))
+    if (newCharts.length > 0) {
+      for (const chart of newCharts) {
+        chartsToRestore.push({ id: chart.id, title: chart.title, echartsOption: chart.echartsOption })
+        // Find the assistant message that mentions this chart's title
+        const msg = plainTextAssistants.find(m =>
+          m.content.some(b => b.text?.includes(chart.title))
+        )
+        if (msg) {
+          msg.content.push({
+            type: 'tool_use',
+            name: 'generate_chart',
+            _id: 'chart-' + chart.id,
+            input: { title: chart.title },
+            result: { chartId: chart.id, title: chart.title, echartsOption: chart.echartsOption },
+            status: 'success'
+          })
+        }
+      }
+      // Update pendingCharts
+      const pc = chatPanel.value?.pendingCharts || {}
+      for (const c of chartsToRestore) pc[c.id] = c
+    }
+
+    // Add reports (fetch sections synchronously)
+    for (const report of (reports || [])) {
+      const msg = plainTextAssistants.find(m =>
+        m.content.some(b => b.text?.includes(report.title || '报告'))
+      )
+      if (!msg) continue
+      let sections = []
+      let conclusion = ''
+      try {
+        const full = await fetchReport(report.id)
+        if (full?.sections) {
+          const parsed = JSON.parse(full.sections)
+          sections = parsed.map(s => ({
+            title: s.section_title || s.title || '',
+            content: s.section_content || s.content || '',
+            sql: s.sql_used || '',
+            chartType: s.chart_type || '',
+            chartId: s.chart_id || null
+          }))
+          conclusion = full.conclusion || ''
+        }
+      } catch { /* report fetch failed */ }
+      msg.content.push({
+        type: 'tool_use',
+        name: 'generate_report',
+        _id: 'report-' + report.id,
+        input: {},
+        result: { reportId: report.id, title: report.title, sections, conclusion },
+        status: 'success'
+      })
+    }
+
+    // Add dashboards
+    for (const dash of (dashboards || [])) {
+      const msg = plainTextAssistants.find(m =>
+        m.content.some(b => b.text?.includes(dash.title || '仪表盘'))
+      )
+      if (!msg) continue
+      msg.content.push({
+        type: 'tool_use',
+        name: 'generate_dashboard',
+        _id: 'dash-' + dash.id,
+        input: {},
+        result: { dashboardId: dash.id, title: dash.title, layout: dash.layout, chartIds: dash.chartIds },
+        status: 'success'
+      })
+    }
+  } catch (e) { console.warn('Legacy artifact restore failed:', e) }
+}
+
 async function onMessageCompleted() {
   sidebar.value?.refreshConversations()
 }
 </script>
+
+<style scoped>
+.sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.3);
+  z-index: 899;
+}
+</style>

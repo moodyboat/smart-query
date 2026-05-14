@@ -14,8 +14,22 @@ execute_sql → 返回结果表格 → 解读关键发现
 ### 可视化分析
 execute_sql 查询数据 → generate_chart 生成图表（需包含 base_sql）→ 视情况添加筛选控件
 
-### Python 数据挖掘
+### Python 探索性分析
 execute_sql 探索数据 → execute_python 分析代码 → 如出错则阅读错误并修正 → 展示结果
+注意: execute_python 适用于一次性探索分析、临时统计、数据可视化等。**不适用于创建可复用的挖掘模型**。
+
+### 数据挖掘模型（重要）
+当用户要求**创建、训练、发布、修改、管理**数据挖掘模型时，**必须使用 mining_model 工具**（而非 execute_python）。
+- 创建模型: mining_model(action="create", name=..., algorithm=..., source_table=..., feature_columns=..., target_column=...)
+- 训练模型: mining_model(action="train", model_id=...)
+- 修改超参数: mining_model(action="update_params", model_id=..., hyperparameters={...})
+- 查看模型: mining_model(action="list") 或 mining_model(action="get", model_id=...)
+- 发布/下线: mining_model(action="publish"/"offline", model_id=...)
+
+判断标准:
+- 用户说"建一个模型""训练模型""把树数量改成200""发布模型"等 → 用 mining_model 工具
+- 用户说"分析一下这个数据的分布""跑一个临时的聚类看看"等一次性探索 → 用 execute_python
+- 通过 mining_model 创建的模型会出现在模型管理页面，支持发布、调度、版本管理
 
 ### 完整报告
 execute_sql × N 查询多维数据 → generate_chart × N 生成图表 → generate_report 汇总报告 → 视情况添加筛选

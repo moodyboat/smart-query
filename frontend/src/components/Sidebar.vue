@@ -54,7 +54,10 @@
     </div>
 
     <div class="sidebar-footer">
-      <el-button type="primary" style="width: 100%" @click="handleNewConversation">
+      <el-button style="width: 100%; margin-bottom: var(--space-sm)" @click="$emit('openMining')">
+        数据挖掘管理
+      </el-button>
+      <el-button type="primary" style="width: 100%" :loading="creating" @click="handleNewConversation">
         <el-icon><Plus /></el-icon> 新建对话
       </el-button>
     </div>
@@ -64,6 +67,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { Plus } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { fetchConversations, fetchDataSources, createConversation, deleteConversation, renameConversation } from '../api'
 
 const conversations = ref([])
@@ -75,7 +79,7 @@ const editingId = ref(null)
 const editTitle = ref('')
 const editInput = ref(null)
 
-const emit = defineEmits(['selectConversation', 'conversationCreated', 'conversationDeleted', 'dataSourceChanged'])
+const emit = defineEmits(['selectConversation', 'conversationCreated', 'conversationDeleted', 'dataSourceChanged', 'openMining'])
 
 const filteredConversations = computed(() => {
   if (!searchQuery.value.trim()) return conversations.value
@@ -102,22 +106,37 @@ onMounted(async () => {
   }
 })
 
+const creating = ref(false)
+
 async function handleNewConversation() {
-  const conv = await createConversation('新对话')
-  conversations.value.unshift(conv)
-  currentConvId.value = conv.id
-  emit('conversationCreated', conv.id)
+  if (creating.value) return
+  creating.value = true
+  try {
+    const conv = await createConversation('新对话')
+    conversations.value.unshift(conv)
+    currentConvId.value = conv.id
+    emit('conversationCreated', conv.id)
+  } catch (e) {
+    ElMessage.error('创建对话失败，请重试')
+  } finally {
+    creating.value = false
+  }
 }
 
 async function handleDelete(convId) {
   try {
+    await ElMessageBox.confirm('确定要删除这个对话吗？此操作不可撤销。', '删除对话', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
     await deleteConversation(convId)
     conversations.value = conversations.value.filter(c => c.id !== convId)
     if (currentConvId.value === convId) {
       currentConvId.value = null
     }
     emit('conversationDeleted', convId)
-  } catch { /* ignore */ }
+  } catch { /* user cancelled */ }
 }
 
 function startRename(conv) {
@@ -140,7 +159,9 @@ async function saveRename(convId) {
     try {
       await renameConversation(convId, title)
       conv.title = title
-    } catch { /* ignore */ }
+    } catch {
+      ElMessage.error('重命名失败')
+    }
   }
   editingId.value = null
 }
@@ -161,7 +182,10 @@ async function refreshConversations() {
   try {
     const convs = await fetchConversations()
     conversations.value = convs || []
-  } catch { /* ignore */ }
+  } catch (e) {
+    console.error('Failed to refresh conversations:', e)
+    ElMessage.error('刷新对话列表失败')
+  }
 }
 
 defineExpose({ setCurrentConversation, getSelectedDataSourceId, conversations, refreshConversations })
@@ -169,55 +193,66 @@ defineExpose({ setCurrentConversation, getSelectedDataSourceId, conversations, r
 
 <style scoped>
 .sidebar {
-  width: 260px; background: #fff; border-right: 1px solid #e8e8e8;
+  width: 260px; background: var(--surface); border-right: 1px solid var(--border);
   display: flex; flex-direction: column; flex-shrink: 0;
+  transition: transform 0.25s ease;
+}
+@media (max-width: 767px) {
+  .sidebar {
+    position: fixed; left: 0; top: 0; bottom: 0; z-index: 900;
+    transform: translateX(-100%);
+    box-shadow: var(--shadow-lg);
+  }
+  .sidebar.sidebar-open {
+    transform: translateX(0);
+  }
 }
 .sidebar-header {
-  padding: 16px; border-bottom: 1px solid #e8e8e8;
+  padding: var(--space-lg); border-bottom: 1px solid var(--border);
 }
 .sidebar-header h2 {
-  font-size: 16px; font-weight: 700; color: #1d1e2c; margin: 0 0 10px;
+  font-size: var(--font-xl); font-weight: 700; color: var(--text-primary); margin: 0 0 var(--space-sm);
 }
 .ds-select { width: 100%; }
 
-.search-bar { padding: 8px 12px 4px; }
+.search-bar { padding: var(--space-sm) var(--space-md) var(--space-xs); }
 .search-input {
-  width: 100%; padding: 6px 10px; border: 1px solid #e0e0e0;
-  border-radius: 6px; font-size: 12px; outline: none;
+  width: 100%; padding: var(--space-xs) var(--space-sm); border: 1px solid var(--border);
+  border-radius: var(--radius-md); font-size: var(--font-sm); outline: none;
   transition: border-color 0.2s;
 }
-.search-input:focus { border-color: #409eff; }
+.search-input:focus { border-color: var(--primary); }
 
 .conversation-list {
-  flex: 1; overflow-y: auto; padding: 8px;
+  flex: 1; overflow-y: auto; padding: var(--space-sm);
 }
 .conv-item {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 12px; border-radius: 8px; cursor: pointer;
-  transition: background 0.15s; font-size: 13px; color: #555;
+  display: flex; align-items: center; gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md); border-radius: var(--radius-lg); cursor: pointer;
+  transition: background 0.15s; font-size: var(--font-md); color: var(--text-secondary);
 }
-.conv-item:hover { background: #f5f7fa; }
-.conv-item.active { background: #ecf5ff; color: #409eff; font-weight: 500; }
-.conv-icon { font-size: 14px; flex-shrink: 0; }
+.conv-item:hover { background: var(--color-info-light); }
+.conv-item.active { background: var(--primary-light); color: var(--primary); font-weight: 500; }
+.conv-icon { font-size: var(--font-base); flex-shrink: 0; }
 .conv-title {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
 }
 .conv-edit-input {
-  flex: 1; padding: 2px 6px; font-size: 13px; border: 1px solid #409eff;
-  border-radius: 4px; outline: none; min-width: 0;
+  flex: 1; padding: 2px var(--space-xs); font-size: var(--font-md); border: 1px solid var(--primary);
+  border-radius: var(--radius-sm); outline: none; min-width: 0;
 }
 .conv-delete {
   display: none; width: 20px; height: 20px; border-radius: 50%;
-  align-items: center; justify-content: center; font-size: 14px;
-  color: #999; flex-shrink: 0; cursor: pointer; transition: all 0.15s;
+  align-items: center; justify-content: center; font-size: var(--font-base);
+  color: var(--text-muted); flex-shrink: 0; cursor: pointer; transition: all 0.15s;
 }
 .conv-item:hover .conv-delete { display: inline-flex; }
-.conv-delete:hover { background: #fee; color: #f56c6c; }
+.conv-delete:hover { background: var(--color-danger-light); color: var(--color-danger); }
 .conv-empty {
-  text-align: center; color: #ccc; font-size: 13px; padding: 30px 0;
+  text-align: center; color: var(--text-muted); font-size: var(--font-md); padding: 30px 0;
 }
 
 .sidebar-footer {
-  padding: 12px; border-top: 1px solid #e8e8e8;
+  padding: var(--space-md); border-top: 1px solid var(--border);
 }
 </style>

@@ -1,6 +1,7 @@
 <template>
   <section class="main-area">
     <header class="chat-header">
+      <button v-if="showSidebarToggle" class="hamburger-btn" @click="emit('toggleSidebar')">☰</button>
       <span class="header-title">智能数据分析助手</span>
       <span v-if="connectionState === 'connecting'" class="conn-badge connecting">连接中...</span>
       <span v-else-if="connectionState === 'streaming'" class="conn-badge streaming">
@@ -41,11 +42,15 @@
         </div>
         <div class="welcome-examples">
           <div class="example-label">试试问我:</div>
-          <div class="example-item" @click="tryExample('各区域销售额对比，生成柱状图')">"各区域销售额对比，生成柱状图"</div>
-          <div class="example-item" @click="tryExample('用Python分析客户流失原因')">"用Python分析客户流失原因"</div>
-          <div class="example-item" @click="tryExample('生成本月销售分析报告')">"生成本月销售分析报告"</div>
-          <div class="example-item" @click="tryExample('做一个销售仪表盘大屏')">"做一个销售仪表盘大屏"</div>
-          <div class="example-item" @click="tryExample('用桑基图分析用户转化路径')">"用桑基图分析用户转化路径"</div>
+          <div
+            v-for="ex in exampleQueries"
+            :key="ex"
+            class="example-item"
+            :class="{ disabled: !conversationId || !dataSourceId }"
+            @click="tryExample(ex)"
+          >
+            "{{ ex }}"
+          </div>
         </div>
       </div>
 
@@ -59,6 +64,12 @@
         @retryPython="handleRetryPython"
       @retryConnection="retryConnection"
       />
+
+      <div v-if="showNoResponse" class="no-response-hint">
+        <span class="no-response-icon">💬</span>
+        <span>该对话暂无回复</span>
+        <button class="retry-btn-inline" @click="retryLastMessage">重新发送</button>
+      </div>
     </div>
 
     <div class="input-area">
@@ -83,13 +94,14 @@
 </template>
 
 <script setup>
-import { ref, reactive, nextTick } from 'vue'
+import { ref, reactive, computed, nextTick } from 'vue'
 import MessageRow from './MessageRow.vue'
 import { buildChatUrl, fetchReport } from '../api'
 
 const props = defineProps({
   conversationId: Number,
-  dataSourceId: Number
+  dataSourceId: Number,
+  showSidebarToggle: Boolean
 })
 
 const messages = ref([])
@@ -103,7 +115,15 @@ const stepInfo = reactive({ current: 0, total: 0 })
 const connectionState = ref('idle') // idle | connecting | streaming | error
 let msgIdCounter = 0
 
-const emit = defineEmits(['openDashboard', 'messageCompleted'])
+const exampleQueries = [
+  '各区域销售额对比，生成柱状图',
+  '用Python分析客户流失原因',
+  '建一个员工薪资分类预测模型',
+  '生成本月销售分析报告',
+  '做一个销售仪表盘大屏'
+]
+
+const emit = defineEmits(['openDashboard', 'messageCompleted', 'toggleSidebar'])
 
 function scrollToBottom() {
   nextTick(() => {
@@ -220,11 +240,11 @@ async function sendMessage() {
           if (evt.type === 'Done') {
             clearTimeout(safetyTimeout)
           }
-        } catch { /* skip */ }
+        } catch (e) { console.warn('SSE event parse error:', e) }
       }
     }
     if (buffer.startsWith('data:')) {
-      try { handleEvent(JSON.parse(buffer.substring(5).trim()), assistantMsg) } catch { /* skip */ }
+      try { handleEvent(JSON.parse(buffer.substring(5).trim()), assistantMsg) } catch (e) { console.warn('SSE data parse error:', e) }
     }
   } catch (e) {
     if (e.name !== 'AbortError') {
@@ -379,7 +399,13 @@ function handleEvent(evt, assistantMsg) {
               block.result = { ...block.result, content: report.sections }
             }
           }
-        }).catch(() => {})
+        }).catch((e) => {
+          console.warn('Report fetch failed after SSE partial:', e)
+          const block = findOrCreateToolBlock(assistantMsg, 'generate_report', 'report-' + Date.now())
+          if (block && block.result) {
+            block.result._loadError = true
+          }
+        })
       }
       break
     }
@@ -441,6 +467,23 @@ function handleEvent(evt, assistantMsg) {
   }
 }
 
+const showNoResponse = computed(() => {
+  if (loading.value || messages.value.length === 0) return false
+  const last = messages.value[messages.value.length - 1]
+  if (last.type === 'assistant') {
+    return last.content.length === 0 && !last.streamingText
+  }
+  return last.type === 'user_text'
+})
+
+function retryLastMessage() {
+  const last = messages.value[messages.value.length - 1]
+  if (last?.type === 'user_text') {
+    inputText.value = last.content
+    sendMessage()
+  }
+}
+
 function clearMessages() {
   messages.value = []
   Object.keys(pendingCharts).forEach(k => delete pendingCharts[k])
@@ -486,31 +529,37 @@ defineExpose({ sendMessage, clearMessages, messages, updateChartOption, pendingC
 <style scoped>
 .main-area {
   flex: 1; display: flex; flex-direction: column; min-width: 0;
-  background: #f9f9fb;
+  background: var(--bg);
 }
 
 .chat-header {
-  height: 52px; background: #fff; border-bottom: 1px solid #e8e8e8;
-  display: flex; align-items: center; padding: 0 20px;
-  font-size: 15px; font-weight: 600; flex-shrink: 0;
+  height: 52px; background: var(--surface); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; padding: 0 var(--space-xl);
+  font-size: var(--font-lg); font-weight: 600; flex-shrink: 0;
   justify-content: space-between;
 }
-.header-title { color: #1d1e2c; }
-.cost-badge { font-size: 12px; color: #999; font-weight: 400; }
+.header-title { color: var(--text-primary); }
+.hamburger-btn {
+  width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;
+  background: transparent; border: none; font-size: var(--font-2xl); cursor: pointer;
+  border-radius: var(--radius-md); color: var(--text-secondary); margin-right: var(--space-sm);
+}
+.hamburger-btn:hover { background: var(--border-lighter); }
+.cost-badge { font-size: var(--font-sm); color: var(--text-muted); font-weight: 400; }
 .step-badge {
-  font-size: 11px; color: #409eff; font-weight: 500;
-  padding: 2px 8px; background: #f0f7ff; border-radius: 10px;
+  font-size: var(--font-xs); color: var(--primary); font-weight: 500;
+  padding: 2px var(--space-sm); background: var(--primary-light); border-radius: var(--radius-xl);
   animation: stepPulse 2s ease-in-out infinite;
 }
 .conn-badge {
-  font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 10px;
-  display: inline-flex; align-items: center; gap: 4px;
+  font-size: var(--font-xs); font-weight: 500; padding: 2px var(--space-sm); border-radius: var(--radius-xl);
+  display: inline-flex; align-items: center; gap: var(--space-xs);
 }
-.conn-badge.connecting { color: #e6a23c; background: #fdf6ec; }
-.conn-badge.streaming { color: #409eff; background: #f0f7ff; }
-.conn-badge.error { color: #f56c6c; background: #fef0f0; }
+.conn-badge.connecting { color: var(--color-warning); background: var(--color-warning-light); }
+.conn-badge.streaming { color: var(--primary); background: var(--primary-light); }
+.conn-badge.error { color: var(--color-danger); background: var(--color-danger-light); }
 .spinner-sm {
-  width: 10px; height: 10px; border: 1.5px solid #ddd; border-top-color: #409eff;
+  width: 10px; height: 10px; border: 1.5px solid var(--border); border-top-color: var(--primary);
   border-radius: 50%; animation: spin 0.6s linear infinite;
 }
 @keyframes stepPulse {
@@ -519,50 +568,64 @@ defineExpose({ sendMessage, clearMessages, messages, updateChartOption, pendingC
 }
 
 .messages-area {
-  flex: 1; overflow-y: auto; padding: 16px 24px;
+  flex: 1; overflow-y: auto; padding: var(--space-lg) var(--space-2xl);
 }
 
 .welcome {
-  text-align: center; color: #999; padding: 60px 20px 30px;
+  text-align: center; color: var(--text-muted); padding: 60px var(--space-xl) 30px;
 }
-.welcome h3 { font-size: 22px; margin-bottom: 6px; color: #333; }
-.welcome-desc { font-size: 14px; color: #888; margin-bottom: 24px; }
+.welcome h3 { font-size: 22px; margin-bottom: var(--space-xs); color: var(--text-primary); }
+.welcome-desc { font-size: var(--font-base); color: var(--text-muted); margin-bottom: var(--space-2xl); }
 
 .welcome-cards {
-  display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;
-  max-width: 500px; margin: 0 auto 24px; text-align: left;
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--space-md);
+  max-width: 500px; margin: 0 auto var(--space-2xl); text-align: left;
+}
+@media (max-width: 767px) {
+  .welcome-cards { grid-template-columns: 1fr; }
 }
 .welcome-card {
-  padding: 12px 14px; background: #fff; border-radius: 8px;
-  border: 1px solid #e8e8e8; transition: border-color 0.2s;
+  padding: var(--space-md) 14px; background: var(--surface); border-radius: var(--radius-lg);
+  border: 1px solid var(--border); transition: border-color 0.2s;
 }
-.welcome-card:hover { border-color: #409eff; }
+.welcome-card:hover { border-color: var(--primary); }
 .card-icon {
-  display: inline-block; font-size: 11px; font-weight: 700;
-  padding: 2px 8px; border-radius: 4px; color: #fff; margin-bottom: 6px;
+  display: inline-block; font-size: var(--font-xs); font-weight: 700;
+  padding: 2px var(--space-sm); border-radius: var(--radius-sm); color: var(--surface); margin-bottom: var(--space-xs);
 }
-.sql-icon { background: #e6a23c; }
-.py-icon { background: #409eff; }
-.chart-icon, .report-icon { background: #67c23a; font-size: 13px; padding: 2px 6px; }
-.card-title { font-size: 13px; font-weight: 600; color: #333; margin-bottom: 2px; }
-.card-desc { font-size: 12px; color: #999; }
+.sql-icon { background: var(--color-warning); }
+.py-icon { background: var(--primary); }
+.chart-icon, .report-icon { background: var(--color-success); font-size: var(--font-md); padding: 2px var(--space-xs); }
+.card-title { font-size: var(--font-md); font-weight: 600; color: var(--text-regular); margin-bottom: 2px; }
+.card-desc { font-size: var(--font-sm); color: var(--text-muted); }
 
 .welcome-examples { max-width: 500px; margin: 0 auto; }
-.example-label { font-size: 12px; color: #bbb; margin-bottom: 8px; }
+.example-label { font-size: var(--font-sm); color: var(--text-muted); margin-bottom: var(--space-sm); }
 .example-item {
-  padding: 8px 14px; background: #fff; border: 1px dashed #e0e0e0;
-  border-radius: 6px; font-size: 13px; color: #666; margin-bottom: 6px;
+  padding: var(--space-sm) var(--space-lg); background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); font-size: var(--font-md); color: var(--text-secondary); margin-bottom: var(--space-sm);
   cursor: pointer; transition: all 0.2s;
 }
-.example-item:hover { border-color: #409eff; color: #409eff; background: #f0f7ff; }
+.example-item:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-light); transform: translateY(-1px); box-shadow: var(--shadow-sm); }
+.example-item.disabled { opacity: 0.5; cursor: not-allowed; }
+.example-item.disabled:hover { border-color: var(--border); color: var(--text-secondary); background: var(--surface); }
 
 .input-area {
-  padding: 12px 20px; background: #fff;
-  border-top: 1px solid #e8e8e8; flex-shrink: 0;
+  padding: var(--space-lg) var(--space-xl); background: var(--surface);
+  border-top: 1px solid var(--border); flex-shrink: 0;
 }
-.input-row { display: flex; gap: 10px; }
+.input-row { display: flex; gap: var(--space-sm); }
 .input-row .el-input { flex: 1; }
 .input-hint {
-  text-align: center; padding: 10px; color: #bbb; font-size: 13px;
+  text-align: center; padding: var(--space-sm); color: var(--text-muted); font-size: var(--font-md);
 }
+.no-response-hint {
+  text-align: center; padding: var(--space-xl); color: var(--text-muted); font-size: var(--font-md);
+  display: flex; align-items: center; justify-content: center; gap: var(--space-sm);
+}
+.retry-btn-inline {
+  padding: 2px var(--space-sm); font-size: var(--font-sm); background: transparent; color: var(--primary);
+  border: 1px solid var(--primary-light); border-radius: var(--radius-sm); cursor: pointer;
+}
+.retry-btn-inline:hover { background: var(--primary-light); }
 </style>
