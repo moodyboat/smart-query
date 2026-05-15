@@ -7,23 +7,19 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * 系统提示词构建器 — 直译 Claude Code constants/prompts.ts
+ * 系统提示词构建器 — 翻译 Claude Code constants/prompts.ts
  *
- * <p>翻译对照:
- * <pre>
- * TS: getSystemPrompt(tools, model) → string[]
- * Java: build(tools, model) → String
- *
- * TS: getSimpleIntroSection(), getSimpleSystemSection(), getSimpleDoingTasksSection() ...
- * Java: getIntroSection(), getCapabilitiesSection(), getDoingTasksSection() ...
- * </pre>
- *
- * <p>架构: 静态段 (cacheable) + 动态段
+ * <p>改进: 引入优先级排序 + 条件注入 + Token 预算控制
+ * <ul>
+ *   <li>按优先级排序: OVERRIDE > COORDINATOR > AGENT > CUSTOM > DEFAULT > APPEND</li>
+ *   <li>条件注入: 根据场景动态加载不同提示词段</li>
+ *   <li>Token 预算: 低优先级段超预算时可截断或跳过</li>
+ * </ul>
  */
 @Slf4j
 @Component
@@ -33,52 +29,127 @@ public class SystemPromptBuilder {
     private final ToolPromptLoader promptLoader;
     private final ToolRegistry toolRegistry;
 
+    private static final int SYSTEM_TOKEN_BUDGET = 16000;
+    private static final int CHARS_PER_TOKEN = 4;
+
     /**
-     * 直译 getSystemPrompt(): 组装最终系统提示词
-     * 对应 Claude Code 的分段组合模式:
-     * [intro, system, doingTasks, actions, usingTools, toneStyle, outputEfficiency, safetyRules, ...dynamicSections]
+     * 构建系统提示词 (向后兼容)
      */
     public String build(String model) {
-        List<String> sections = new ArrayList<>();
+        return build(model, null, null);
+    }
 
-        sections.add(getIntroSection());
-        sections.add(getCapabilitiesSection());
-        sections.add(getDoingTasksSection());
-        sections.add(getActionsSection());
-        sections.add(getUsingToolsSection());
-        sections.add(getToneStyleSection());
-        sections.add(getSafetyRulesSection());
+    /**
+     * 构建系统提示词 (带条件上下文)
+     */
+    public String build(String model, Long dataSourceId, Boolean hasMiningModel) {
+        PromptContext ctx = PromptContext.of(
+            dataSourceId != null,
+            hasMiningModel != null && hasMiningModel,
+            model,
+            dataSourceId
+        );
 
-        return sections.stream()
-            .filter(s -> s != null && !s.isBlank())
+        List<PromptSection> sections = collectSections(ctx);
+
+        // 按优先级排序 (高 → 低)
+        sections.sort(Comparator.comparingInt(s -> -s.priority().weight()));
+
+        // 条件过滤
+        sections = sections.stream()
+            .filter(s -> s.shouldInject(ctx))
+            .toList();
+
+        // Token 预算控制: 超预算时从低优先级开始截断
+        sections = enforceTokenBudget(sections);
+
+        String result = sections.stream()
+            .map(PromptSection::content)
+            .filter(c -> c != null && !c.isBlank())
             .collect(Collectors.joining("\n\n"));
+
+        log.debug("[PROMPT] built: {} sections, {} chars, ~{} tokens",
+            sections.size(), result.length(), result.length() / CHARS_PER_TOKEN);
+
+        return result;
     }
 
-    /**
-     * 直译 getSimpleIntroSection() — 角色介绍
-     */
-    private String getIntroSection() {
-        return promptLoader.loadSystemSection("intro");
+    private List<PromptSection> collectSections(PromptContext ctx) {
+        List<PromptSection> sections = new ArrayList<>();
+
+        // DEFAULT: 核心系统段
+        sections.add(PromptSection.of(PromptPriority.DEFAULT, "intro",
+            promptLoader.loadSystemSection("intro")));
+        sections.add(PromptSection.of(PromptPriority.DEFAULT, "capabilities",
+            promptLoader.loadSystemSection("capabilities")));
+        sections.add(PromptSection.of(PromptPriority.DEFAULT, "doing-tasks",
+            promptLoader.loadSystemSection("doing-tasks")));
+        sections.add(PromptSection.of(PromptPriority.DEFAULT, "actions",
+            buildActionsSection(ctx)));
+        sections.add(PromptSection.of(PromptPriority.DEFAULT, "using-tools",
+            promptLoader.loadSystemSection("using-tools")));
+        sections.add(PromptSection.of(PromptPriority.DEFAULT, "tone-style",
+            promptLoader.loadSystemSection("tone-style")));
+
+        // OVERRIDE: 安全规则 (最高优先级，不可截断)
+        sections.add(PromptSection.of(PromptPriority.OVERRIDE, "safety-rules",
+            promptLoader.loadSystemSection("safety-rules")));
+
+        // CUSTOM: 有数据源时注入数据探索指引
+        sections.add(PromptSection.conditional(
+            PromptPriority.CUSTOM, "data-exploration",
+            promptLoader.loadSystemSection("doing-tasks"),
+            PromptContext::hasDataSource
+        ));
+
+        // CUSTOM: 有挖掘上下文时注入挖掘指导
+        sections.add(PromptSection.conditional(
+            PromptPriority.CUSTOM, "mining-guidance",
+            promptLoader.loadSystemSection("mining-guidance"),
+            PromptContext::hasMiningModel
+        ));
+
+        return sections;
     }
 
-    /**
-     * 直译 getSimpleSystemSection() — 能力说明
-     */
-    private String getCapabilitiesSection() {
-        return promptLoader.loadSystemSection("capabilities");
+    private List<PromptSection> enforceTokenBudget(List<PromptSection> sections) {
+        int totalChars = sections.stream()
+            .mapToInt(s -> s.content() != null ? s.content().length() : 0)
+            .sum();
+        int totalTokens = totalChars / CHARS_PER_TOKEN;
+
+        if (totalTokens <= SYSTEM_TOKEN_BUDGET) {
+            return sections;
+        }
+
+        log.info("[PROMPT] budget enforcement: {} tokens > budget {}, truncating from low priority",
+            totalTokens, SYSTEM_TOKEN_BUDGET);
+
+        List<PromptSection> result = new ArrayList<>(sections);
+        // 从最低优先级 (APPEND) 开始截断
+        for (int i = result.size() - 1; i >= 0 && totalTokens > SYSTEM_TOKEN_BUDGET; i--) {
+            PromptSection s = result.get(i);
+            // OVERRIDE 和 COORDINATOR 不可截断
+            if (s.priority() == PromptPriority.OVERRIDE || s.priority() == PromptPriority.COORDINATOR) {
+                continue;
+            }
+            if (s.tokenBudget() > 0 && s.content() != null) {
+                int maxChars = s.tokenBudget() * CHARS_PER_TOKEN;
+                if (s.content().length() > maxChars) {
+                    String truncated = s.content().substring(0, maxChars) + "\n...(已截断)";
+                    result.set(i, new PromptSection(s.name(), truncated, s.cacheable(),
+                        s.priority(), s.condition(), s.tokenBudget()));
+                    totalTokens = result.stream()
+                        .mapToInt(sec -> sec.content() != null ? sec.content().length() : 0)
+                        .sum() / CHARS_PER_TOKEN;
+                }
+            }
+        }
+
+        return result;
     }
 
-    /**
-     * 直译 getSimpleDoingTasksSection() — 任务执行指引
-     */
-    private String getDoingTasksSection() {
-        return promptLoader.loadSystemSection("doing-tasks");
-    }
-
-    /**
-     * 直译 getActionsSection() — 可用动作
-     */
-    private String getActionsSection() {
+    private String buildActionsSection(PromptContext ctx) {
         String base = promptLoader.loadSystemSection("actions");
         StringBuilder sb = new StringBuilder(base);
 
@@ -86,27 +157,10 @@ public class SystemPromptBuilder {
         if (!tools.isEmpty()) {
             sb.append("\n\n## 可用工具\n");
             for (LlmTool tool : tools) {
+                if (tool.requireDatabase() && !ctx.hasDataSource()) continue;
                 sb.append("- **").append(tool.getName()).append("**: ").append(tool.getDescription()).append("\n");
             }
         }
         return sb.toString();
-    }
-
-    /**
-     * 直译 getUsingYourToolsSection() — 工具使用指引
-     */
-    private String getUsingToolsSection() {
-        return promptLoader.loadSystemSection("using-tools");
-    }
-
-    /**
-     * 直译 getSimpleToneAndStyleSection()
-     */
-    private String getToneStyleSection() {
-        return promptLoader.loadSystemSection("tone-style");
-    }
-
-    private String getSafetyRulesSection() {
-        return promptLoader.loadSystemSection("safety-rules");
     }
 }

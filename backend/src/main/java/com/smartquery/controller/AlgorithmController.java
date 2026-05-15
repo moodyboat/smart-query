@@ -1,6 +1,7 @@
 package com.smartquery.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.smartquery.common.BusinessException;
 import com.smartquery.common.Result;
 import com.smartquery.entity.Algorithm;
 import com.smartquery.service.AlgorithmService;
@@ -38,7 +39,7 @@ public class AlgorithmController {
     @GetMapping("/algorithms/{id}")
     public Result<Algorithm> getAlgorithm(@PathVariable Long id) {
         Algorithm algo = algorithmService.getById(id);
-        if (algo == null) return Result.error("算法不存在: " + id);
+        if (algo == null) throw new BusinessException("算法不存在: " + id);
         return Result.ok(algo);
     }
 
@@ -49,33 +50,18 @@ public class AlgorithmController {
 
     @PostMapping("/algorithms")
     public Result<Algorithm> createAlgorithm(@RequestBody Algorithm algorithm) {
-        try {
-            return Result.ok(algorithmService.createCustomAlgorithm(algorithm));
-        } catch (Exception e) {
-            log.error("[ALGORITHM] Create failed: {}", e.getMessage());
-            return Result.error("创建算法失败: " + e.getMessage());
-        }
+        return Result.ok(algorithmService.createCustomAlgorithm(algorithm));
     }
 
     @PutMapping("/algorithms/{id}")
     public Result<Algorithm> updateAlgorithm(@PathVariable Long id, @RequestBody Algorithm updates) {
-        try {
-            return Result.ok(algorithmService.updateAlgorithm(id, updates));
-        } catch (Exception e) {
-            log.error("[ALGORITHM] Update failed: {}", e.getMessage());
-            return Result.error("更新算法失败: " + e.getMessage());
-        }
+        return Result.ok(algorithmService.updateAlgorithm(id, updates));
     }
 
     @DeleteMapping("/algorithms/{id}")
     public Result<Void> deleteAlgorithm(@PathVariable Long id) {
-        try {
-            algorithmService.deleteAlgorithm(id);
-            return Result.ok();
-        } catch (Exception e) {
-            log.error("[ALGORITHM] Delete failed: {}", e.getMessage());
-            return Result.error("删除算法失败: " + e.getMessage());
-        }
+        algorithmService.deleteAlgorithm(id);
+        return Result.ok();
     }
 
     @GetMapping("/model-types")

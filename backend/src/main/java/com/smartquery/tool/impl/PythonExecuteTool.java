@@ -89,7 +89,7 @@ public class PythonExecuteTool implements LlmTool {
                     "exitCode", result.exitCode(),
                     "artifacts", result.artifacts() != null ? result.artifacts() : java.util.Collections.emptyList()
                 );
-                return new ToolResult(getName(), true, output.toString(), null, duration, List.of(pyData));
+                return new ToolResult(getName(), true, output.toString(), null, duration, List.of(pyData), null);
             } else {
                 String error = result.stderr() != null ? result.stderr() : "未知错误";
                 Map<String, Object> pyData = Map.of(
@@ -99,7 +99,8 @@ public class PythonExecuteTool implements LlmTool {
                     "artifacts", result.artifacts() != null ? result.artifacts() : java.util.Collections.emptyList()
                 );
                 return new ToolResult(getName(), false, result.stdout() != null ? result.stdout() : "",
-                    "执行错误 (exit=" + result.exitCode() + "):\n" + error, duration, List.of(pyData));
+                    "执行错误 (exit=" + result.exitCode() + "):\n" + error, duration, List.of(pyData),
+                    ToolError.of(ToolError.ErrorCode.PYTHON_ERROR, "Python 执行错误 (exit=" + result.exitCode() + ")"));
             }
         } catch (Exception e) {
             return ToolResult.error(getName(), "Python 执行异常: " + e.getMessage(), System.currentTimeMillis() - start);

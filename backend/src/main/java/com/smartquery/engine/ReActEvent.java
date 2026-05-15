@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * ReAct 事件 — sealed interface，扩展为 12+ 事件类型
+ * ReAct 事件 — sealed interface，扩展为 14+ 事件类型
  */
 public sealed interface ReActEvent {
 
@@ -32,6 +32,10 @@ public sealed interface ReActEvent {
 
     // === 筛选控件 ===
     record FilterWidgetsGenerated(String widgetsJson) implements ReActEvent {}
+
+    // === 数据挖掘模型 ===
+    record MiningModelEvent(String action, Long modelId, String modelName, String algorithm,
+                            boolean success, String message, Map<String, Object> details) implements ReActEvent {}
 
     // === 终止 ===
     record Done(int totalSteps, int totalTokens, double cost) implements ReActEvent {}

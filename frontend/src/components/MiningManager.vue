@@ -50,6 +50,8 @@
             <div class="model-meta">
               <span class="meta-item secondary">表: {{ model.sourceTable || '-' }}</span>
               <span class="meta-item secondary">v{{ model.version }}</span>
+              <el-tag v-if="model.conversationId" size="small" effect="plain" type="info">对话构建</el-tag>
+              <el-tag v-else-if="model.pipelineId" size="small" effect="plain" type="success">流程编排</el-tag>
               <span v-if="model.pipelineId" class="meta-item secondary" style="cursor:pointer;color:var(--el-color-primary)" @click="goToPipeline(model.pipelineId)">流程 #{{ model.pipelineId }}</span>
             </div>
             <div v-if="model.description" class="model-desc">{{ model.description }}</div>
@@ -433,6 +435,17 @@
           <div style="font-size: 13px; color: var(--text-secondary)">
             结果表列: {{ (batchPredictResult.columns || []).join(', ') }}
           </div>
+          <el-button size="small" type="primary" plain style="margin-top: 8px"
+            @click="previewResult(batchPredictResult.saved_to)">
+            预览结果数据
+          </el-button>
+          <div v-if="resultPreview.length" style="margin-top: 8px">
+            <el-table :data="resultPreview" size="small" stripe border max-height="200">
+              <el-table-column type="index" label="#" width="40" />
+              <el-table-column v-for="col in resultPreviewColumns" :key="col" :prop="col" :label="col" show-overflow-tooltip />
+            </el-table>
+            <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px">仅展示前10行</div>
+          </div>
         </div>
       </div>
       <template #footer>
@@ -633,11 +646,14 @@ import {
   updateModelHyperparams, fetchModelExecutions, fetchDataSources,
   fetchDataSourceTables, fetchTableColumns, updateModelSchedule, predictMiningModel,
   batchPredictMiningModel, validateMiningModel, fetchModelPredictions,
-  fetchMiningPipeline
+  fetchMiningPipeline, previewResultTable
 } from '../api'
 import { useAlgorithms } from '../composables/useAlgorithms.js'
+import { useMiningStore } from '../stores/mining'
 
 const emit = defineEmits(['close'])
+
+const mining = useMiningStore()
 
 const {
   algorithms, modelTypes, loadAlgorithms,
@@ -645,14 +661,18 @@ const {
   getAlgorithmParams, getDefaultHyperparams, getModelTypeLabel
 } = useAlgorithms()
 
-const models = ref([])
-const dataSources = ref([])
+// Shared state from Pinia store
+const models = computed(() => mining.models)
+const dataSources = computed(() => mining.dataSources)
+const loading = computed(() => mining.loading)
+const filterDsId = computed({
+  get: () => mining.filterDsId,
+  set: (v) => { mining.filterDsId = v }
+})
 const activeTab = ref('models')
-const loading = ref(false)
 const modelSearch = ref('')
 const saving = ref(false)
 const trainingId = ref(null)
-const filterDsId = ref(null)
 const savingParams = ref(false)
 const loadingExecutions = ref(false)
 const pipelineEditorRef = ref(null)
@@ -694,6 +714,8 @@ const batchInputTable = ref('')
 const batchResultTable = ref('')
 const batchPredictLoading = ref(false)
 const batchPredictResult = ref(null)
+const resultPreview = ref([])
+const resultPreviewColumns = ref([])
 
 // Predict results dialog
 const showPredictResultsDialog = ref(false)
@@ -906,19 +928,7 @@ const predictRows = computed(() => {
 })
 
 async function loadModels() {
-  loading.value = true
-  try {
-    const [ms, dss] = await Promise.all([
-      fetchMiningModels(filterDsId.value || undefined).catch(() => []),
-      dataSources.value.length ? Promise.resolve(dataSources.value) : fetchDataSources()
-    ])
-    models.value = ms || []
-    dataSources.value = dss || []
-  } catch (e) {
-    console.error('Failed to load mining models:', e)
-  } finally {
-    loading.value = false
-  }
+  await mining.loadModels()
 }
 
 function algorithmParams(algo) {
@@ -985,14 +995,54 @@ async function handleTrain(id) {
   trainingId.value = id
   try {
     const model = await trainMiningModel(id)
-    const idx = models.value.findIndex(m => m.id === id)
-    if (idx >= 0) models.value[idx] = model
-    ElMessage.success(model.status === 'trained' ? '训练完成' : '训练已启动')
-    if (detailModel.value?.id === id) detailModel.value = model
+    mining.updateModelInList(model)
+
+    if (model.status === 'training') {
+      ElMessage.info('训练已启动，正在监听状态...')
+      const es = mining.watchModelStatus(id)
+      await new Promise((resolve) => {
+        const unwatch = watch(
+          () => mining.models.find(m => m.id === id),
+          (m) => {
+            if (m && ['trained', 'failed', 'trained_failed', 'published'].includes(m.status)) {
+              showTrainingResult(m)
+              unwatch()
+              resolve()
+            }
+          },
+          { deep: true }
+        )
+        // Safety timeout — fallback to polling after 5 min
+        setTimeout(() => { unwatch(); resolve() }, 300000)
+      })
+    } else {
+      showTrainingResult(model)
+    }
+    if (detailModel.value?.id === id) detailModel.value = mining.models.find(m => m.id === id) || model
   } catch (e) {
     ElMessage.error('训练失败: ' + (e.message || '未知错误'))
   } finally {
     trainingId.value = null
+  }
+}
+
+
+function showTrainingResult(model) {
+  if (model.status === 'trained') {
+    const metrics = parseJson(model.metrics, {})
+    const primaryKeys = ['accuracy', 'f1', 'r2']
+    const primary = primaryKeys.find(k => metrics[k] != null)
+    if (primary) {
+      const val = metrics[primary]
+      const pct = ['accuracy', 'f1', 'precision', 'recall', 'r2'].includes(primary)
+      ElMessage.success(`训练完成！${formatMetricName(primary)} = ${pct ? (val * 100).toFixed(1) + '%' : val.toFixed(4)}`)
+    } else {
+      ElMessage.success('训练完成！')
+    }
+  } else if (model.status === 'failed' || model.status === 'trained_failed') {
+    ElMessage.error('训练失败，请查看执行历史了解详情')
+  } else {
+    ElMessage.info('训练状态: ' + (statusLabels[model.status] || model.status))
   }
 }
 
@@ -1032,8 +1082,7 @@ async function confirmPublish() {
       } : {})
     }
     const model = await publishMiningModel(publishModel_ref.value.id, config)
-    const idx = models.value.findIndex(m => m.id === publishModel_ref.value.id)
-    if (idx >= 0) models.value[idx] = model
+    mining.updateModelInList(model)
     if (detailModel.value?.id === publishModel_ref.value.id) detailModel.value = model
     showPublishDialog.value = false
     ElMessage.success(publishConfig.value.scheduleEnabled
@@ -1049,8 +1098,7 @@ async function confirmPublish() {
 async function handleOffline(id) {
   try {
     const model = await offlineMiningModel(id)
-    const idx = models.value.findIndex(m => m.id === id)
-    if (idx >= 0) models.value[idx] = model
+    mining.updateModelInList(model)
     ElMessage.success('模型已下线')
     if (detailModel.value?.id === id) detailModel.value = model
   } catch (e) {
@@ -1064,7 +1112,7 @@ async function handleDelete(id, name) {
       confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning'
     })
     await deleteMiningModel(id)
-    models.value = models.value.filter(m => m.id !== id)
+    mining.removeModel(id)
     if (detailModel.value?.id === id) showDetail.value = false
     ElMessage.success('已删除')
   } catch { /* cancelled */ }
@@ -1113,8 +1161,7 @@ async function saveSchedule() {
         predictInputFilter: scheduleInputFilter.value
       })
     }
-    const idx = models.value.findIndex(m => m.id === scheduleModel.value.id)
-    if (idx >= 0) models.value[idx] = { ...models.value[idx], ...updated }
+    mining.updateModelInList({ ...mining.models.find(m => m.id === scheduleModel.value.id), ...updated })
     ElMessage.success(scheduleEnabled.value ? '调度已启用' : '调度已更新')
     showScheduleDialog.value = false
   } catch (e) {
@@ -1165,8 +1212,7 @@ async function handleSaveParams() {
       }
     }
     const model = await updateModelHyperparams(paramModel.value.id, paramsToSave)
-    const idx = models.value.findIndex(m => m.id === paramModel.value.id)
-    if (idx >= 0) models.value[idx] = model
+    mining.updateModelInList(model)
     showParamsDialog.value = false
     ElMessage.success('参数已更新')
   } catch (e) {
@@ -1229,12 +1275,11 @@ async function handleSave() {
     }
     if (editingModel.value) {
       const updated = await updateMiningModel(editingModel.value.id, payload)
-      const idx = models.value.findIndex(m => m.id === editingModel.value.id)
-      if (idx >= 0) models.value[idx] = updated
+      mining.updateModelInList(updated)
       ElMessage.success('已更新')
     } else {
       const created = await createMiningModel(payload)
-      models.value.unshift(created)
+      mining.addModel(created)
       ElMessage.success('已创建')
     }
     showCreateDialog.value = false
@@ -1277,13 +1322,12 @@ async function handleSaveAndTrain() {
       temporalColumn: form.value.temporalColumn || null
     }
     const created = await createMiningModel(payload)
-    models.value.unshift(created)
+    mining.addModel(created)
     showCreateDialog.value = false
     ElMessage.success('已创建，开始训练...')
     trainingId.value = created.id
     const trained = await trainMiningModel(created.id)
-    const idx = models.value.findIndex(m => m.id === created.id)
-    if (idx >= 0) models.value[idx] = trained
+    mining.updateModelInList(trained)
     if (trained.status === 'trained') ElMessage.success('训练完成！')
     else ElMessage.warning('训练未成功: ' + (trained.status || '未知'))
   } catch (e) {
@@ -1300,13 +1344,13 @@ async function refreshDetail() {
     try {
       const updated = await fetchMiningModel(detailModel.value.id)
       detailModel.value = updated
-      const idx = models.value.findIndex(m => m.id === updated.id)
-      if (idx >= 0) models.value[idx] = updated
+      mining.updateModelInList(updated)
     } catch {}
   }, 1000)
 }
 
 async function selectModel(model) {
+  mining.selectModel(model.id)
   detailModel.value = model
   showDetail.value = true
   detailPipelineNodes.value = []
@@ -1345,6 +1389,8 @@ function openBatchPredict(model) {
   batchInputTable.value = ''
   batchResultTable.value = ''
   batchPredictResult.value = null
+  resultPreview.value = []
+  resultPreviewColumns.value = []
   showBatchPredictDialog.value = true
   // Load tables for this model's data source
   if (model.dataSourceId) {
@@ -1377,6 +1423,19 @@ async function handleBatchPredict() {
     ElMessage.error('批量预测失败: ' + (e.message || '未知错误'))
   } finally {
     batchPredictLoading.value = false
+  }
+}
+
+async function previewResult(tableName) {
+  if (!tableName || !batchPredictModel.value) return
+  resultPreview.value = []
+  resultPreviewColumns.value = []
+  try {
+    const res = await previewResultTable(batchPredictModel.value.id, tableName, 10)
+    resultPreview.value = res.rows || []
+    resultPreviewColumns.value = res.columns || []
+  } catch (e) {
+    ElMessage.error('预览结果数据失败: ' + (e.message || '未知错误'))
   }
 }
 

@@ -25,6 +25,9 @@ public class QueryContextAssembler {
     private final ToolPromptLoader promptLoader;
     private final SchemaContextBuilder schemaContextBuilder;
 
+    private static final int SYSTEM_TOKEN_BUDGET = 16000;
+    private static final int CHARS_PER_TOKEN = 4;
+
     public record PromptParts(
         String systemPrompt,
         Map<String, String> userContext,
@@ -35,7 +38,7 @@ public class QueryContextAssembler {
      * 直译 fetchSystemPromptParts()
      */
     public PromptParts fetchPromptParts(String model, Long dataSourceId) {
-        String systemPrompt = systemPromptBuilder.build(model);
+        String systemPrompt = systemPromptBuilder.build(model, dataSourceId, null);
 
         Map<String, String> context = new LinkedHashMap<>();
         context.put("currentDate", java.time.LocalDate.now().toString());
@@ -46,11 +49,17 @@ public class QueryContextAssembler {
         // 渲染动态占位符
         systemPrompt = promptLoader.renderPrompt(systemPrompt, context);
 
-        // 注入数据字典上下文 — 让 LLM 直接知道表结构，无需 schema_explore
-        String schemaContext = schemaContextBuilder.buildSchemaContext(dataSourceId);
+        // 注入数据字典上下文 — 带 token 预算控制
+        int systemTokens = systemPrompt.length() / CHARS_PER_TOKEN;
+        int remainingTokens = Math.max(0, SYSTEM_TOKEN_BUDGET - systemTokens);
+        String schemaContext = schemaContextBuilder.buildSchemaContext(dataSourceId, remainingTokens);
         if (schemaContext != null) {
             systemPrompt = systemPrompt + "\n\n" + schemaContext;
         }
+
+        int finalTokens = systemPrompt.length() / CHARS_PER_TOKEN;
+        log.debug("[CTX-ASM] system prompt: {} chars, ~{} tokens (budget {}), schema budget: {} tokens",
+            systemPrompt.length(), finalTokens, SYSTEM_TOKEN_BUDGET, remainingTokens);
 
         return new PromptParts(systemPrompt, context, context);
     }

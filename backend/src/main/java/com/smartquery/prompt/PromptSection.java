@@ -1,24 +1,43 @@
 package com.smartquery.prompt;
 
 /**
- * 提示词段 — 直译 Claude Code systemPromptSection()
+ * 提示词段 — 增强版，支持优先级和条件注入
  *
  * <p>翻译对照:
  * <pre>
  * TS: systemPromptSection(name, () => content) / DANGEROUS_uncachedSystemPromptSection(name, () => content, reason)
- * Java: PromptSection record with name, content, cacheable
+ * Java: PromptSection record with name, content, priority, condition
  * </pre>
  */
 public record PromptSection(
     String name,
     String content,
-    boolean cacheable
+    boolean cacheable,
+    PromptPriority priority,
+    PromptCondition condition,
+    int tokenBudget
 ) {
     public static PromptSection cached(String name, String content) {
-        return new PromptSection(name, content, true);
+        return new PromptSection(name, content, true, PromptPriority.DEFAULT, null, 0);
     }
 
     public static PromptSection uncached(String name, String content) {
-        return new PromptSection(name, content, false);
+        return new PromptSection(name, content, false, PromptPriority.DEFAULT, null, 0);
+    }
+
+    public static PromptSection of(PromptPriority priority, String name, String content) {
+        return new PromptSection(name, content, true, priority, null, 0);
+    }
+
+    public static PromptSection conditional(PromptPriority priority, String name, String content, PromptCondition condition) {
+        return new PromptSection(name, content, false, priority, condition, 0);
+    }
+
+    public static PromptSection budgeted(PromptPriority priority, String name, String content, int tokenBudget) {
+        return new PromptSection(name, content, true, priority, null, tokenBudget);
+    }
+
+    public boolean shouldInject(PromptContext ctx) {
+        return condition == null || condition.test(ctx);
     }
 }

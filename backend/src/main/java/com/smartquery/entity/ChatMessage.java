@@ -19,6 +19,7 @@ public class ChatMessage {
     private String toolCallId;
     private Integer tokenCount;
     private String model;
+    private String traceId;
 
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;

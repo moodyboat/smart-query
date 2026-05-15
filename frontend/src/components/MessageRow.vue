@@ -252,8 +252,69 @@
           <div v-if="block.result" class="tool-result" v-html="renderMarkdown(block.result)" />
         </div>
 
+        <!-- Tool use block: Mining Model -->
+        <div v-if="block.type === 'tool_use' && block.name === 'mining_model'" class="tool-block mining-tool">
+          <div class="tool-header">
+            <span class="tool-badge mining-badge">Mining</span>
+            <span v-if="block.result?.action" class="mining-action-label">{{ miningActionLabel(block.result.action) }}</span>
+            <span class="tool-status" :class="block.status">{{ statusLabel(block.status) }}</span>
+          </div>
+          <div v-if="block.result" class="tool-result mining-result">
+            <!-- Model list -->
+            <div v-if="block.result.action === 'list'" class="mining-list">
+              <div v-html="renderMarkdown(block.result.message)" />
+            </div>
+            <!-- Model created -->
+            <div v-else-if="block.result.action === 'create'" class="mining-create">
+              <div class="mining-model-card" v-if="block.result.modelId">
+                <div class="mining-model-name">{{ block.result.modelName || '新模型' }}</div>
+                <div class="mining-model-meta">
+                  <span v-if="block.result.algorithm">算法: {{ block.result.algorithm }}</span>
+                </div>
+                <button class="mining-action-btn" @click="emit('openMining')">在挖掘模块中查看</button>
+              </div>
+              <div v-html="renderMarkdown(block.result.message)" />
+            </div>
+            <!-- Training result -->
+            <div v-else-if="block.result.action === 'train'" class="mining-train">
+              <div v-if="block.result.details?.metrics" class="mining-metrics-card">
+                <div class="mining-metrics-title">训练指标</div>
+                <div class="mining-metrics-grid">
+                  <template v-for="(val, key) in parseMetricsObj(block.result.details.metrics)" :key="key">
+                    <div class="mining-metric-item" :class="metricQualityClass(val, key)">
+                      <span class="metric-val">{{ formatMetricVal(key, val) }}</span>
+                      <span class="metric-key">{{ formatMetricName(key) }}</span>
+                    </div>
+                  </template>
+                </div>
+              </div>
+              <div v-html="renderMarkdown(block.result.message)" />
+              <button v-if="block.result.modelId" class="mining-action-btn" @click="emit('openMining')">查看模型详情</button>
+            </div>
+            <!-- Validation result -->
+            <div v-else-if="block.result.action === 'validate'" class="mining-validate">
+              <div v-html="renderMarkdown(block.result.message)" />
+            </div>
+            <!-- Predict result -->
+            <div v-else-if="block.result.action === 'predict'" class="mining-predict">
+              <div v-html="renderMarkdown(block.result.message)" />
+            </div>
+            <!-- Explore data -->
+            <div v-else-if="block.result.action === 'explore_data'" class="mining-explore">
+              <div v-html="renderMarkdown(block.result.message)" />
+            </div>
+            <!-- Publish / Offline / Update / List algorithms -->
+            <div v-else class="mining-generic">
+              <div v-html="renderMarkdown(block.result.message)" />
+            </div>
+          </div>
+          <div v-else-if="block.status === 'running'" class="tool-loading">
+            <span class="spinner"></span> 执行挖掘操作...
+          </div>
+        </div>
+
         <!-- Generic running indicator for any tool -->
-        <div v-if="block.type === 'tool_use' && block.status === 'running' && !['generate_chart','execute_sql','execute_python'].includes(block.name)" class="tool-loading">
+        <div v-if="block.type === 'tool_use' && block.status === 'running' && !['generate_chart','execute_sql','execute_python','mining_model'].includes(block.name)" class="tool-loading">
           <span class="spinner"></span> 执行 {{ block.name }}...
         </div>
       </div>
@@ -294,7 +355,7 @@ const props = defineProps({
   openDashboard: { type: Function, default: null }
 })
 
-const emit = defineEmits(['retryPython', 'retryConnection'])
+const emit = defineEmits(['retryPython', 'retryConnection', 'openMining'])
 
 const filterValues = ref({})
 const filterLoading = ref({})
@@ -439,6 +500,53 @@ function statusLabel(status) {
   }
 }
 
+function miningActionLabel(action) {
+  const labels = {
+    list: '模型列表',
+    get: '模型详情',
+    create: '创建模型',
+    update: '更新配置',
+    update_params: '修改参数',
+    train: '训练',
+    validate: '验证',
+    publish: '发布',
+    offline: '下线',
+    predict: '预测',
+    batch_predict: '批量预测',
+    explore_data: '数据探索',
+    list_algorithms: '算法列表',
+    create_algorithm: '创建算法',
+    history: '执行历史',
+    unknown: '挖掘操作'
+  }
+  return labels[action] || action
+}
+
+function parseMetricsObj(metrics) {
+  if (!metrics) return {}
+  if (typeof metrics === 'string') { try { return JSON.parse(metrics) } catch { return {} } }
+  return metrics
+}
+
+function formatMetricVal(key, val) {
+  if (val == null) return '-'
+  const pctKeys = ['accuracy', 'precision', 'recall', 'f1', 'r2']
+  return pctKeys.includes(key) ? (val * 100).toFixed(1) + '%' : Number(val).toFixed(4)
+}
+
+function formatMetricName(key) {
+  const names = { accuracy: '准确率', precision: '精确率', recall: '召回率', f1: 'F1', mse: 'MSE', rmse: 'RMSE', r2: 'R²', inertia: '惯性', n_clusters: '聚类数' }
+  return names[key] || key
+}
+
+function metricQualityClass(val, key) {
+  if (val == null) return ''
+  if (['rmse', 'mse', 'mae'].includes(key)) return ''
+  if (val >= 0.9) return 'metric-good'
+  if (val >= 0.7) return 'metric-moderate'
+  return val >= 0.4 ? 'metric-poor' : ''
+}
+
 function resolveDashboardCharts(result) {
   let ids = result.chartIds
   if (typeof ids === 'string') {
@@ -548,10 +656,96 @@ function retryPython(code, stderr) {
 .sql-badge { background: var(--color-warning); }
 .python-badge { background: var(--primary); }
 .chart-badge { background: var(--color-success); }
-.dashboard-badge { background: #9b59b6; }
-.report-badge { background: #e74c3c; }
-.filter-badge { background: #f59e0b; }
+.dashboard-badge { background: var(--badge-dashboard); }
+.report-badge { background: var(--badge-report); }
+.filter-badge { background: var(--badge-filter); }
 .schema-badge { background: var(--color-info); }
+.mining-badge { background: var(--badge-mining); }
+.mining-action-label {
+  font-size: var(--font-sm);
+  color: var(--badge-mining);
+  font-weight: 500;
+  margin-left: 6px;
+}
+.mining-result :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0;
+}
+.mining-result :deep(th),
+.mining-result :deep(td) {
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  text-align: left;
+  font-size: var(--font-sm);
+}
+.mining-model-card {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 8px;
+}
+.mining-model-name {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--badge-mining);
+}
+.mining-model-meta {
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+.mining-action-btn {
+  margin-top: 8px;
+  background: none;
+  border: 1px solid var(--badge-mining);
+  color: var(--badge-mining);
+  padding: 4px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.15s;
+}
+.mining-action-btn:hover { background: var(--badge-mining); color: #fff; }
+.mining-metrics-card {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 8px;
+}
+.mining-metrics-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--badge-mining);
+  margin-bottom: 6px;
+}
+.mining-metrics-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.mining-metric-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  min-width: 60px;
+}
+.mining-metric-item .metric-val {
+  font-size: 16px;
+  font-weight: 700;
+}
+.mining-metric-item .metric-key {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.mining-metric-item.metric-good .metric-val { color: var(--color-success); }
+.mining-metric-item.metric-moderate .metric-val { color: var(--color-warning); }
+.mining-metric-item.metric-poor .metric-val { color: var(--color-danger); }
 
 .tool-status { font-size: var(--font-sm); }
 .tool-status.running { color: var(--primary); }
@@ -572,8 +766,8 @@ function retryPython(code, stderr) {
   padding: var(--space-sm) 14px; font-family: 'Menlo','Monaco',monospace; font-size: var(--font-sm);
   overflow-x: auto; white-space: pre-wrap; margin: 0;
 }
-.sql-code { background: #1e1e1e; color: #d4d4d4; }
-.python-code { background: #1e1e1e; color: #d4d4d4; }
+.sql-code { background: var(--code-bg); color: var(--code-fg); }
+.python-code { background: var(--code-bg); color: var(--code-fg); }
 
 .python-tool .code-details {
   border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
@@ -620,7 +814,7 @@ details[open] .code-toggle-icon { display: none; }
   background: var(--primary); color: var(--surface); border: none; border-radius: var(--radius-sm);
   cursor: pointer; transition: background 0.15s;
 }
-.retry-btn:hover { background: #66b1ff; }
+.retry-btn:hover { background: var(--retry-hover); }
 .error-hint-inline { font-size: var(--font-xs); color: var(--color-warning); }
 .error-text { color: var(--color-warning); background: var(--color-warning-light); padding: var(--space-sm) 14px; border-radius: var(--radius-md); }
 .retry-actions { padding: var(--space-xs) 0 var(--space-sm); }
@@ -656,10 +850,10 @@ details[open] .code-toggle-icon { display: none; }
 .chart-tool { max-width: 700px; }
 .chart-size-btn {
   margin-left: auto; padding: 3px var(--space-sm); font-size: var(--font-xs);
-  background: transparent; color: var(--color-success); border: 1px solid #e1f3d8;
+  background: transparent; color: var(--color-success); border: 1px solid var(--success-border);
   border-radius: var(--radius-sm); cursor: pointer; transition: all 0.2s;
 }
-.chart-size-btn:hover { background: var(--color-success-light); border-color: #b3e19d; }
+.chart-size-btn:hover { background: var(--color-success-light); border-color: var(--success-border-hover); }
 .chart-wrapper :deep(.chart-wrapper) { transition: height 0.3s ease; }
 .chart-expanded :deep(.chart-wrapper) { height: 520px !important; }
 
@@ -695,7 +889,7 @@ details[open] .code-toggle-icon { display: none; }
 .section-sql-toggle:hover { color: var(--primary); }
 .section-sql-code {
   margin: 0; padding: var(--space-sm) var(--space-md); font-family: 'Menlo', monospace;
-  font-size: var(--font-xs); background: #1e1e1e; color: #d4d4d4;
+  font-size: var(--font-xs); background: var(--code-bg); color: var(--code-fg);
   white-space: pre-wrap; border-top: 1px solid var(--border-light);
 }
 .report-conclusion {
@@ -711,10 +905,10 @@ details[open] .code-toggle-icon { display: none; }
 .filter-target { font-size: var(--font-sm); color: var(--text-muted); }
 .fullscreen-btn {
   margin-left: auto; padding: 2px var(--space-sm); font-size: var(--font-xs);
-  background: #9b59b6; color: var(--surface); border: none; border-radius: var(--radius-sm);
+  background: var(--fullscreen-btn); color: var(--surface); border: none; border-radius: var(--radius-sm);
   cursor: pointer; font-weight: 500;
 }
-.fullscreen-btn:hover { background: #8e44ad; }
+.fullscreen-btn:hover { background: var(--fullscreen-btn-hover); }
 
 .tool-loading {
   padding: var(--space-sm) 14px; font-size: var(--font-md); color: var(--text-muted); display: flex; align-items: center; gap: var(--space-sm);

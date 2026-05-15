@@ -58,4 +58,9 @@ public interface LlmTool {
 
     /** 超时时间(ms) */
     default long getTimeoutMs() { return 30000; }
+
+    /** 提示词文件名 (不含 .md 后缀)，默认取 tool name 并将下划线替换为连字符 */
+    default String getPromptFileName() {
+        return getName().replace('_', '-');
+    }
 }

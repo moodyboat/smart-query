@@ -120,7 +120,7 @@
               <!-- Node Card -->
               <div
                 class="flow-node"
-                :class="[node.type, { selected: selectedNodeId === node.id, running: runningNodeId === node.id, done: doneNodeIds.has(node.id) }]"
+                :class="[node.type, { selected: selectedNodeId === node.id, running: runningNodeId === node.id || previewingNodeId === node.id, done: doneNodeIds.has(node.id) }]"
                 draggable="true"
                 @dragstart="onNodeReorderStart($event, idx)"
                 @dragend="onDragEnd"
@@ -138,6 +138,9 @@
                       <template #dropdown>
                         <el-dropdown-menu>
                           <el-dropdown-item command="config">配置</el-dropdown-item>
+                          <el-dropdown-item command="preview" :disabled="!isNodeConfigured(node) || previewingNodeId === node.id">
+                            {{ previewingNodeId === node.id ? '运行中...' : '试运行' }}
+                          </el-dropdown-item>
                           <el-dropdown-item command="rename">重命名</el-dropdown-item>
                           <el-dropdown-item command="delete" divided style="color: var(--danger)">删除</el-dropdown-item>
                         </el-dropdown-menu>
@@ -145,6 +148,9 @@
                     </el-dropdown>
                   </div>
                   <div class="node-summary">{{ nodeSummary(node) }}</div>
+                  <el-button v-if="previewResult?.nodeId === node.id" size="small" text type="primary" class="node-preview-link" @click.stop="showPreviewPanel(node.id)">
+                    {{ previewResult.status === 'success' ? '查看试运行结果' : '查看错误' }}
+                  </el-button>
                 </div>
               </div>
 
@@ -198,6 +204,162 @@
           </div>
         </div>
       </div>
+
+      <!-- Node Preview Results Panel -->
+      <el-drawer v-model="showPreviewDrawer" title="试运行结果" size="520px" direction="rtl" :modal="false">
+        <div v-if="previewResult" class="preview-panel">
+          <div class="preview-header">
+            <el-tag :type="previewResult.status === 'success' ? 'success' : 'danger'" size="small">
+              {{ previewResult.status === 'success' ? '成功' : '失败' }}
+            </el-tag>
+            <span class="preview-node-type">{{ nodeTitle(previewResult.nodeType) }}</span>
+          </div>
+
+          <!-- Error display -->
+          <div v-if="previewResult.error" class="preview-error">
+            <el-alert type="error" :closable="false" :title="previewResult.error" />
+          </div>
+
+          <!-- Data Source Preview -->
+          <template v-if="previewResult.nodeType === 'data_source' && previewResult.status === 'success'">
+            <div class="preview-stats">
+              <div class="preview-stat"><span class="ps-value">{{ previewResult.rowCount }}</span><span class="ps-label">总行数</span></div>
+              <div class="preview-stat"><span class="ps-value">{{ previewResult.columnCount }}</span><span class="ps-label">列数</span></div>
+              <div class="preview-stat"><span class="ps-value">{{ previewResult.tableName }}</span><span class="ps-label">表名</span></div>
+            </div>
+            <div v-if="previewResult.nullSummary && Object.keys(previewResult.nullSummary).length" class="preview-section">
+              <div class="preview-section-title">缺失值</div>
+              <div v-for="(cnt, col) in previewResult.nullSummary" :key="col" class="preview-null-row">
+                <span>{{ col }}</span><span>{{ cnt }} 个缺失</span>
+              </div>
+            </div>
+            <div class="preview-section">
+              <div class="preview-section-title">列信息</div>
+              <div class="preview-table-wrap">
+                <table class="preview-table">
+                  <thead><tr><th>列名</th><th>类型</th><th>缺失</th><th>示例</th></tr></thead>
+                  <tbody><tr v-for="col in previewResult.columns" :key="col.name"><td>{{ col.name }}</td><td>{{ col.dtype }}</td><td>{{ col.nulls }}</td><td>{{ col.sample }}</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+            <div v-if="previewResult.sampleRows?.length" class="preview-section">
+              <div class="preview-section-title">样本数据 (前 {{ previewResult.sampleRows.length }} 行)</div>
+              <div class="preview-table-wrap">
+                <table class="preview-table">
+                  <thead><tr><th v-for="col in Object.keys(previewResult.sampleRows[0])" :key="col">{{ col }}</th></tr></thead>
+                  <tbody><tr v-for="(row, ri) in previewResult.sampleRows.slice(0, 10)" :key="ri"><td v-for="col in Object.keys(previewResult.sampleRows[0])" :key="col">{{ row[col] }}</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+          </template>
+
+          <!-- Preprocessing Preview -->
+          <template v-if="(previewResult.nodeType === 'preprocessing' || previewResult.nodeType === 'fill_missing') && previewResult.status === 'success'">
+            <div class="preview-stats">
+              <div class="preview-stat"><span class="ps-value">{{ previewResult.rowCount }}</span><span class="ps-label">处理后行数</span></div>
+              <div class="preview-stat"><span class="ps-value">{{ previewResult.columnCount }}</span><span class="ps-label">列数</span></div>
+            </div>
+            <div v-if="previewResult.remainingNulls && Object.keys(previewResult.remainingNulls).length" class="preview-section">
+              <div class="preview-section-title">剩余缺失值</div>
+              <div v-for="(cnt, col) in previewResult.remainingNulls" :key="col" class="preview-null-row">
+                <span>{{ col }}</span><span>{{ cnt }} 个缺失</span>
+              </div>
+            </div>
+            <div v-else class="preview-section">
+              <el-tag type="success" size="small">无缺失值</el-tag>
+            </div>
+            <div v-if="previewResult.sampleRows?.length" class="preview-section">
+              <div class="preview-section-title">处理后样本 (前10行)</div>
+              <div class="preview-table-wrap">
+                <table class="preview-table">
+                  <thead><tr><th v-for="col in Object.keys(previewResult.sampleRows[0])" :key="col">{{ col }}</th></tr></thead>
+                  <tbody><tr v-for="(row, ri) in previewResult.sampleRows.slice(0, 10)" :key="ri"><td v-for="col in Object.keys(previewResult.sampleRows[0])" :key="col">{{ row[col] }}</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+          </template>
+
+          <!-- Feature Engineering Preview -->
+          <template v-if="previewResult.nodeType === 'feature_engineering' && previewResult.status === 'success'">
+            <div class="preview-stats">
+              <div class="preview-stat"><span class="ps-value">{{ previewResult.featureCount }}</span><span class="ps-label">特征数</span></div>
+              <div class="preview-stat"><span class="ps-value">{{ previewResult.targetColumn || '未设置' }}</span><span class="ps-label">目标列</span></div>
+              <div class="preview-stat"><span class="ps-value">{{ previewResult.sampleShape?.[0] || 0 }} × {{ previewResult.sampleShape?.[1] || 0 }}</span><span class="ps-label">矩阵形状</span></div>
+            </div>
+            <div v-if="previewResult.targetDistribution && Object.keys(previewResult.targetDistribution).length" class="preview-section">
+              <div class="preview-section-title">目标列分布</div>
+              <div v-for="(cnt, val) in previewResult.targetDistribution" :key="val" class="preview-null-row">
+                <span>{{ val }}</span><span>{{ cnt }} 条</span>
+              </div>
+            </div>
+            <div class="preview-section">
+              <div class="preview-section-title">特征列</div>
+              <div class="preview-tags">
+                <el-tag v-for="col in (previewResult.featureColumns || []).slice(0, 20)" :key="col" size="small" type="info" class="feat-tag">{{ col }}</el-tag>
+                <span v-if="(previewResult.featureColumns || []).length > 20" class="feat-more">+{{ previewResult.featureColumns.length - 20 }} 个</span>
+              </div>
+            </div>
+            <div v-if="previewResult.sampleRows?.length" class="preview-section">
+              <div class="preview-section-title">特征矩阵样本 (前5行)</div>
+              <div class="preview-table-wrap">
+                <table class="preview-table">
+                  <thead><tr><th v-for="col in Object.keys(previewResult.sampleRows[0])" :key="col">{{ col }}</th></tr></thead>
+                  <tbody><tr v-for="(row, ri) in previewResult.sampleRows" :key="ri"><td v-for="col in Object.keys(previewResult.sampleRows[0])" :key="col">{{ typeof row[col] === 'number' ? row[col].toFixed(2) : row[col] }}</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+          </template>
+
+          <!-- Training/Evaluation Preview -->
+          <template v-if="(previewResult.nodeType === 'training' || previewResult.nodeType === 'evaluation') && previewResult.status === 'success'">
+            <div class="preview-stats">
+              <div class="preview-stat"><span class="ps-value">{{ previewResult.trainSize }}</span><span class="ps-label">训练集</span></div>
+              <div class="preview-stat"><span class="ps-value">{{ previewResult.testSize }}</span><span class="ps-label">测试集</span></div>
+              <div class="preview-stat"><span class="ps-value">{{ previewResult.featureCount }}</span><span class="ps-label">特征数</span></div>
+            </div>
+            <div v-if="previewResult.metrics" class="preview-section">
+              <div class="preview-section-title">模型指标</div>
+              <div class="preview-metrics-grid">
+                <div v-for="(val, key) in previewResult.metrics" :key="key" class="preview-metric-card">
+                  <span class="pm-value">{{ typeof val === 'number' ? (val < 10 ? val.toFixed(4) : (val * 100).toFixed(1) + '%') : val }}</span>
+                  <span class="pm-label">{{ metricLabel(key) }}</span>
+                </div>
+              </div>
+            </div>
+            <div v-if="previewResult.featureImportance" class="preview-section">
+              <div class="preview-section-title">特征重要性 Top 10</div>
+              <div v-for="(f, i) in topPreviewFeatures" :key="i" class="preview-fi-row">
+                <span class="fi-name">{{ f.name }}</span>
+                <div class="fi-bar-track"><div class="fi-bar-fill" :style="{ width: (f.value / topPreviewFeatures[0].value * 100) + '%' }"></div></div>
+                <span class="fi-val">{{ (f.value * 100).toFixed(1) }}%</span>
+              </div>
+            </div>
+          </template>
+
+          <!-- Output Preview -->
+          <template v-if="previewResult.nodeType === 'output' && previewResult.status === 'success'">
+            <div class="preview-stats">
+              <div class="preview-stat"><span class="ps-value">{{ previewResult.totalRows }}</span><span class="ps-label">总输出行数</span></div>
+              <div class="preview-stat"><span class="ps-value">{{ previewResult.outputTable || '未配置' }}</span><span class="ps-label">目标表</span></div>
+            </div>
+            <div v-if="previewResult.predictionDistribution" class="preview-section">
+              <div class="preview-section-title">预测分布</div>
+              <div v-for="(cnt, val) in previewResult.predictionDistribution" :key="val" class="preview-null-row">
+                <span>预测值 {{ val }}</span><span>{{ cnt }} 条</span>
+              </div>
+            </div>
+            <div v-if="previewResult.sampleRows?.length" class="preview-section">
+              <div class="preview-section-title">输出样本 (前10行)</div>
+              <div class="preview-table-wrap">
+                <table class="preview-table">
+                  <thead><tr><th v-for="col in (previewResult.columns || []).slice(0, 10)" :key="col">{{ col }}</th></tr></thead>
+                  <tbody><tr v-for="(row, ri) in previewResult.sampleRows.slice(0, 10)" :key="ri"><td v-for="col in (previewResult.columns || []).slice(0, 10)" :key="col">{{ row[col] }}</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+          </template>
+        </div>
+      </el-drawer>
 
       <!-- Node Config Panel -->
       <el-drawer v-model="showNodeConfig" :title="selectedNodeTitle" size="420px" direction="rtl" :modal="false">
@@ -258,26 +420,37 @@
               <el-form-item label="节点名称">
                 <el-input v-model="selectedNode.config.title" />
               </el-form-item>
-              <el-form-item label="特征列">
-                <div v-if="columnOptions.length" class="column-picker">
-                  <el-checkbox v-model="featSelectAll" @change="onFeatSelectAll" class="col-hint">全选</el-checkbox>
-                  <div class="column-grid">
-                    <el-checkbox v-for="col in columnOptions" :key="col.name"
-                      v-model="featChecked[col.name]" @change="syncFeatCols">
-                      <span class="col-name">{{ col.name }}</span>
-                      <span class="col-type">{{ col.type }}</span>
-                    </el-checkbox>
-                  </div>
-                  <span class="selected-count">已选 {{ selectedFeatCount }} / {{ columnOptions.length }} 列</span>
-                </div>
-                <p v-else class="col-hint">请先配置数据接入节点</p>
-              </el-form-item>
               <el-form-item label="目标列">
                 <el-select v-model="selectedNode.config.targetColumn" placeholder="选择目标列" style="width: 100%"
-                  :teleported="false" :disabled="!columnOptions.length">
+                  :teleported="false" :disabled="!columnOptions.length" @change="onTargetColumnChange">
                   <el-option v-for="col in columnOptions" :key="col.name"
                     :label="`${col.name} (${col.type})`" :value="col.name" />
                 </el-select>
+                <div v-if="selectedNode.config.targetColumn" class="target-hint">
+                  目标列已自动从特征列中排除
+                </div>
+              </el-form-item>
+              <el-form-item label="特征列">
+                <div v-if="columnOptions.length" class="column-picker">
+                  <div class="column-list-header">
+                    <el-checkbox v-model="featSelectAll" @change="onFeatSelectAll">全选</el-checkbox>
+                    <span class="selected-count">已选 {{ selectedFeatCount }} / {{ columnOptions.length }} 列</span>
+                  </div>
+                  <div class="column-list">
+                    <div v-for="col in columnOptions" :key="col.name" class="column-list-item"
+                      :class="{ 'is-target': col.name === selectedNode.config.targetColumn }">
+                      <el-checkbox
+                        v-model="featChecked[col.name]"
+                        @change="syncFeatCols"
+                        :disabled="col.name === selectedNode.config.targetColumn">
+                        <span class="col-name">{{ col.name }}</span>
+                        <span class="col-type">{{ col.type }}</span>
+                      </el-checkbox>
+                      <span v-if="col.name === selectedNode.config.targetColumn" class="target-badge">目标</span>
+                    </div>
+                  </div>
+                </div>
+                <p v-else class="col-hint">请先配置数据接入节点</p>
               </el-form-item>
               <el-form-item label="特征变换">
                 <div class="transform-list">
@@ -435,10 +608,11 @@
 <script setup>
 import { ref, computed, watch, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { useMiningStore } from '../stores/mining'
 import {
   fetchMiningPipelines, fetchMiningPipeline, createMiningPipeline,
   updateMiningPipeline, deleteMiningPipeline, executeMiningPipeline,
-  fetchDataSourceTables, fetchTableColumns
+  validateMiningPipeline, previewStepPipeline, fetchDataSourceTables, fetchTableColumns
 } from '../api'
 import axios from 'axios'
 import { useAlgorithms } from '../composables/useAlgorithms.js'
@@ -454,6 +628,7 @@ const {
 } = useAlgorithms()
 
 const emit = defineEmits(['close'])
+const miningStore = useMiningStore()
 
 async function openPipelineById(id) {
   if (editingPipeline.value?.id === id) return
@@ -478,6 +653,9 @@ const runningNodeId = ref(null)
 const doneNodeIds = ref(new Set())
 const filterDsId = ref(null)
 const lastRunResult = ref(null)
+const previewingNodeId = ref(null)
+const previewResult = ref(null)
+const showPreviewDrawer = ref(false)
 
 // Node selection
 const selectedNodeId = ref(null)
@@ -705,9 +883,76 @@ async function createPipeline() {
     })
     pipelines.value.unshift(p)
     openPipeline(p)
-    ElMessage.success('已创建')
+
+    // Auto-configure: load first available table and pre-fill nodes
+    try {
+      const tables = await fetchDataSourceTables(ds.id) || []
+      if (tables.length > 0) {
+        const firstTable = tables[0].name
+        const dsNode = pipelineNodes.value.find(n => n.type === 'data_source')
+        if (dsNode) dsNode.config.table = firstTable
+
+        const columns = await fetchTableColumns(ds.id, firstTable) || []
+        columnOptions.value = columns
+        autoConfigureFeatures(columns, firstTable)
+      }
+    } catch { /* auto-config is best-effort */ }
+
+    ElMessage.success('已创建并预配置')
   } catch (e) {
     ElMessage.error('创建失败: ' + (e.message || ''))
+  }
+}
+
+function autoConfigureFeatures(columns, tableName) {
+  const skipCols = new Set(['id', 'created_at', 'updated_at', 'updated_by'])
+  const numericTypes = new Set(['int', 'bigint', 'tinyint', 'smallint', 'float', 'double', 'decimal', 'numeric'])
+  const labelTypes = new Set(['tinyint'])
+
+  // Find potential target: prefer tinyint (binary label) or last enum column
+  let targetCol = null
+  const featureCols = []
+  const labelSuffixes = ['_label', '_flag', '_target', '_class', '_status', '_type']
+
+  for (const col of columns) {
+    const name = col.name.toLowerCase()
+    if (skipCols.has(name) || name.endsWith('_id') || name.endsWith('_at') || name === tableName + '_id') continue
+
+    const type = (col.type || '').toLowerCase()
+
+    if (!targetCol) {
+      // Prefer columns that look like labels
+      if (labelSuffixes.some(s => name.includes(s)) || labelTypes.has(type)) {
+        targetCol = col.name
+        continue
+      }
+    }
+    featureCols.push(col.name)
+  }
+
+  // If no label-like column found, use last enum column or first tinyint
+  if (!targetCol) {
+    const enumCol = columns.find(c => (c.type || '').toLowerCase().startsWith('enum') && !skipCols.has(c.name.toLowerCase()))
+    if (enumCol) targetCol = enumCol.name
+  }
+
+  const featNode = pipelineNodes.value.find(n => n.type === 'feature_engineering')
+  if (featNode) {
+    const feats = targetCol ? featureCols.filter(c => c !== targetCol) : featureCols
+    featNode.config.featureColumns = JSON.stringify(feats)
+    featNode.config.targetColumn = targetCol || ''
+    // Init checkboxes
+    const checked = {}
+    columns.forEach(c => {
+      checked[c.name] = feats.includes(c.name) && c.name !== targetCol
+    })
+    featChecked.value = checked
+  }
+
+  // Auto-configure output table name
+  const outNode = pipelineNodes.value.find(n => n.type === 'output')
+  if (outNode && tableName) {
+    outNode.config.table = tableName + '_prediction_result'
   }
 }
 
@@ -779,7 +1024,20 @@ async function savePipeline() {
       edges: JSON.stringify(edges),
       status: canRun.value ? 'ready' : 'draft'
     })
-    ElMessage.success('已保存')
+
+    // Validate after save
+    try {
+      const vr = await validateMiningPipeline(editingPipeline.value.id)
+      if (!vr.valid) {
+        ElMessage.warning('流水线校验未通过: ' + (vr.errors || []).join('; '))
+      } else if (vr.warnings && vr.warnings.length > 0) {
+        ElMessage.success('已保存（有警告: ' + vr.warnings.join('; ') + '）')
+      } else {
+        ElMessage.success('已保存')
+      }
+    } catch {
+      ElMessage.success('已保存')
+    }
     await loadPipelines()
   } catch (e) {
     ElMessage.error('保存失败: ' + (e.message || ''))
@@ -812,6 +1070,7 @@ async function runPipeline() {
     lastRunResult.value = result
 
     await loadPipelines()
+    miningStore.loadModels() // Refresh model list in MiningManager
     ElMessage.success(`流程执行完成 — 模型ID: ${result.modelId}`)
   } catch (e) {
     await updateMiningPipeline(editingPipeline.value.id, { status: 'failed' })
@@ -847,6 +1106,8 @@ function addStep(idx, type) {
 function onNodeCmd(cmd, idx) {
   if (cmd === 'config') {
     selectedNodeId.value = pipelineNodes.value[idx].id
+  } else if (cmd === 'preview') {
+    previewStep(pipelineNodes.value[idx].id)
   } else if (cmd === 'rename') {
     const node = pipelineNodes.value[idx]
     ElMessageBox.prompt('步骤名称:', '重命名', {
@@ -914,9 +1175,23 @@ function onFeatSelectAll(val) {
 function syncFeatCols() {
   const featNode = pipelineNodes.value.find(n => n.type === 'feature_engineering')
   if (featNode) {
-    const cols = Object.entries(featChecked.value).filter(([, v]) => v).map(([k]) => k)
+    const target = featNode.config.targetColumn
+    const cols = Object.entries(featChecked.value)
+      .filter(([, v]) => v)
+      .map(([k]) => k)
+      .filter(c => c !== target)
     featNode.config.featureColumns = JSON.stringify(cols)
   }
+}
+
+function onTargetColumnChange(target) {
+  const featNode = pipelineNodes.value.find(n => n.type === 'feature_engineering')
+  if (!featNode) return
+  // Auto-uncheck target from features
+  if (target && featChecked.value[target]) {
+    featChecked.value[target] = false
+  }
+  syncFeatCols()
 }
 
 function addTransform() {
@@ -932,6 +1207,43 @@ function removeTransform(idx) {
   transforms.splice(idx, 1)
   selectedNode.value.config.transforms = transforms
 }
+
+// Preview step
+async function previewStep(nodeId) {
+  if (!editingPipeline.value || previewingNodeId.value) return
+  previewingNodeId.value = nodeId
+  previewResult.value = null
+  try {
+    await savePipeline()
+    const result = await previewStepPipeline(editingPipeline.value.id, nodeId)
+    previewResult.value = result
+    if (result.status === 'success') {
+      ElMessage.success('试运行完成')
+    } else {
+      ElMessage.warning('试运行出错: ' + (result.error || '未知错误'))
+    }
+    showPreviewDrawer.value = true
+  } catch (e) {
+    ElMessage.error('试运行失败: ' + (e.message || ''))
+    previewResult.value = { nodeId, status: 'error', error: e.message }
+    showPreviewDrawer.value = true
+  } finally {
+    previewingNodeId.value = null
+  }
+}
+
+function showPreviewPanel(nodeId) {
+  showPreviewDrawer.value = true
+}
+
+const topPreviewFeatures = computed(() => {
+  if (!previewResult.value?.featureImportance) return []
+  const fi = previewResult.value.featureImportance
+  return Object.entries(fi)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([name, value]) => ({ name, value }))
+})
 
 function onModelTypeChange() {
   if (!selectedNode.value) return
@@ -1098,37 +1410,37 @@ const modelTypeLabel = getModelTypeLabel
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 16px;
+  margin-bottom: var(--space-lg);
 }
 
 .list-header-left {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-md);
 }
 
 .list-count {
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--font-md);
 }
 
 .empty-pipelines {
   text-align: center;
-  padding: 60px 0;
+  padding: var(--space-2xl) 0;
   color: var(--text-muted);
 }
 
 .pipeline-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 16px;
+  gap: var(--space-lg);
 }
 
 .pipeline-card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 16px;
+  border-radius: var(--radius-xl);
+  padding: var(--space-lg);
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -1142,12 +1454,12 @@ const modelTypeLabel = getModelTypeLabel
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 8px;
+  margin-bottom: var(--space-sm);
 }
 
 .pipeline-name {
   font-weight: 600;
-  font-size: 15px;
+  font-size: var(--font-lg);
   color: var(--text-primary);
   cursor: pointer;
   transition: color 0.15s;
@@ -1158,27 +1470,24 @@ const modelTypeLabel = getModelTypeLabel
 
 .pipeline-card-meta {
   display: flex;
-  gap: 12px;
+  gap: var(--space-md);
   color: var(--text-muted);
-  font-size: 12px;
-  margin-bottom: 10px;
+  font-size: var(--font-sm);
+  margin-bottom: var(--space-sm);
 }
 
 .pipeline-card-flow {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-xs);
   flex-wrap: wrap;
-  padding: 8px 0;
+  padding: var(--space-sm) 0;
   border-top: 1px solid var(--border);
-  font-size: 12px;
+  font-size: var(--font-sm);
   color: var(--text-secondary);
 }
 
-.mini-arrow {
-  color: var(--text-muted);
-}
-
+.mini-arrow,
 .mini-more {
   color: var(--text-muted);
 }
@@ -1186,7 +1495,7 @@ const modelTypeLabel = getModelTypeLabel
 .pipeline-card-actions {
   display: flex;
   justify-content: flex-end;
-  padding-top: 8px;
+  padding-top: var(--space-sm);
   border-top: 1px solid var(--border);
 }
 
@@ -1194,61 +1503,61 @@ const modelTypeLabel = getModelTypeLabel
 .editor-toolbar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding-bottom: 16px;
+  gap: var(--space-md);
+  padding-bottom: var(--space-lg);
   border-bottom: 1px solid var(--border);
-  margin-bottom: 20px;
+  margin-bottom: var(--space-xl);
 }
 
 .toolbar-actions {
   margin-left: auto;
   display: flex;
-  gap: 8px;
+  gap: var(--space-sm);
 }
 
-/* Editor Body - Three column layout */
+/* Editor Body */
 .editor-body {
   flex: 1;
   display: flex;
   overflow: hidden;
 }
 
-/* Algorithm Palette (Left) */
+/* Algorithm Palette */
 .algorithm-palette {
-  width: 200px;
-  min-width: 200px;
+  width: var(--palette-width);
+  min-width: var(--palette-width);
   border-right: 1px solid var(--border);
   overflow-y: auto;
-  padding: 12px;
+  padding: var(--space-md);
   background: var(--surface);
 }
 
 .palette-title {
   font-weight: 600;
-  font-size: 14px;
-  margin-bottom: 12px;
-  color: var(--text);
+  font-size: var(--font-base);
+  margin-bottom: var(--space-md);
+  color: var(--text-primary);
 }
 
 .palette-group {
-  margin-bottom: 12px;
+  margin-bottom: var(--space-md);
 }
 
 .palette-group-title {
-  font-size: 12px;
+  font-size: var(--font-sm);
   color: var(--text-muted);
-  padding: 4px 0;
+  padding: var(--space-xs) 0;
   border-bottom: 1px solid var(--border);
-  margin-bottom: 6px;
+  margin-bottom: var(--space-xs);
 }
 
 .palette-card {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  margin-bottom: 4px;
-  border-radius: 8px;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  margin-bottom: var(--space-xs);
+  border-radius: var(--radius-lg);
   cursor: grab;
   transition: background 0.15s;
   border: 1px solid transparent;
@@ -1264,7 +1573,7 @@ const modelTypeLabel = getModelTypeLabel
 }
 
 .palette-icon {
-  font-size: 18px;
+  font-size: var(--font-2xl);
   flex-shrink: 0;
 }
 
@@ -1275,7 +1584,7 @@ const modelTypeLabel = getModelTypeLabel
 }
 
 .palette-name {
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
@@ -1283,7 +1592,7 @@ const modelTypeLabel = getModelTypeLabel
 }
 
 .palette-types {
-  font-size: 11px;
+  font-size: var(--font-xs);
   color: var(--text-muted);
 }
 
@@ -1291,7 +1600,7 @@ const modelTypeLabel = getModelTypeLabel
 .flow-canvas {
   flex: 1;
   overflow: auto;
-  padding: 20px;
+  padding: var(--space-xl);
 }
 
 .canvas-empty {
@@ -1300,10 +1609,10 @@ const modelTypeLabel = getModelTypeLabel
   justify-content: center;
   height: 300px;
   color: var(--text-muted);
-  font-size: 14px;
+  font-size: var(--font-base);
   border: 2px dashed var(--border);
-  border-radius: 12px;
-  margin: 20px;
+  border-radius: var(--radius-xl);
+  margin: var(--space-xl);
 }
 
 .nodes-flow {
@@ -1311,7 +1620,7 @@ const modelTypeLabel = getModelTypeLabel
   align-items: center;
   gap: 0;
   min-width: max-content;
-  padding: 20px 0;
+  padding: var(--space-xl) 0;
 }
 
 .flow-node {
@@ -1319,17 +1628,17 @@ const modelTypeLabel = getModelTypeLabel
   display: flex;
   background: var(--surface);
   border: 2px solid var(--border);
-  border-radius: 12px;
-  min-width: 170px;
-  max-width: 210px;
+  border-radius: var(--radius-xl);
+  min-width: var(--node-min-width);
+  max-width: var(--node-max-width);
   cursor: pointer;
   transition: all 0.25s;
   overflow: hidden;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  box-shadow: var(--shadow-sm);
 }
 
 .flow-node:hover {
-  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  box-shadow: var(--shadow-md);
   transform: translateY(-1px);
 }
 
@@ -1339,12 +1648,12 @@ const modelTypeLabel = getModelTypeLabel
 }
 
 .flow-node.running {
-  border-color: var(--warning);
+  border-color: var(--color-warning);
   animation: pulse 1s infinite;
 }
 
 .flow-node.done {
-  border-color: var(--success);
+  border-color: var(--color-success);
 }
 
 @keyframes pulse {
@@ -1353,35 +1662,35 @@ const modelTypeLabel = getModelTypeLabel
 }
 
 .node-color-bar {
-  width: 4px;
+  width: var(--space-xs);
   flex-shrink: 0;
 }
 
-.flow-node.data_source .node-color-bar { background: var(--primary); }
-.flow-node.preprocessing .node-color-bar { background: var(--success); }
-.flow-node.fill_missing .node-color-bar { background: #E91E63; }
-.flow-node.feature_engineering .node-color-bar { background: var(--warning); }
-.flow-node.training .node-color-bar { background: #9B59B6; }
-.flow-node.evaluation .node-color-bar { background: #00BCD4; }
-.flow-node.output .node-color-bar { background: #FF9800; }
+.flow-node.data_source .node-color-bar { background: var(--node-color-data-source); }
+.flow-node.preprocessing .node-color-bar { background: var(--node-color-preprocessing); }
+.flow-node.fill_missing .node-color-bar { background: var(--node-color-fill-missing); }
+.flow-node.feature_engineering .node-color-bar { background: var(--node-color-feature-engineering); }
+.flow-node.training .node-color-bar { background: var(--node-color-training); }
+.flow-node.evaluation .node-color-bar { background: var(--node-color-evaluation); }
+.flow-node.output .node-color-bar { background: var(--node-color-output); }
 
 .node-body {
-  padding: 12px;
+  padding: var(--space-md);
   flex: 1;
 }
 
 .node-header {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-xs);
 }
 
 .node-icon {
-  font-size: 16px;
+  font-size: var(--font-xl);
 }
 
 .node-title {
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 600;
   flex: 1;
   white-space: nowrap;
@@ -1390,7 +1699,10 @@ const modelTypeLabel = getModelTypeLabel
 }
 
 .node-status-dot {
-  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  width: var(--space-sm);
+  height: var(--space-sm);
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 .node-status-dot.configured { background: var(--el-color-success); }
 .node-status-dot.unconfigured { background: var(--el-color-danger); animation: pulse-dot 2s infinite; }
@@ -1398,14 +1710,20 @@ const modelTypeLabel = getModelTypeLabel
 
 .node-more {
   padding: 0 !important;
-  min-width: 20px;
+  min-width: var(--space-xl);
 }
 
 .node-summary {
-  margin-top: 6px;
-  font-size: 11px;
+  margin-top: var(--space-xs);
+  font-size: var(--font-xs);
   color: var(--text-muted);
   line-height: 1.4;
+}
+
+.node-preview-link {
+  margin-top: var(--space-xs);
+  font-size: var(--font-xs);
+  padding: 0 !important;
 }
 
 /* Flow Connector */
@@ -1414,7 +1732,7 @@ const modelTypeLabel = getModelTypeLabel
   align-items: center;
   gap: 0;
   position: relative;
-  padding: 6px 8px;
+  padding: var(--space-xs) var(--space-sm);
   min-width: 44px;
   transition: background 0.15s;
   cursor: default;
@@ -1422,13 +1740,13 @@ const modelTypeLabel = getModelTypeLabel
 
 .flow-connector:hover {
   background: var(--primary-light);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .flow-connector.connector-drag-over {
   background: var(--primary-light);
-  border-radius: 4px;
-  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-xs) var(--space-md);
 }
 
 .flow-connector.connector-drag-over .connector-drop-hint {
@@ -1438,12 +1756,12 @@ const modelTypeLabel = getModelTypeLabel
 
 .connector-drop-hint {
   position: absolute;
-  width: 20px;
-  height: 20px;
+  width: var(--space-xl);
+  height: var(--space-xl);
   border-radius: 50%;
   background: var(--primary);
   color: white;
-  font-size: 14px;
+  font-size: var(--font-base);
   font-weight: bold;
   display: flex;
   align-items: center;
@@ -1454,13 +1772,16 @@ const modelTypeLabel = getModelTypeLabel
   pointer-events: none;
   left: 50%;
   top: 50%;
-  margin-left: -10px;
-  margin-top: -10px;
+  transform: translate(-50%, -50%) scale(0.5);
   z-index: 2;
 }
 
+.flow-connector.connector-drag-over .connector-drop-hint {
+  transform: translate(-50%, -50%) scale(1);
+}
+
 .connector-line {
-  width: 36px;
+  width: var(--connector-width);
   height: 2px;
   background: var(--border);
   position: relative;
@@ -1475,91 +1796,110 @@ const modelTypeLabel = getModelTypeLabel
   border-left: 6px solid var(--border);
 }
 
-.connector-add {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: var(--surface);
-  border: 1px dashed var(--border);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: all 0.2s;
-  flex-shrink: 0;
-}
-
-.connector-add:hover {
-  border-color: var(--primary);
-  color: var(--primary);
-  background: var(--primary-light);
-}
-
 /* Config Panel */
 .config-panel {
-  padding: 0 8px;
+  padding: 0 var(--space-sm);
 }
 
 .config-footer {
-  padding-top: 16px;
+  padding-top: var(--space-lg);
   border-top: 1px solid var(--border);
-  margin-top: 16px;
+  margin-top: var(--space-lg);
 }
 
 .param-row {
-  margin-bottom: 12px;
+  margin-bottom: var(--space-md);
 }
 
 .param-label {
   display: block;
-  font-size: 13px;
+  font-size: var(--font-md);
   color: var(--text-secondary);
-  margin-bottom: 4px;
+  margin-bottom: var(--space-xs);
 }
 
 .param-hint {
   color: var(--text-muted);
-  font-size: 11px;
-  margin-left: 4px;
+  font-size: var(--font-xs);
+  margin-left: var(--space-xs);
 }
 
 /* Column picker */
 .column-picker {
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 8px;
+  border-radius: var(--radius-md);
+  padding: var(--space-sm);
 }
-.transform-list { display: flex; flex-direction: column; gap: 6px; }
-.transform-row { display: flex; gap: 4px; align-items: center; }
 
-.column-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 4px;
-  max-height: 200px;
+.transform-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.transform-row {
+  display: flex;
+  gap: var(--space-xs);
+  align-items: center;
+}
+
+.column-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-xs);
+  padding-bottom: var(--space-xs);
+  border-bottom: 1px solid var(--border);
+}
+
+.column-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 240px;
   overflow-y: auto;
-  margin: 6px 0;
 }
 
-.col-name {
-  font-size: 12px;
+.column-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px var(--space-xs);
+  border-radius: var(--radius-sm);
 }
+
+.column-list-item:hover { background: var(--fill-light); }
+.column-list-item.is-target { background: var(--el-color-warning-light-9); }
+
+.target-badge {
+  font-size: var(--font-xs);
+  color: var(--el-color-warning-dark-2);
+  background: var(--el-color-warning-light-8);
+  padding: 0 var(--space-xs);
+  border-radius: var(--radius-sm);
+}
+
+.target-hint {
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  margin-top: var(--space-xs);
+}
+
+.col-name { font-size: var(--font-sm); }
 
 .col-type {
-  font-size: 10px;
+  font-size: var(--font-xs);
   color: var(--text-muted);
-  margin-left: 4px;
+  margin-left: var(--space-xs);
 }
 
 .selected-count {
-  font-size: 11px;
+  font-size: var(--font-xs);
   color: var(--text-muted);
 }
 
 .col-hint {
-  font-size: 12px;
+  font-size: var(--font-sm);
   color: var(--text-muted);
 }
 
@@ -1567,16 +1907,16 @@ const modelTypeLabel = getModelTypeLabel
 .step-picker {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-sm);
 }
 
 .step-option {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px;
+  gap: var(--space-md);
+  padding: var(--space-md);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -1587,7 +1927,7 @@ const modelTypeLabel = getModelTypeLabel
 }
 
 .step-option-icon {
-  font-size: 24px;
+  font-size: var(--font-2xl);
   width: 40px;
   text-align: center;
 }
@@ -1599,12 +1939,12 @@ const modelTypeLabel = getModelTypeLabel
 
 .step-option-title {
   font-weight: 600;
-  font-size: 14px;
+  font-size: var(--font-base);
 }
 
 .step-option-desc {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
 }
 
 /* Execution Results */
@@ -1612,25 +1952,284 @@ const modelTypeLabel = getModelTypeLabel
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 16px;
-  margin-top: 16px;
+  padding: var(--space-lg);
+  margin-top: var(--space-lg);
 }
-.results-header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
-.results-title { font-weight: 600; font-size: 14px; }
-.results-metrics { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+
+.results-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
+}
+
+.results-title {
+  font-weight: 600;
+  font-size: var(--font-base);
+}
+
+.results-metrics {
+  display: flex;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-md);
+}
+
 .result-metric {
-  background: var(--color-success-light); border-radius: var(--radius-md);
-  padding: 8px 16px; text-align: center; min-width: 80px;
+  background: var(--color-success-light);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-lg);
+  text-align: center;
+  min-width: 80px;
 }
-.rm-value { display: block; font-size: 18px; font-weight: 700; color: var(--color-success); }
-.rm-label { display: block; font-size: 11px; color: var(--text-muted); margin-top: 2px; }
-.results-meta { font-size: 12px; color: var(--text-muted); margin-bottom: 12px; display: flex; gap: 6px; }
-.results-features { margin-top: 8px; }
-.rf-title { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
-.rf-bars { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
-.rf-bar-row { display: flex; align-items: center; gap: 8px; }
-.rf-name { width: 100px; font-size: 11px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rf-track { flex: 1; height: 6px; background: var(--border-light); border-radius: 3px; overflow: hidden; }
-.rf-fill { height: 100%; background: var(--primary); border-radius: 3px; }
-.rf-val { width: 40px; font-size: 11px; color: var(--text-muted); text-align: right; }
+
+.rm-value {
+  display: block;
+  font-size: var(--font-2xl);
+  font-weight: 700;
+  color: var(--color-success);
+}
+
+.rm-label {
+  display: block;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.results-meta {
+  font-size: var(--font-sm);
+  color: var(--text-muted);
+  margin-bottom: var(--space-md);
+  display: flex;
+  gap: var(--space-xs);
+}
+
+.results-features { margin-top: var(--space-sm); }
+
+.rf-title {
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.rf-bars {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  margin-top: var(--space-xs);
+}
+
+.rf-bar-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.rf-name {
+  width: 100px;
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rf-track {
+  flex: 1;
+  height: var(--space-xs);
+  background: var(--border-light);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.rf-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 3px;
+}
+
+.rf-val {
+  width: 40px;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  text-align: right;
+}
+
+/* Preview Panel */
+.preview-panel {
+  padding: 0 var(--space-sm);
+}
+
+.preview-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-lg);
+}
+
+.preview-node-type {
+  font-weight: 600;
+  font-size: var(--font-base);
+}
+
+.preview-error {
+  margin-bottom: var(--space-lg);
+}
+
+.preview-stats {
+  display: flex;
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
+  flex-wrap: wrap;
+}
+
+.preview-stat {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-sm) var(--space-lg);
+  text-align: center;
+  min-width: 80px;
+}
+
+.ps-value {
+  display: block;
+  font-size: var(--font-xl);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.ps-label {
+  display: block;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.preview-section {
+  margin-bottom: var(--space-lg);
+}
+
+.preview-section-title {
+  font-size: var(--font-md);
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: var(--space-sm);
+  padding-bottom: var(--space-xs);
+  border-bottom: 1px solid var(--border);
+}
+
+.preview-null-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--font-sm);
+  padding: var(--space-xs) 0;
+  color: var(--text-secondary);
+}
+
+.preview-table-wrap {
+  overflow-x: auto;
+}
+
+.preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-xs);
+}
+
+.preview-table th {
+  background: var(--surface);
+  padding: var(--space-xs) var(--space-sm);
+  text-align: left;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.preview-table td {
+  padding: var(--space-xs) var(--space-sm);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.preview-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+
+.feat-tag { font-size: var(--font-xs); }
+
+.feat-more {
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  line-height: var(--space-xl);
+}
+
+.preview-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: var(--space-sm);
+}
+
+.preview-metric-card {
+  background: var(--el-color-success-light-9);
+  border-radius: var(--radius-lg);
+  padding: var(--space-sm);
+  text-align: center;
+}
+
+.pm-value {
+  display: block;
+  font-size: var(--font-xl);
+  font-weight: 700;
+  color: var(--el-color-success);
+}
+
+.pm-label {
+  display: block;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.preview-fi-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-xs);
+}
+
+.fi-name {
+  width: 90px;
+  font-size: var(--font-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fi-bar-track {
+  flex: 1;
+  height: var(--space-xs);
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.fi-bar-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 3px;
+}
+
+.fi-val {
+  width: 40px;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  text-align: right;
+}
 </style>

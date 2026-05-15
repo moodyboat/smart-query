@@ -6,6 +6,7 @@ import com.smartquery.entity.DataSource;
 import com.smartquery.mapper.DataSourceMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.io.*;
@@ -29,7 +30,6 @@ import jakarta.annotation.PostConstruct;
 
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class PythonExecutor {
 
     private final DataSourceMapper dataSourceMapper;
@@ -38,6 +38,19 @@ public class PythonExecutor {
     private static final String PYTHON_CMD = "python3";
     private static final String ARTIFACT_DIR = "/tmp/smartquery-artifacts";
     private static final String WORKSPACE_BASE = "/tmp/smartquery-workspace";
+
+    @Value("${smart-query.python.max-memory-mb:512}")
+    private int maxMemoryMb;
+
+    @Value("${smart-query.python.max-cpus:1}")
+    private double maxCpus;
+
+    @Value("${smart-query.python.execution-mode:process}")
+    private String executionMode;
+
+    public PythonExecutor(DataSourceMapper dataSourceMapper) {
+        this.dataSourceMapper = dataSourceMapper;
+    }
 
     @PostConstruct
     void init() {
@@ -67,11 +80,22 @@ public class PythonExecutor {
             String wrappedCode = wrapCode(code, dataSourceId, conversationId);
             Files.writeString(tempFile, wrappedCode);
 
-            ProcessBuilder pb = new ProcessBuilder(PYTHON_CMD, tempFile.toString());
+            ProcessBuilder pb;
+            if ("docker".equals(executionMode)) {
+                pb = buildDockerProcess(tempFile, dataSourceId);
+            } else {
+                pb = new ProcessBuilder(PYTHON_CMD, tempFile.toString());
+            }
             pb.redirectErrorStream(false);
             pb.environment().put("PYTHONIOENCODING", "utf-8");
 
             Process process = pb.start();
+
+            // Memory monitoring thread for process mode
+            ScheduledExecutorService memoryMonitor = null;
+            if (!"docker".equals(executionMode) && maxMemoryMb > 0) {
+                memoryMonitor = startMemoryMonitor(process, maxMemoryMb);
+            }
 
             // Stream stdout with progress callbacks
             StringBuilder stdoutBuilder = new StringBuilder();
@@ -99,9 +123,12 @@ public class PythonExecutor {
                 process.destroyForcibly();
                 stdoutReadFuture.cancel(true);
                 stderrFuture.cancel(true);
+                if (memoryMonitor != null) memoryMonitor.shutdownNow();
                 Files.deleteIfExists(tempFile);
                 return PythonResult.timeout("执行超时 (" + timeoutMs + "ms)", elapsed);
             }
+
+            if (memoryMonitor != null) memoryMonitor.shutdownNow();
 
             stdoutReadFuture.get(5, TimeUnit.SECONDS);
             String stdout = truncateOutput(stdoutBuilder.toString());
@@ -244,5 +271,50 @@ public class PythonExecutor {
             }
         }
         return artifacts;
+    }
+
+    private ProcessBuilder buildDockerProcess(Path scriptFile, Long dataSourceId) {
+        String memLimit = maxMemoryMb + "m";
+        String cpuLimit = String.valueOf(maxCpus);
+        return new ProcessBuilder(
+            "docker", "run", "--rm",
+            "--memory=" + memLimit,
+            "--cpus=" + cpuLimit,
+            "-v", scriptFile.getParent() + ":/scripts",
+            "-v", ARTIFACT_DIR + ":" + ARTIFACT_DIR,
+            "python:3.11-slim",
+            "python", "/scripts/" + scriptFile.getFileName()
+        );
+    }
+
+    private ScheduledExecutorService startMemoryMonitor(Process process, int maxMb) {
+        ScheduledExecutorService monitor = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "python-mem-monitor");
+            t.setDaemon(true);
+            return t;
+        });
+        monitor.scheduleAtFixedRate(() -> {
+            try {
+                if (!process.isAlive()) return;
+                long pid = process.pid();
+                Path statusFile = Path.of("/proc/" + pid + "/status");
+                if (Files.exists(statusFile)) {
+                    String status = Files.readString(statusFile);
+                    for (String line : status.split("\n")) {
+                        if (line.startsWith("VmRSS:")) {
+                            long rssKb = Long.parseLong(line.replaceAll("\\D", "").trim());
+                            long rssMb = rssKb / 1024;
+                            if (rssMb > maxMb) {
+                                log.warn("[PYTHON] Process {} exceeded memory limit: {}MB > {}MB, killing",
+                                    pid, rssMb, maxMb);
+                                process.destroyForcibly();
+                            }
+                            break;
+                        }
+                    }
+                }
+            } catch (Exception ignored) {}
+        }, 2, 5, TimeUnit.SECONDS);
+        return monitor;
     }
 }

@@ -1,19 +1,28 @@
 package com.smartquery.controller;
 
+import com.smartquery.common.BusinessException;
+import com.smartquery.common.RateLimiter;
 import com.smartquery.common.Result;
+import com.smartquery.datasource.DataSourceManager;
 import com.smartquery.entity.MiningModel;
 import com.smartquery.entity.ModelExecution;
 import com.smartquery.entity.PredictionResult;
+import com.smartquery.logging.ConversationEventLogger;
 import com.smartquery.mapper.MiningModelMapper;
 import com.smartquery.mapper.ModelExecutionMapper;
 import com.smartquery.service.MiningService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 @Slf4j
 @RestController
@@ -24,6 +33,9 @@ public class MiningModelController {
     private final MiningModelMapper miningModelMapper;
     private final ModelExecutionMapper modelExecutionMapper;
     private final MiningService miningService;
+    private final DataSourceManager dataSourceManager;
+    private final ConversationEventLogger eventLogger;
+    private final RateLimiter rateLimiter;
 
     @GetMapping
     public Result<List<MiningModel>> list(
@@ -41,29 +53,19 @@ public class MiningModelController {
     public Result<MiningModel> get(@PathVariable Long id) {
         MiningModel model = miningModelMapper.selectById(id);
         if (model == null || Integer.valueOf(1).equals(model.getDeleted())) {
-            return Result.error("模型不存在: " + id);
+            throw new BusinessException("模型不存在: " + id);
         }
         return Result.ok(model);
     }
 
     @PostMapping
     public Result<MiningModel> create(@RequestBody MiningModel model) {
-        try {
-            return Result.ok(miningService.createModel(model));
-        } catch (Exception e) {
-            log.error("[MINING] Create model failed: {}", e.getMessage());
-            return Result.error("创建模型失败: " + e.getMessage());
-        }
+        return Result.ok(miningService.createModel(model));
     }
 
     @PutMapping("/{id}")
     public Result<MiningModel> update(@PathVariable Long id, @RequestBody MiningModel updates) {
-        try {
-            return Result.ok(miningService.updateModel(id, updates));
-        } catch (Exception e) {
-            log.error("[MINING] Update model failed: {}", e.getMessage());
-            return Result.error("更新模型失败: " + e.getMessage());
-        }
+        return Result.ok(miningService.updateModel(id, updates));
     }
 
     @DeleteMapping("/{id}")
@@ -74,32 +76,20 @@ public class MiningModelController {
 
     @PostMapping("/{id}/train")
     public Result<MiningModel> train(@PathVariable Long id) {
-        try {
-            return Result.ok(miningService.trainModel(id, "manual"));
-        } catch (Exception e) {
-            log.error("[MINING] Train model failed: {}", e.getMessage());
-            return Result.error("训练失败: " + e.getMessage());
+        if (!rateLimiter.tryAcquire("train", 5)) {
+            throw new BusinessException(429, "训练请求过于频繁，请稍后重试");
         }
+        return Result.ok(miningService.trainModel(id, "manual"));
     }
 
     @PostMapping("/{id}/publish")
     public Result<MiningModel> publish(@PathVariable Long id, @RequestBody(required = false) Map<String, Object> body) {
-        try {
-            return Result.ok(miningService.publishModel(id, body));
-        } catch (Exception e) {
-            log.error("[MINING] Publish model failed: {}", e.getMessage());
-            return Result.error(e.getMessage());
-        }
+        return Result.ok(miningService.publishModel(id, body));
     }
 
     @PostMapping("/{id}/offline")
     public Result<MiningModel> offline(@PathVariable Long id) {
-        try {
-            return Result.ok(miningService.offlineModel(id));
-        } catch (Exception e) {
-            log.error("[MINING] Offline model failed: {}", e.getMessage());
-            return Result.error(e.getMessage());
-        }
+        return Result.ok(miningService.offlineModel(id));
     }
 
     @PutMapping("/{id}/hyperparams")
@@ -108,9 +98,8 @@ public class MiningModelController {
             String hyperparamsJson = new com.fasterxml.jackson.databind.ObjectMapper()
                     .writeValueAsString(body.get("hyperparameters"));
             return Result.ok(miningService.updateHyperparameters(id, hyperparamsJson));
-        } catch (Exception e) {
-            log.error("[MINING] Update hyperparams failed: {}", e.getMessage());
-            return Result.error("更新超参数失败: " + e.getMessage());
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new BusinessException("超参数格式错误: " + e.getMessage());
         }
     }
 
@@ -127,7 +116,7 @@ public class MiningModelController {
     public Result<MiningModel> updateSchedule(@PathVariable Long id, @RequestBody Map<String, Object> body) {
         MiningModel model = miningModelMapper.selectById(id);
         if (model == null || Integer.valueOf(1).equals(model.getDeleted())) {
-            return Result.error("模型不存在: " + id);
+            throw new BusinessException("模型不存在: " + id);
         }
         if (body.containsKey("cron")) {
             model.setScheduleCron((String) body.get("cron"));
@@ -146,55 +135,112 @@ public class MiningModelController {
 
     @PostMapping("/{id}/predict")
     public Result<Map<String, Object>> predict(@PathVariable Long id, @RequestBody Map<String, Object> body) {
-        try {
-            @SuppressWarnings("unchecked")
-            List<Map<String, Object>> inputRows = (List<Map<String, Object>>) body.get("input");
-            if (inputRows == null || inputRows.isEmpty()) {
-                return Result.error("input 不能为空");
-            }
-            String saveTable = (String) body.get("saveTable");
-            Map<String, Object> result = miningService.predictModel(id, inputRows, saveTable);
-            return Result.ok(result);
-        } catch (Exception e) {
-            log.error("[MINING] Predict failed for model {}: {}", id, e.getMessage());
-            return Result.error("预测失败: " + e.getMessage());
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> inputRows = (List<Map<String, Object>>) body.get("input");
+        if (inputRows == null || inputRows.isEmpty()) {
+            throw new BusinessException("input 不能为空");
         }
+        String saveTable = (String) body.get("saveTable");
+        return Result.ok(miningService.predictModel(id, inputRows, saveTable));
     }
 
-    /**
-     * 批量预测 — 从输入表读取数据，预测后写入结果表
-     */
     @PostMapping("/{id}/batch-predict")
     public Result<Map<String, Object>> batchPredict(@PathVariable Long id) {
-        try {
-            Map<String, Object> result = miningService.batchPredict(id);
-            return Result.ok(result);
-        } catch (Exception e) {
-            log.error("[MINING] Batch predict failed for model {}: {}", id, e.getMessage());
-            return Result.error("批量预测失败: " + e.getMessage());
+        if (!rateLimiter.tryAcquire("predict", 20)) {
+            throw new BusinessException(429, "预测请求过于频繁，请稍后重试");
         }
+        return Result.ok(miningService.batchPredict(id));
     }
 
-    /**
-     * 训练前校验 — 检查源表、特征列、目标列、数据量
-     */
     @GetMapping("/{id}/validate")
     public Result<Map<String, Object>> validate(@PathVariable Long id) {
-        try {
-            return Result.ok(miningService.validateForTraining(id));
-        } catch (Exception e) {
-            log.error("[MINING] Validation failed for model {}: {}", id, e.getMessage());
-            return Result.error("校验失败: " + e.getMessage());
-        }
+        return Result.ok(miningService.validateForTraining(id));
     }
 
-    /**
-     * 查询预测结果
-     */
     @GetMapping("/{id}/predictions")
     public Result<List<PredictionResult>> predictions(
             @PathVariable Long id,
             @RequestParam(defaultValue = "100") int limit) {
         return Result.ok(miningService.getPredictionResults(id, limit));
+    }
+
+    @GetMapping("/{id}/preview-result-table")
+    public Result<Map<String, Object>> previewResultTable(
+            @PathVariable Long id,
+            @RequestParam String tableName,
+            @RequestParam(defaultValue = "10") int limit) {
+        MiningModel model = miningModelMapper.selectById(id);
+        if (model == null || Integer.valueOf(1).equals(model.getDeleted())) {
+            throw new BusinessException("模型不存在: " + id);
+        }
+        JdbcTemplate jdbc = dataSourceManager.getJdbcTemplate(model.getDataSourceId());
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?",
+            Integer.class, tableName);
+        if (count == null || count == 0) {
+            throw new BusinessException("表不存在: " + tableName);
+        }
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT * FROM `" + tableName + "` LIMIT ?",
+            limit < 1 || limit > 100 ? 10 : limit);
+        List<String> columns = rows.isEmpty() ? List.of() : List.copyOf(rows.get(0).keySet());
+        return Result.ok(Map.of("rows", rows, "columns", columns, "tableName", tableName));
+    }
+
+    @GetMapping("/{id}/lineage")
+    public Result<List<Map<String, Object>>> lineage(@PathVariable Long id) {
+        MiningModel model = miningModelMapper.selectById(id);
+        if (model == null || Integer.valueOf(1).equals(model.getDeleted())) {
+            throw new BusinessException("模型不存在: " + id);
+        }
+        return Result.ok(eventLogger.getConversationTrace(model.getConversationId()));
+    }
+
+    private final ExecutorService sseExecutor = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "model-sse");
+        t.setDaemon(true);
+        return t;
+    });
+
+    /**
+     * SSE 端点 — 监听模型状态变化，训练完成后推送
+     */
+    @GetMapping(value = "/{id}/status-stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter statusStream(@PathVariable Long id) {
+        SseEmitter emitter = new SseEmitter(120000L);
+        sseExecutor.submit(() -> {
+            try {
+                String lastStatus = null;
+                for (int i = 0; i < 60; i++) { // max 2 min (60 × 2s)
+                    MiningModel model = miningModelMapper.selectById(id);
+                    if (model == null) {
+                        emitter.send(SseEmitter.event().data("{\"type\":\"error\",\"message\":\"模型不存在\"}"));
+                        break;
+                    }
+                    String status = model.getStatus();
+                    if (lastStatus == null) lastStatus = status;
+
+                    if (!status.equals(lastStatus) || "trained".equals(status) || "failed".equals(status) || "published".equals(status)) {
+                        Map<String, Object> data = new java.util.LinkedHashMap<>();
+                        data.put("type", "model_status");
+                        data.put("modelId", id);
+                        data.put("status", status);
+                        data.put("metrics", model.getMetrics());
+                        emitter.send(SseEmitter.event().data(
+                            new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(data)));
+                        if ("trained".equals(status) || "failed".equals(status) || "published".equals(status)) {
+                            break;
+                        }
+                    }
+                    lastStatus = status;
+                    Thread.sleep(2000);
+                }
+            } catch (Exception e) {
+                // client disconnected or timeout, normal
+            } finally {
+                emitter.complete();
+            }
+        });
+        return emitter;
     }
 }

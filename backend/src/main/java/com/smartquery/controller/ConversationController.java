@@ -3,6 +3,7 @@ package com.smartquery.controller;
 import com.smartquery.common.Result;
 import com.smartquery.entity.ChatMessage;
 import com.smartquery.entity.Conversation;
+import com.smartquery.logging.ConversationEventLogger;
 import com.smartquery.mapper.ChatMessageMapper;
 import com.smartquery.mapper.ConversationMapper;
 import com.smartquery.mapper.ChartMapper;
@@ -26,6 +27,7 @@ public class ConversationController {
     private final ChartMapper chartMapper;
     private final ReportMapper reportMapper;
     private final DashboardMapper dashboardMapper;
+    private final ConversationEventLogger eventLogger;
 
     @PostMapping
     public Result<Conversation> create(@RequestBody Conversation conversation) {
@@ -80,6 +82,34 @@ public class ConversationController {
             new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ChatMessage>()
                 .eq(ChatMessage::getConversationId, id)
                 .orderByAsc(ChatMessage::getCreatedAt));
+
+        // DB 完全为空时，尝试从 JSONL 恢复
+        if (messages.isEmpty()) {
+            List<java.util.Map<String, Object>> recovered = eventLogger.recoverConversation(id);
+            if (!recovered.isEmpty()) {
+                for (java.util.Map<String, Object> msg : recovered) {
+                    ChatMessage cm = new ChatMessage();
+                    cm.setConversationId(id);
+                    cm.setRole((String) msg.get("role"));
+                    cm.setContent((String) msg.get("content"));
+                    if (msg.get("toolName") != null) {
+                        cm.setToolName((String) msg.get("toolName"));
+                    }
+                    chatMessageMapper.insert(cm);
+                }
+                messages = chatMessageMapper.selectList(
+                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ChatMessage>()
+                        .eq(ChatMessage::getConversationId, id)
+                        .orderByAsc(ChatMessage::getCreatedAt));
+
+                // 记录恢复事件
+                eventLogger.logEvent(id, null, "session_recovered",
+                    java.util.Map.of("source", "jsonl", "recoveredCount", recovered.size()));
+                eventLogger.logEvent(id, null, "session_recovered",
+                    java.util.Map.of("source", "jsonl", "persistedCount", messages.size()));
+            }
+        }
+
         return Result.ok(messages);
     }
 }

@@ -126,6 +126,18 @@ smart-query:
     trace-all-requests: true
     ring-buffer-size: 100
 
+  # 线程池
+  thread-pool:
+    core-size: 4
+    max-size: 8
+    queue-capacity: 100
+
+  # Python 执行资源限制
+  python:
+    max-memory-mb: 512
+    max-cpus: 1
+    execution-mode: process  # process 或 docker
+
 logging:
   level:
     com.smartquery: DEBUG

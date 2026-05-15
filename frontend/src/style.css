@@ -57,6 +57,42 @@
   --font-lg: 15px;
   --font-xl: 16px;
   --font-2xl: 18px;
+
+  /* Pipeline node colors */
+  --node-color-data-source: var(--primary);
+  --node-color-preprocessing: var(--color-success);
+  --node-color-fill-missing: #E91E63;
+  --node-color-feature-engineering: var(--color-warning);
+  --node-color-training: #9B59B6;
+  --node-color-evaluation: #00BCD4;
+  --node-color-output: #FF9800;
+
+  /* Pipeline layout */
+  --palette-width: 200px;
+  --node-min-width: 170px;
+  --node-max-width: 210px;
+  --connector-width: 36px;
+
+  /* Hover */
+  --hover: #f5f7fa;
+  --fill-light: #f5f5f5;
+
+  /* Badge colors */
+  --badge-dashboard: #9b59b6;
+  --badge-report: #e74c3c;
+  --badge-filter: #f59e0b;
+  --badge-mining: #6366f1;
+
+  /* Code block */
+  --code-bg: #1e1e1e;
+  --code-fg: #d4d4d4;
+
+  /* Misc */
+  --retry-hover: #66b1ff;
+  --success-border: #e1f3d8;
+  --success-border-hover: #b3e19d;
+  --fullscreen-btn: #9b59b6;
+  --fullscreen-btn-hover: #8e44ad;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }

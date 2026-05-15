@@ -1,5 +1,6 @@
 package com.smartquery.tool;
 
+import com.smartquery.logging.ConversationEventLogger;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
@@ -7,6 +8,8 @@ import org.springframework.stereotype.Component;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
 /**
@@ -26,11 +29,19 @@ public class ToolOrchestrator {
 
     private final ToolRegistry toolRegistry;
     private final Executor asyncExecutor;
+    private final List<ToolHook> hooks;
+    private final ConversationEventLogger eventLogger;
 
     public ToolOrchestrator(ToolRegistry toolRegistry,
-                            @Qualifier("asyncExecutor") Executor asyncExecutor) {
+                            @Qualifier("asyncExecutor") Executor asyncExecutor,
+                            List<ToolHook> hooks,
+                            ConversationEventLogger eventLogger) {
         this.toolRegistry = toolRegistry;
         this.asyncExecutor = asyncExecutor;
+        this.eventLogger = eventLogger;
+        this.hooks = hooks.stream()
+            .sorted(java.util.Comparator.comparingInt(ToolHook::order))
+            .toList();
     }
 
     /**
@@ -90,11 +101,13 @@ public class ToolOrchestrator {
     }
 
     /**
-     * 直译 runToolsConcurrently(): CompletableFuture.allOf 并发执行
+     * 直译 runToolsConcurrently(): CompletableFuture.allOf 并发执行 + timeout
      */
     private List<ToolResult> runConcurrently(List<ToolCall> toolCalls, ToolExecutionContext context) {
         List<CompletableFuture<ToolResult>> futures = toolCalls.stream()
-            .map(tc -> CompletableFuture.supplyAsync(() -> executeSingle(tc, context), asyncExecutor))
+            .map(tc -> CompletableFuture.supplyAsync(() -> executeSingle(tc, context), asyncExecutor)
+                .orTimeout(getTimeoutForTool(tc.toolName()), TimeUnit.MILLISECONDS)
+                .exceptionally(ex -> handleExecutionException(tc, ex)))
             .toList();
 
         CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)).join();
@@ -116,11 +129,136 @@ public class ToolOrchestrator {
     private ToolResult executeSingle(ToolCall toolCall, ToolExecutionContext context) {
         Optional<LlmTool> opt = toolRegistry.getTool(toolCall.toolName());
         if (opt.isEmpty()) {
-            return ToolResult.error(toolCall.toolName(), "未找到工具: " + toolCall.toolName(), 0);
+            return ToolResult.error(toolCall.toolName(),
+                ToolError.nonRecoverable(ToolError.ErrorCode.TOOL_NOT_FOUND, "未找到工具: " + toolCall.toolName()), 0);
         }
+
+        // Abort check
+        if (context.isAborted()) {
+            return ToolResult.error(toolCall.toolName(),
+                ToolError.abort("用户已中断"), 0);
+        }
+
+        // PreToolUse hooks — fail-closed on exception
+        Map<String, Object> input = new java.util.LinkedHashMap<>(toolCall.input());
+        for (ToolHook hook : hooks) {
+            try {
+                if (!hook.beforeToolCall(toolCall.toolName(), input, context)) {
+                    log.info("[ORCHESTRATOR] tool {} blocked by hook {}", toolCall.toolName(), hook.name());
+                    return ToolResult.error(toolCall.toolName(),
+                        ToolError.security("工具调用被安全策略阻止: " + hook.name()), 0);
+                }
+            } catch (Exception e) {
+                log.error("[ORCHESTRATOR] hook {} beforeToolCall failed, blocking tool {} for safety", hook.name(), toolCall.toolName(), e);
+                return ToolResult.error(toolCall.toolName(),
+                    ToolError.nonRecoverable(ToolError.ErrorCode.TOOL_ERROR,
+                        "安全检查异常，工具调用已阻止: " + e.getMessage()), 0);
+            }
+        }
+
         LlmTool tool = opt.get();
-        log.debug("[ORCHESTRATOR] executing tool: {} (concurrencySafe={})", tool.getName(), tool.isConcurrencySafe());
-        return tool.execute(toolCall.input(), context);
+
+        // Validate required parameters
+        List<String> violations = validateParameters(tool, input);
+        if (!violations.isEmpty()) {
+            return ToolResult.error(toolCall.toolName(),
+                ToolError.of(ToolError.ErrorCode.VALIDATION_ERROR,
+                    "参数校验失败: " + String.join("; ", violations)), 0);
+        }
+
+        log.debug("[ORCHESTRATOR] executing tool: {} (concurrencySafe={}, timeout={}ms)", tool.getName(), tool.isConcurrencySafe(), tool.getTimeoutMs());
+
+        ToolResult result;
+        try {
+            result = tool.execute(input, context);
+        } catch (Exception e) {
+            log.error("[ORCHESTRATOR] tool {} execution failed", tool.getName(), e);
+            eventLogger.logEvent(context.conversationId(), context.traceId(), "tool_error",
+                Map.of("tool", tool.getName(), "error", e.getMessage(),
+                       "category", e.getClass().getSimpleName(),
+                       "input_keys", input.keySet()));
+            return ToolResult.error(toolCall.toolName(),
+                ToolError.of(ToolError.ErrorCode.TOOL_ERROR,
+                    tool.getName() + " 执行失败: " + e.getMessage(), e.getClass().getSimpleName()), 0);
+        }
+
+        // PostToolUse hooks — log but don't block on failure
+        for (ToolHook hook : hooks) {
+            try {
+                hook.afterToolCall(toolCall.toolName(), input, result, context);
+            } catch (Exception e) {
+                log.warn("[ORCHESTRATOR] hook {} afterToolCall error: {}", hook.name(), e.getMessage());
+            }
+        }
+
+        return result;
+    }
+
+    private long getTimeoutForTool(String toolName) {
+        return toolRegistry.getTool(toolName).map(LlmTool::getTimeoutMs).orElse(30000L);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> validateParameters(LlmTool tool, Map<String, Object> input) {
+        List<String> violations = new ArrayList<>();
+        Map<String, Object> schema = tool.getJsonSchema();
+        if (schema == null) return violations;
+
+        Object requiredObj = schema.get("required");
+        if (requiredObj instanceof List<?> requiredList) {
+            for (Object fieldObj : requiredList) {
+                String field = String.valueOf(fieldObj);
+                Object value = input.get(field);
+                if (value == null) {
+                    violations.add(field + " 不能为空");
+                } else if (value instanceof String s && s.isBlank()) {
+                    violations.add(field + " 不能为空字符串");
+                }
+            }
+        }
+
+        Object propertiesObj = schema.get("properties");
+        if (propertiesObj instanceof Map<?, ?> properties) {
+            for (Map.Entry<?, ?> entry : properties.entrySet()) {
+                String fieldName = (String) entry.getKey();
+                Object value = input.get(fieldName);
+                if (value == null) continue;
+
+                if (entry.getValue() instanceof Map<?, ?> fieldSchema) {
+                    String expectedType = (String) fieldSchema.get("type");
+                    violations.addAll(validateType(fieldName, value, expectedType));
+                }
+            }
+        }
+        return violations;
+    }
+
+    private List<String> validateType(String fieldName, Object value, String expectedType) {
+        if (expectedType == null) return List.of();
+        return switch (expectedType) {
+            case "string" -> value instanceof String ? List.of() : List.of(fieldName + " 应为字符串类型");
+            case "integer" -> value instanceof Number ? List.of() : List.of(fieldName + " 应为整数类型");
+            case "number" -> value instanceof Number ? List.of() : List.of(fieldName + " 应为数字类型");
+            case "boolean" -> value instanceof Boolean ? List.of() : List.of(fieldName + " 应为布尔类型");
+            case "array" -> value instanceof List ? List.of() : List.of(fieldName + " 应为数组类型");
+            case "object" -> value instanceof Map ? List.of() : List.of(fieldName + " 应为对象类型");
+            default -> List.of();
+        };
+    }
+
+    private ToolResult handleExecutionException(ToolCall tc, Throwable ex) {
+        Throwable cause = ex instanceof java.util.concurrent.CompletionException ? ex.getCause() : ex;
+        String errorType = cause instanceof TimeoutException ? "timeout" : "execution_error";
+        eventLogger.logEvent(null, null, "tool_error",
+            Map.of("tool", tc.toolName(), "error", cause.getMessage(), "category", errorType));
+        if (cause instanceof TimeoutException) {
+            return ToolResult.error(tc.toolName(),
+                ToolError.recoverable(ToolError.ErrorCode.TOOL_TIMEOUT,
+                    tc.toolName() + " 执行超时"), getTimeoutForTool(tc.toolName()));
+        }
+        return ToolResult.error(tc.toolName(),
+            ToolError.nonRecoverable(ToolError.ErrorCode.TOOL_ERROR,
+                tc.toolName() + " 执行异常: " + cause.getMessage()), 0);
     }
 
     // --- Value types ---

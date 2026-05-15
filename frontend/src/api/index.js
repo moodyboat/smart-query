@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { ElMessage } from 'element-plus'
 
 const api = axios.create({
   baseURL: '/api/v1',
@@ -9,13 +10,36 @@ api.interceptors.response.use(
   response => {
     const { code, message } = response.data || {}
     if (code !== undefined && code !== 200) {
-      const error = new Error(message || `请求失败 (code: ${code})`)
+      const errorMsg = message || `请求失败 (code: ${code})`
+      if (code !== 400 || !response.config._silent) {
+        ElMessage.error(errorMsg)
+      }
+      const error = new Error(errorMsg)
       error.code = code
       return Promise.reject(error)
     }
     return response
   },
-  error => Promise.reject(error)
+  error => {
+    if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
+      ElMessage.error('请求超时，请稍后重试')
+    } else if (!error.response) {
+      ElMessage.error('网络连接失败，请检查网络')
+    } else {
+      const status = error.response.status
+      const msgs = {
+        400: error.response.data?.message || '请求参数错误',
+        401: '请先登录',
+        403: '没有操作权限',
+        404: '请求的资源不存在',
+        409: error.response.data?.message || '操作冲突',
+        429: '请求过于频繁，请稍后重试',
+        500: '服务内部错误，请稍后重试'
+      }
+      ElMessage.error(msgs[status] || `请求失败 (${status})`)
+    }
+    return Promise.reject(error)
+  }
 )
 
 export async function fetchConversations() {
@@ -170,6 +194,11 @@ export async function fetchModelPredictions(id, limit = 100) {
   return data.data
 }
 
+export async function previewResultTable(modelId, tableName, limit = 10) {
+  const { data } = await api.get(`/mining/model/${modelId}/preview-result-table?tableName=${encodeURIComponent(tableName)}&limit=${limit}`)
+  return data.data
+}
+
 // Mining Pipeline APIs
 export async function fetchMiningPipelines(dataSourceId) {
   const params = dataSourceId ? `?dataSourceId=${dataSourceId}` : ''
@@ -198,6 +227,16 @@ export async function deleteMiningPipeline(id) {
 
 export async function executeMiningPipeline(id) {
   const { data } = await api.post(`/mining/pipeline/${id}/execute`)
+  return data.data
+}
+
+export async function validateMiningPipeline(id) {
+  const { data } = await api.post(`/mining/pipeline/${id}/validate`)
+  return data.data
+}
+
+export async function previewStepPipeline(id, nodeId) {
+  const { data } = await api.post(`/mining/pipeline/${id}/preview-step`, { nodeId })
   return data.data
 }
 
@@ -230,4 +269,19 @@ export async function deleteAlgorithm(id) {
 export async function fetchModelTypes() {
   const { data } = await api.get('/mining/model-types')
   return data.data
+}
+
+export async function fetchConversationTraces(conversationId) {
+  const { data } = await api.get(`/traces/${conversationId}`)
+  return data
+}
+
+export async function fetchAdminStats() {
+  const { data } = await api.get('/admin/stats')
+  return data
+}
+
+export async function fetchAdminSessions() {
+  const { data } = await api.get('/admin/sessions')
+  return data
 }

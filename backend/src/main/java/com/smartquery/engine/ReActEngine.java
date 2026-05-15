@@ -31,10 +31,13 @@ public class ReActEngine {
     private final ToolOrchestrator toolOrchestrator;
     private final QueryContextAssembler contextAssembler;
     private final ContextCompactor contextCompactor;
+    private final com.smartquery.logging.ConversationStatsService statsService;
+    private final List<LifecycleHook> lifecycleHooks;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
     private static final int MAX_TURNS = 20;
     private static final int MAX_TOKEN_BUDGET = 200000;
+    private static final int MICRO_COMPACT_THRESHOLD = 60000;
     private static final int COMPACT_THRESHOLD = 80000;
 
     /**
@@ -77,16 +80,45 @@ public class ReActEngine {
     ) {
         // 1. 构建初始消息 (system + history + user)
         String systemPrompt = contextAssembler.fetchPromptParts(model, dataSourceId).systemPrompt();
+
+        // LifecycleHook: onSessionStart — 注入附加上下文
+        StringBuilder sessionExtras = new StringBuilder();
+        for (LifecycleHook hook : lifecycleHooks) {
+            try {
+                String extra = hook.onSessionStart(Map.of("conversationId", conversationId != null ? conversationId : 0L, "dataSourceId", dataSourceId != null ? dataSourceId : 0L));
+                if (extra != null && !extra.isBlank()) {
+                    sessionExtras.append("\n\n").append(extra);
+                }
+            } catch (Exception e) {
+                log.warn("[REACT] LifecycleHook {} onSessionStart failed: {}", hook.name(), e.getMessage());
+            }
+        }
+        if (!sessionExtras.isEmpty()) {
+            systemPrompt = systemPrompt + sessionExtras;
+        }
+
         List<Map<String, Object>> messages = new ArrayList<>();
         messages.add(Map.of("role", "system", "content", systemPrompt));
         messages.addAll(historyMessages);
-        messages.add(Map.of("role", "user", "content", userMessage));
+
+        // LifecycleHook: onUserPrompt — 预处理用户输入
+        String processedMessage = userMessage;
+        for (LifecycleHook hook : lifecycleHooks) {
+            try {
+                String modified = hook.onUserPrompt(userMessage, Map.of("conversationId", conversationId != null ? conversationId : 0L));
+                if (modified != null) processedMessage = modified;
+            } catch (Exception e) {
+                log.warn("[REACT] LifecycleHook {} onUserPrompt failed: {}", hook.name(), e.getMessage());
+            }
+        }
+
+        messages.add(Map.of("role", "user", "content", processedMessage));
 
         // 2. 初始化状态
         ReActState state = ReActState.initial(messages);
 
-        // 3. 获取工具定义
-        List<Map<String, Object>> toolDefs = toolRegistry.getToolDefinitions();
+        // 3. 获取工具定义 (无数据源时过滤掉 DB 依赖工具)
+        List<Map<String, Object>> toolDefs = toolRegistry.getToolDefinitions(dataSourceId);
 
         log.info("[REACT] starting loop: model={}, maxTurns={}, history={}", model, MAX_TURNS, historyMessages.size());
 
@@ -109,12 +141,23 @@ public class ReActEngine {
                 break;
             }
 
-            // 上下文压缩
-            if (contextCompactor.needsCompaction(state.messages(), COMPACT_THRESHOLD)) {
+            // 微压缩 — 选择性清除旧 tool_result，延迟全量 LLM 压缩
+            if (state.totalTokens() >= MICRO_COMPACT_THRESHOLD && state.totalTokens() < COMPACT_THRESHOLD) {
+                List<Map<String, Object>> microCompacted = contextCompactor.microCompact(state.messages());
+                if (microCompacted.size() < state.messages().size()) {
+                    state = state.withMessages(microCompacted);
+                    log.info("[REACT] micro-compact: realTokens={}, messages {} -> {}",
+                        state.totalTokens(), state.messages().size(), microCompacted.size());
+                }
+            }
+
+            // 全量 LLM 上下文压缩 — 最后手段
+            if (state.totalTokens() >= COMPACT_THRESHOLD) {
                 List<Map<String, Object>> compacted = contextCompactor.compact(
                     state.messages(), COMPACT_THRESHOLD);
                 state = state.withMessages(compacted);
-                log.info("[REACT] context compacted: {} -> {} messages", state.messages().size(), compacted.size());
+                log.info("[REACT] context compacted: realTokens={}, messages {} -> {}",
+                    state.totalTokens(), state.messages().size(), compacted.size());
             }
 
             // 调用 LLM (流式文本 token)
@@ -199,12 +242,17 @@ public class ReActEngine {
                 emitToolInputPreview(eventConsumer, tc.toolName(), tc.input());
             }
 
+            long toolStartMs = System.currentTimeMillis();
             List<ToolResult> toolResults = toolOrchestrator.executeAll(toolCalls, ctx);
+            long totalToolDuration = System.currentTimeMillis() - toolStartMs;
 
             // 构建 tool_result 消息 + 实时发出工具事件
+            long perToolDuration = toolCalls.size() > 0 ? totalToolDuration / toolCalls.size() : 0;
             for (int i = 0; i < toolCalls.size() && i < toolResults.size(); i++) {
                 ToolOrchestrator.ToolCall tc = toolCalls.get(i);
                 ToolResult tr = toolResults.get(i);
+
+                statsService.recordToolCall(tc.toolName(), tr.success(), perToolDuration);
 
                 Map<String, Object> toolResultMsg = new LinkedHashMap<>();
                 toolResultMsg.put("role", "tool");
@@ -260,41 +308,81 @@ public class ReActEngine {
 
     private void emitToolEvent(Consumer<ReActEvent> emitter, String toolName, ToolResult tr) {
         try {
-            switch (toolName) {
-                case "execute_sql" -> {
-                    if (tr.success()) {
-                        List<Map<String, Object>> rows = tr.data() != null ? tr.data() : List.of();
-                        emitter.accept(new ReActEvent.Result(tr.output(), rows, rows.size(), null));
-                    } else {
-                        emitter.accept(new ReActEvent.Result(null, List.of(), 0, tr.error()));
+            if ("execute_sql".equals(toolName)) {
+                if (tr.success()) {
+                    List<Map<String, Object>> rows = tr.data() != null ? tr.data() : List.of();
+                    emitter.accept(new ReActEvent.Result(tr.output(), rows, rows.size(), null));
+                } else {
+                    emitter.accept(new ReActEvent.Result(null, List.of(), 0, tr.error()));
+                }
+            } else if ("execute_python".equals(toolName)) {
+                String stdout = tr.success() ? tr.output() : "";
+                String stderr = tr.success() ? "" : tr.error();
+                int exitCode = tr.success() ? 0 : 1;
+                List<String> artifacts = List.of();
+                if (tr.data() != null && !tr.data().isEmpty()) {
+                    Map<String, Object> pyData = tr.data().get(0);
+                    if (pyData.get("stdout") instanceof String s) stdout = s;
+                    if (pyData.get("stderr") instanceof String s && !s.isEmpty()) stderr = s;
+                    if (pyData.get("exitCode") instanceof Number n) exitCode = n.intValue();
+                    if (pyData.get("artifacts") instanceof List<?> arts) {
+                        artifacts = arts.stream().map(Object::toString).toList();
                     }
                 }
-                case "execute_python" -> {
-                    // Extract structured data from ToolResult if available
-                    String stdout = tr.success() ? tr.output() : "";
-                    String stderr = tr.success() ? "" : tr.error();
-                    int exitCode = tr.success() ? 0 : 1;
-                    List<String> artifacts = List.of();
-                    if (tr.data() != null && !tr.data().isEmpty()) {
-                        Map<String, Object> pyData = tr.data().get(0);
-                        if (pyData.get("stdout") instanceof String s) stdout = s;
-                        if (pyData.get("stderr") instanceof String s && !s.isEmpty()) stderr = s;
-                        if (pyData.get("exitCode") instanceof Number n) exitCode = n.intValue();
-                        if (pyData.get("artifacts") instanceof List<?> arts) {
-                            artifacts = arts.stream().map(Object::toString).toList();
-                        }
-                    }
-                    emitter.accept(new ReActEvent.PythonResultEvent(stdout, stderr, exitCode, artifacts));
-                }
-                default -> {
-                    if (tr.success()) {
-                        tryEmitJsonToolEvent(emitter, toolName, tr);
-                    }
+                emitter.accept(new ReActEvent.PythonResultEvent(stdout, stderr, exitCode, artifacts));
+            } else if ("mining_model".equals(toolName)) {
+                emitMiningModelEvent(emitter, tr);
+            } else {
+                if (tr.success()) {
+                    tryEmitJsonToolEvent(emitter, toolName, tr);
                 }
             }
         } catch (Exception e) {
             log.debug("[REACT] emitToolEvent skipped for {}: {}", toolName, e.getMessage());
         }
+    }
+
+    private void emitMiningModelEvent(Consumer<ReActEvent> emitter, ToolResult tr) {
+        String output = tr.output();
+        if (output == null) return;
+
+        String action = "unknown";
+        Long modelId = null;
+        String modelName = null;
+        String algorithm = null;
+        String message = output;
+        Map<String, Object> details = new java.util.LinkedHashMap<>();
+
+        // Extract structured info from data
+        if (tr.data() != null && !tr.data().isEmpty()) {
+            Map<String, Object> data = tr.data().get(0);
+            // Action from tool directly (canonical source)
+            if (data.get("__action") instanceof String s && !s.isBlank()) action = s;
+            if (data.get("modelId") instanceof Number n) modelId = n.longValue();
+            if (data.get("name") instanceof String s) modelName = s;
+            if (data.get("algorithmId") instanceof String s) algorithm = s;
+            details.putAll(data);
+            details.remove("__action");
+        }
+
+        // Fallback: parse action from output text only if not set by tool
+        if ("unknown".equals(action) && output != null) {
+            if (output.contains("模型") && output.contains("训练完成")) action = "train";
+            else if (output.contains("已创建模型") || output.contains("已创建自定义算法")) action = "create";
+            else if (output.contains("已更新")) action = "update";
+            else if (output.contains("已发布")) action = "publish";
+            else if (output.contains("已下线")) action = "offline";
+            else if (output.contains("预测结果") || output.contains("批量预测完成")) action = "predict";
+            else if (output.contains("验证结果") || output.contains("验证通过") || output.contains("验证未通过")) action = "validate";
+            else if (output.contains("探索结果") || output.contains("总行数")) action = "explore_data";
+            else if (output.contains("可用算法列表")) action = "list_algorithms";
+            else if (output.contains("共有") && output.contains("个挖掘模型")) action = "list";
+            else if (output.contains("模型:")) action = "get";
+            else if (output.contains("执行历史")) action = "history";
+        }
+
+        emitter.accept(new ReActEvent.MiningModelEvent(
+            action, modelId, modelName, algorithm, tr.success(), message, details));
     }
 
     private void tryEmitJsonToolEvent(Consumer<ReActEvent> emitter, String toolName, ToolResult tr) {

@@ -235,7 +235,7 @@ watch(() => props.charts, (newCharts) => {
   gap: var(--space-sm);
 }
 .spinner {
-  width: 14px; height: 14px; border: 2px solid #ddd; border-top-color: #409eff;
+  width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--primary);
   border-radius: 50%; animation: spin 0.6s linear infinite; flex-shrink: 0;
 }
 @keyframes spin { to { transform: rotate(360deg); } }

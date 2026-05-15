@@ -25,6 +25,10 @@ public class QueryHistory {
     private BigDecimal costUsd;
     private String status;
     private String errorMessage;
+    private String eventSummary;
+    private Integer durationMs;
+    private Integer totalTokensUsed;
+    private BigDecimal totalCostUsd;
 
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;

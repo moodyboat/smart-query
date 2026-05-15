@@ -12,6 +12,12 @@
         步骤 {{ stepInfo.current }}/{{ stepInfo.total }}
       </span>
       <span v-if="cost > 0" class="cost-badge">Token: {{ totalTokens }}</span>
+      <button v-if="conversationId" class="trace-btn" @click="traceVisible = true" title="查看执行追踪">
+        <el-icon :size="16"><View /></el-icon>
+      </button>
+      <button class="trace-btn" @click="adminVisible = true" title="系统监控">
+        <el-icon :size="16"><Monitor /></el-icon>
+      </button>
     </header>
 
     <div class="messages-area" ref="messagesArea">
@@ -62,7 +68,8 @@
         :updateChartOption="updateChartOption"
         :openDashboard="(id) => emit('openDashboard', id)"
         @retryPython="handleRetryPython"
-      @retryConnection="retryConnection"
+        @retryConnection="retryConnection"
+        @openMining="() => mining.openMining()"
       />
 
       <div v-if="showNoResponse" class="no-response-hint">
@@ -90,19 +97,33 @@
         </el-button>
       </div>
     </div>
+
+    <TracePanel
+      v-model:visible="traceVisible"
+      :conversationId="conversationId"
+    />
+    <AdminStatsPanel v-model:visible="adminVisible" />
   </section>
 </template>
 
 <script setup>
 import { ref, reactive, computed, nextTick } from 'vue'
+import { View, Monitor } from '@element-plus/icons-vue'
 import MessageRow from './MessageRow.vue'
+import TracePanel from './TracePanel.vue'
+import AdminStatsPanel from './AdminStatsPanel.vue'
 import { buildChatUrl, fetchReport } from '../api'
+import { useMiningStore } from '../stores/mining'
 
 const props = defineProps({
   conversationId: Number,
   dataSourceId: Number,
   showSidebarToggle: Boolean
 })
+
+const traceVisible = ref(false)
+const adminVisible = ref(false)
+const mining = useMiningStore()
 
 const messages = ref([])
 const inputText = ref('')
@@ -438,6 +459,23 @@ function handleEvent(evt, assistantMsg) {
       break
     }
 
+    case 'MiningModelEvent': {
+      const block = findOrCreateToolBlock(assistantMsg, 'mining_model', 'mining-' + Date.now())
+      block.result = {
+        action: evt.action,
+        modelId: evt.modelId,
+        modelName: evt.modelName,
+        algorithm: evt.algorithm,
+        success: evt.success,
+        message: evt.message,
+        details: evt.details
+      }
+      block.status = evt.success ? 'success' : 'error'
+      assistantMsg.spinnerTip = '数据挖掘...'
+      if (evt.success && evt.modelId) mining.refreshModel(evt.modelId)
+      break
+    }
+
     case 'Done': {
       if (assistantMsg.streamingText) {
         const lastBlock = assistantMsg.content[assistantMsg.content.length - 1]
@@ -628,4 +666,10 @@ defineExpose({ sendMessage, clearMessages, messages, updateChartOption, pendingC
   border: 1px solid var(--primary-light); border-radius: var(--radius-sm); cursor: pointer;
 }
 .retry-btn-inline:hover { background: var(--primary-light); }
+.trace-btn {
+  background: none; border: 1px solid var(--border); border-radius: var(--radius-md);
+  padding: var(--space-xs) var(--space-sm); cursor: pointer; color: var(--text-secondary); display: flex; align-items: center;
+  margin-left: auto;
+}
+.trace-btn:hover { background: var(--hover); border-color: var(--primary); color: var(--primary); }
 </style>

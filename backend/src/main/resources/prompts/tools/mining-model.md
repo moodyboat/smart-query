@@ -29,6 +29,21 @@
 - 训练/测试指标差距大 → 可能过拟合，建议减少特征或增加正则化
 - 如果数据量 < 100 行，提醒用户数据量偏少，模型可能不可靠
 
+### 过拟合检测（训练脚本自动计算）
+训练结果会包含 train_accuracy/test_accuracy（分类）或 train_r2/test_r2（回归），以及 overfitting_gap：
+- gap < 0.05: 泛化良好
+- gap 0.05~0.15: 可接受，可优化
+- gap > 0.15: **过拟合警告**，建议: (1) 减少特征数 (2) 增加正则化 (3) 增加训练数据 (4) 尝试更简单的模型
+- 分类任务还会返回 confusion_matrix，可用于分析哪些类别预测较差
+
+### 发布前检查清单
+发布前确认以下条件满足:
+1. ✅ 样本外/时间外验证通过 (validation_mode = cv/oos/temporal)
+2. ✅ 过拟合检测 gap < 0.15
+3. ✅ 核心指标达标 (分类 accuracy > 0.85, 回归 r2 > 0.7)
+4. ✅ 已配置 predict_input_table 和 predict_result_table
+5. ❌ 特征无数据泄漏（如目标列衍生物、未来数据）
+
 ## 使用场景
 
 ### 探索数据
@@ -73,6 +88,13 @@
 用户说「批量预测」「跑一下预测」→ action: "batch_predict", model_id
 - 需要模型已发布且配置了 predict_input_table
 - 结果写入 predict_result_table
+
+### 模型对比
+用户说「对比随机森林和XGBoost」「哪种算法效果好」→ action: "compare", algorithms: ["random_forest", "xgboost"], source_table, feature_columns, target_column
+- 并行创建并训练多个模型，返回指标对比表
+- 支持 2~5 个算法同时对比
+- 对比结果自动生成排名表格
+- 训练完成后建议用户选择最佳模型发布
 
 ### 发布/下线
 用户说「发布XX模型」→ action: "publish", model_id

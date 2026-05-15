@@ -34,6 +34,8 @@ public class QueryEngine {
     private final CostTracker costTracker;
     private final LlmService llmService;
     private final QueryContextAssembler contextAssembler;
+    private final com.smartquery.logging.ConversationEventLogger eventLogger;
+    private final com.smartquery.logging.ConversationStatsService statsService;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
     /**
@@ -84,7 +86,14 @@ public class QueryEngine {
         userMsg.setConversationId(conversationId);
         userMsg.setRole("user");
         userMsg.setContent(userMessage);
+        userMsg.setTraceId(traceId);
         chatMessageMapper.insert(userMsg);
+
+        // JSONL: 记录用户消息
+        Map<String, Object> userPayload = new LinkedHashMap<>();
+        userPayload.put("messageId", userMsg.getId());
+        userPayload.put("content", userMessage.substring(0, Math.min(userMessage.length(), 1000)));
+        eventLogger.logEvent(conversationId, traceId, "user_message", userPayload);
 
         // 自动更新会话标题
         autoUpdateTitle(conversationId, userMessage);
@@ -95,6 +104,8 @@ public class QueryEngine {
         // 3. 运行 ReAct 循环 (实时回调)
         StringBuilder assistantContent = new StringBuilder();
         ConcurrentLinkedQueue<Map<String, Object>> toolBlocks = new ConcurrentLinkedQueue<>();
+        // Span 追踪栈: 记录当前运行中的 spanId
+        Deque<String> spanStack = new ArrayDeque<>();
         Consumer<ReActEvent> wrappingConsumer = event -> {
             // 收集 assistant 文本用于持久化
             if (event instanceof ReActEvent.Thinking t) {
@@ -102,6 +113,10 @@ public class QueryEngine {
             }
             // 收集工具块用于 metadata
             collectToolBlock(toolBlocks, event);
+            // Span 追踪: 工具开始/结束时记录 span
+            trackSpan(traceId, spanStack, event);
+            // JSONL 持久化
+            logToJsonl(conversationId, traceId, event);
             // 转发给调用者
             eventConsumer.accept(event);
         };
@@ -121,6 +136,7 @@ public class QueryEngine {
             assistantMsg.setRole("assistant");
             assistantMsg.setContent(assistantContent.toString());
             assistantMsg.setModel(model);
+            assistantMsg.setTraceId(traceId);
             if (!toolBlocks.isEmpty()) {
                 try {
                     List<Map<String, Object>> blocks = List.copyOf(toolBlocks);
@@ -154,7 +170,7 @@ public class QueryEngine {
             chatMessageMapper.insert(assistantMsg);
         }
 
-        // 5. 保存查询历史
+        // 5. 保存查询历史 (含完整统计)
         QueryHistory historyRecord = new QueryHistory();
         historyRecord.setConversationId(conversationId);
         historyRecord.setMessageId(userMsg.getId());
@@ -162,7 +178,15 @@ public class QueryEngine {
         historyRecord.setQuestion(userMessage);
         historyRecord.setModel(model);
         long duration = System.currentTimeMillis() - startTime;
+        historyRecord.setDurationMs((int) duration);
+        historyRecord.setStatus("success");
         queryHistoryMapper.insert(historyRecord);
+
+        // JSONL: 记录查询完成
+        Map<String, Object> donePayload = new LinkedHashMap<>();
+        donePayload.put("durationMs", duration);
+        donePayload.put("traceId", traceId);
+        eventLogger.logEvent(conversationId, traceId, "query_complete", donePayload);
 
         log.info("[QUERY] completed: duration={}ms, traceId={}", duration, traceId);
     }
@@ -301,6 +325,142 @@ public class QueryEngine {
         }
     }
 
+    private void logToJsonl(Long conversationId, String traceId, ReActEvent event) {
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+
+            if (event instanceof ReActEvent.Thinking t) {
+                payload.put("content", truncate(t.content(), 500));
+                eventLogger.logEvent(conversationId, traceId, "thinking", payload);
+            } else if (event instanceof ReActEvent.ThinkingDelta) {
+                // Skip delta events to keep JSONL concise
+            } else if (event instanceof ReActEvent.SqlGenerated e) {
+                payload.put("sql", truncate(e.sql(), 2000));
+                if (e.explanation() != null) payload.put("explanation", truncate(e.explanation(), 500));
+                eventLogger.logEvent(conversationId, traceId, "sql_generated", payload);
+            } else if (event instanceof ReActEvent.SqlExecuting e) {
+                payload.put("sql", e.sql());
+                eventLogger.logEvent(conversationId, traceId, "sql_executing", payload);
+            } else if (event instanceof ReActEvent.Result e) {
+                payload.put("success", e.error() == null);
+                payload.put("totalRows", e.totalRows());
+                if (e.error() != null) payload.put("error", e.error());
+                if (e.summary() != null) payload.put("summary", truncate(e.summary(), 500));
+                eventLogger.logEvent(conversationId, traceId, "sql_result", payload);
+            } else if (event instanceof ReActEvent.PythonGenerating e) {
+                payload.put("code", truncate(e.code(), 2000));
+                eventLogger.logEvent(conversationId, traceId, "python_generating", payload);
+            } else if (event instanceof ReActEvent.PythonExecuting e) {
+                payload.put("code", truncate(e.code(), 2000));
+                eventLogger.logEvent(conversationId, traceId, "python_executing", payload);
+            } else if (event instanceof ReActEvent.PythonProgress e) {
+                payload.put("output", truncate(e.output(), 500));
+                eventLogger.logEvent(conversationId, traceId, "python_progress", payload);
+            } else if (event instanceof ReActEvent.PythonResultEvent e) {
+                payload.put("exitCode", e.exitCode());
+                payload.put("stdout", truncate(e.stdout(), 2000));
+                if (e.stderr() != null && !e.stderr().isEmpty()) payload.put("stderr", truncate(e.stderr(), 500));
+                eventLogger.logEvent(conversationId, traceId, "python_result", payload);
+            } else if (event instanceof ReActEvent.ChartGenerated e) {
+                payload.put("chartId", e.chartId());
+                payload.put("title", e.title());
+                payload.put("chartType", e.chartType());
+                eventLogger.logEvent(conversationId, traceId, "chart_generated", payload);
+            } else if (event instanceof ReActEvent.DashboardGenerated e) {
+                payload.put("dashboardId", e.dashboardId());
+                payload.put("title", e.title());
+                payload.put("chartIds", e.chartIds());
+                eventLogger.logEvent(conversationId, traceId, "dashboard_generated", payload);
+            } else if (event instanceof ReActEvent.SectionGenerated e) {
+                payload.put("sectionIndex", e.sectionIndex());
+                payload.put("title", e.title());
+                payload.put("content", truncate(e.content(), 500));
+                eventLogger.logEvent(conversationId, traceId, "section_generated", payload);
+            } else if (event instanceof ReActEvent.ReportGenerated e) {
+                payload.put("reportId", e.reportId());
+                payload.put("title", e.title());
+                payload.put("sectionCount", e.sectionCount());
+                eventLogger.logEvent(conversationId, traceId, "report_generated", payload);
+            } else if (event instanceof ReActEvent.FilterWidgetsGenerated e) {
+                payload.put("widgetsJson", truncate(e.widgetsJson(), 1000));
+                eventLogger.logEvent(conversationId, traceId, "filter_widgets", payload);
+            } else if (event instanceof ReActEvent.MiningModelEvent e) {
+                payload.put("action", e.action());
+                if (e.modelId() != null) payload.put("modelId", e.modelId());
+                if (e.modelName() != null) payload.put("modelName", e.modelName());
+                if (e.algorithm() != null) payload.put("algorithm", e.algorithm());
+                payload.put("success", e.success());
+                payload.put("message", truncate(e.message(), 500));
+                eventLogger.logEvent(conversationId, traceId, "mining_model", payload);
+            } else if (event instanceof ReActEvent.Done d) {
+                payload.put("totalSteps", d.totalSteps());
+                payload.put("totalTokens", d.totalTokens());
+                payload.put("cost", d.cost());
+                eventLogger.logEvent(conversationId, traceId, "done", payload);
+                statsService.recordConversationComplete(conversationId, d.totalTokens(), d.cost());
+            } else if (event instanceof ReActEvent.Error e) {
+                payload.put("message", e.message());
+                payload.put("detail", e.detail());
+                eventLogger.logEvent(conversationId, traceId, "error", payload);
+            }
+        } catch (Exception e) {
+            log.debug("[QUERY] JSONL logging skipped: {}", e.getMessage());
+        }
+    }
+
+    private void trackSpan(String traceId, Deque<String> spanStack, ReActEvent event) {
+        try {
+            // Tool start events → start a new span
+            if (event instanceof ReActEvent.SqlExecuting e) {
+                String spanId = queryTracer.startSpan(traceId, "tool_call", "execute_sql");
+                spanStack.push(spanId);
+            } else if (event instanceof ReActEvent.PythonExecuting e) {
+                String spanId = queryTracer.startSpan(traceId, "tool_call", "execute_python");
+                spanStack.push(spanId);
+            }
+            // Tool completion events → end the current span
+            else if (event instanceof ReActEvent.Result e) {
+                endSpanSafe(traceId, spanStack, e.error() != null ? "error" : "success",
+                    Map.of("toolName", "execute_sql", "totalRows", e.totalRows()));
+            } else if (event instanceof ReActEvent.PythonResultEvent e) {
+                endSpanSafe(traceId, spanStack, e.exitCode() == 0 ? "success" : "error",
+                    Map.of("toolName", "execute_python", "exitCode", e.exitCode()));
+            }
+            // Instant tool events → single span (start + end)
+            else if (event instanceof ReActEvent.ChartGenerated e) {
+                String spanId = queryTracer.startSpan(traceId, "tool_call", "generate_chart");
+                queryTracer.endSpan(traceId, spanId, "success",
+                    Map.of("toolName", "generate_chart", "chartId", e.chartId()));
+            } else if (event instanceof ReActEvent.ReportGenerated e) {
+                String spanId = queryTracer.startSpan(traceId, "tool_call", "generate_report");
+                queryTracer.endSpan(traceId, spanId, "success",
+                    Map.of("toolName", "generate_report", "reportId", e.reportId()));
+            } else if (event instanceof ReActEvent.DashboardGenerated e) {
+                String spanId = queryTracer.startSpan(traceId, "tool_call", "generate_dashboard");
+                queryTracer.endSpan(traceId, spanId, "success",
+                    Map.of("toolName", "generate_dashboard", "dashboardId", e.dashboardId()));
+            } else if (event instanceof ReActEvent.MiningModelEvent e) {
+                String spanId = queryTracer.startSpan(traceId, "tool_call", "mining_model");
+                queryTracer.endSpan(traceId, spanId, e.success() ? "success" : "error",
+                    Map.of("toolName", "mining_model", "action", e.action()));
+            }
+        } catch (Exception ex) {
+            log.debug("[QUERY] span tracking skipped: {}", ex.getMessage());
+        }
+    }
+
+    private void endSpanSafe(String traceId, Deque<String> spanStack, String status, Map<String, Object> metadata) {
+        String spanId = spanStack.poll();
+        if (spanId != null) {
+            queryTracer.endSpan(traceId, spanId, status, metadata);
+        }
+    }
+
+    private String truncate(String text, int maxLen) {
+        if (text == null) return "";
+        return text.length() <= maxLen ? text : text.substring(0, maxLen) + "...";
+    }
+
     private String extractTitle(String message) {
         String t = message.trim();
         // Strip common filler prefixes
@@ -324,7 +484,6 @@ public class QueryEngine {
         var query = new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ChatMessage>()
             .eq(ChatMessage::getConversationId, conversationId)
             .orderByAsc(ChatMessage::getCreatedAt);
-        // Exclude the current user message to avoid duplication
         if (excludeAfterId != null) {
             query.lt(ChatMessage::getId, excludeAfterId);
         }
@@ -335,7 +494,6 @@ public class QueryEngine {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("role", msg.getRole());
 
-            // For assistant messages with metadata, include tool context in content
             if ("assistant".equals(msg.getRole()) && msg.getMetadata() != null && !msg.getMetadata().isBlank()) {
                 StringBuilder enriched = new StringBuilder();
                 if (msg.getContent() != null && !msg.getContent().isBlank()) {
@@ -429,16 +587,54 @@ public class QueryEngine {
             result.add(m);
         }
 
-        // Keep only recent messages to stay within token budget
-        // Rough estimate: each message ~500 tokens, keep last 20 pairs (40 messages)
-        if (result.size() > 40) {
-            result = result.subList(result.size() - 40, result.size());
-        }
+        // Token 预算控制替代硬编码条数截断
+        // 历史预算 20000 token (~80000 chars), 超出时保留最近10条 + 截断更早消息
+        result = applyTokenBudget(result, 20000, 10);
 
         return result;
     }
 
-    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static final int CHARS_PER_TOKEN = 4;
+
+    /**
+     * Token 预算控制: 估算总 token 数，超预算时保留最近 N 条完整消息，
+     * 更早消息截断内容（保留角色+前100字）。
+     * 详细压缩由 ContextCompactor 在 ReActEngine 循环中执行。
+     */
+    private List<Map<String, Object>> applyTokenBudget(List<Map<String, Object>> messages,
+                                                        int maxTokens, int keepRecent) {
+        int totalChars = 0;
+        for (Map<String, Object> m : messages) {
+            String content = m.get("content") != null ? m.get("content").toString() : "";
+            totalChars += content.length();
+        }
+
+        int estimatedTokens = totalChars / CHARS_PER_TOKEN;
+        if (estimatedTokens <= maxTokens || messages.size() <= keepRecent) {
+            return messages;
+        }
+
+        log.info("[QUERY] History over token budget: ~{} tokens > {}, trimming from {} messages",
+            estimatedTokens, maxTokens, messages.size());
+
+        List<Map<String, Object>> result = new ArrayList<>();
+        int recentStart = messages.size() - keepRecent;
+
+        for (int i = 0; i < recentStart; i++) {
+            Map<String, Object> m = messages.get(i);
+            String content = m.get("content") != null ? m.get("content").toString() : "";
+            if (content.length() > 100) {
+                Map<String, Object> trimmed = new LinkedHashMap<>(m);
+                trimmed.put("content", content.substring(0, 100) + "...(已截断)");
+                result.add(trimmed);
+            } else {
+                result.add(m);
+            }
+        }
+
+        result.addAll(messages.subList(recentStart, messages.size()));
+        return result;
+    }
     private List<Map<String, Object>> trimMetadataBlocks(List<Map<String, Object>> blocks) {
         return blocks.stream().map(block -> {
             Map<String, Object> copy = new java.util.LinkedHashMap<>(block);
