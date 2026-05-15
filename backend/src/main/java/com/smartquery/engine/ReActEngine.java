@@ -33,7 +33,7 @@ public class ReActEngine {
     private final ContextCompactor contextCompactor;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
-    private static final int MAX_TURNS = 15;
+    private static final int MAX_TURNS = 20;
     private static final int MAX_TOKEN_BUDGET = 200000;
     private static final int COMPACT_THRESHOLD = 80000;
 

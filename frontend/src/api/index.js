@@ -5,6 +5,19 @@ const api = axios.create({
   timeout: 180000
 })
 
+api.interceptors.response.use(
+  response => {
+    const { code, message } = response.data || {}
+    if (code !== undefined && code !== 200) {
+      const error = new Error(message || `请求失败 (code: ${code})`)
+      error.code = code
+      return Promise.reject(error)
+    }
+    return response
+  },
+  error => Promise.reject(error)
+)
+
 export async function fetchConversations() {
   const { data } = await api.get('/conversation')
   return data.data
@@ -108,8 +121,8 @@ export async function trainMiningModel(id) {
   return data.data
 }
 
-export async function publishMiningModel(id) {
-  const { data } = await api.post(`/mining/model/${id}/publish`)
+export async function publishMiningModel(id, config) {
+  const { data } = await api.post(`/mining/model/${id}/publish`, config || {})
   return data.data
 }
 
@@ -123,8 +136,10 @@ export async function updateModelHyperparams(id, hyperparameters) {
   return data.data
 }
 
-export async function updateModelSchedule(id, cron, enabled) {
-  const { data } = await api.put(`/mining/model/${id}/schedule`, { cron, enabled })
+export async function updateModelSchedule(id, cron, enabled, mode) {
+  const body = { cron, enabled }
+  if (mode) body.mode = mode
+  const { data } = await api.put(`/mining/model/${id}/schedule`, body)
   return data.data
 }
 
@@ -137,6 +152,21 @@ export async function predictMiningModel(id, input, saveTable) {
   const body = { input }
   if (saveTable) body.saveTable = saveTable
   const { data } = await api.post(`/mining/model/${id}/predict`, body)
+  return data.data
+}
+
+export async function batchPredictMiningModel(id) {
+  const { data } = await api.post(`/mining/model/${id}/batch-predict`)
+  return data.data
+}
+
+export async function validateMiningModel(id) {
+  const { data } = await api.get(`/mining/model/${id}/validate`)
+  return data.data
+}
+
+export async function fetchModelPredictions(id, limit = 100) {
+  const { data } = await api.get(`/mining/model/${id}/predictions?limit=${limit}`)
   return data.data
 }
 
@@ -164,4 +194,40 @@ export async function updateMiningPipeline(id, updates) {
 
 export async function deleteMiningPipeline(id) {
   await api.delete(`/mining/pipeline/${id}`)
+}
+
+export async function executeMiningPipeline(id) {
+  const { data } = await api.post(`/mining/pipeline/${id}/execute`)
+  return data.data
+}
+
+// Algorithm Registry
+export async function fetchAlgorithms(modelType) {
+  const params = modelType ? `?modelType=${modelType}` : ''
+  const { data } = await api.get(`/mining/algorithms${params}`)
+  return data.data
+}
+
+export async function fetchAlgorithmCategories() {
+  const { data } = await api.get('/mining/algorithms/categories')
+  return data.data
+}
+
+export async function createAlgorithm(algorithm) {
+  const { data } = await api.post('/mining/algorithms', algorithm)
+  return data.data
+}
+
+export async function updateAlgorithm(id, updates) {
+  const { data } = await api.put(`/mining/algorithms/${id}`, updates)
+  return data.data
+}
+
+export async function deleteAlgorithm(id) {
+  await api.delete(`/mining/algorithms/${id}`)
+}
+
+export async function fetchModelTypes() {
+  const { data } = await api.get('/mining/model-types')
+  return data.data
 }

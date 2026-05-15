@@ -3,6 +3,7 @@ package com.smartquery.controller;
 import com.smartquery.common.Result;
 import com.smartquery.entity.MiningPipeline;
 import com.smartquery.mapper.MiningPipelineMapper;
+import com.smartquery.service.MiningService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -10,6 +11,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @RestController
@@ -18,6 +20,7 @@ import java.util.List;
 public class MiningPipelineController {
 
     private final MiningPipelineMapper miningPipelineMapper;
+    private final MiningService miningService;
 
     @GetMapping
     public Result<List<MiningPipeline>> list(
@@ -65,5 +68,16 @@ public class MiningPipelineController {
     public Result<Void> delete(@PathVariable Long id) {
         miningPipelineMapper.deleteById(id);
         return Result.ok();
+    }
+
+    @PostMapping("/{id}/execute")
+    public Result<Map<String, Object>> execute(@PathVariable Long id) {
+        try {
+            Map<String, Object> result = miningService.executePipeline(id);
+            return Result.ok(result);
+        } catch (Exception e) {
+            log.error("[MINING] Pipeline execution failed for {}: {}", id, e.getMessage());
+            return Result.error("Pipeline执行失败: " + e.getMessage());
+        }
     }
 }

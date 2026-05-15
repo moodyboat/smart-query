@@ -38,8 +38,19 @@ public class MiningModel {
 
     private String scheduleCron;
     private Boolean scheduleEnabled;
+    private String scheduleMode;
     private LocalDateTime lastRunAt;
     private LocalDateTime nextRunAt;
+
+    private String predictInputTable;
+    private String predictInputFilter;
+    private String predictResultTable;
+
+    private String validationMode;
+    private Integer cvFolds;
+    private Double testSize;
+    private String temporalColumn;
+    private String validationMetrics;
 
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;

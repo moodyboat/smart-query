@@ -27,7 +27,7 @@
           </div>
           <div v-if="parsedNodes(p).length" class="pipeline-card-flow">
             <span v-for="(n, i) in parsedNodes(p).slice(0, 5)" :key="i" class="mini-node">
-              {{ nodeIcon(n.type) }} {{ nodeTitle(n.type) }}
+              {{ nodeIcon(n.type) }} {{ nodeLabel(n) }}
               <span v-if="i < Math.min(parsedNodes(p).length, 5) - 1" class="mini-arrow">→</span>
             </span>
             <span v-if="parsedNodes(p).length > 5" class="mini-more">+{{ parsedNodes(p).length - 5 }}</span>
@@ -56,45 +56,109 @@
         </div>
       </div>
 
-      <div class="flow-canvas" @click.self="selectedNodeId = null">
-        <div class="nodes-flow">
-          <template v-for="(node, idx) in pipelineNodes" :key="node.id">
-            <!-- Node Card -->
+      <div class="editor-body">
+        <!-- Algorithm Palette (Left) -->
+        <div class="algorithm-palette">
+          <div class="palette-title">算法库</div>
+          <div v-for="group in algorithmGroups" :key="group.category" class="palette-group">
+            <div class="palette-group-title">{{ group.category }}</div>
             <div
-              class="flow-node"
-              :class="[node.type, { selected: selectedNodeId === node.id, running: runningNodeId === node.id, done: doneNodeIds.has(node.id) }]"
-              @click.stop="selectedNodeId = node.id"
+              v-for="algo in group.algorithms"
+              :key="algo.algorithmId"
+              class="palette-card"
+              draggable="true"
+              @dragstart="onPaletteDragStart($event, algo)"
             >
-              <div class="node-color-bar"></div>
-              <div class="node-body">
-                <div class="node-header">
-                  <span class="node-icon">{{ nodeIcon(node.type) }}</span>
-                  <span class="node-title">{{ node.config?.title || nodeTitle(node.type) }}</span>
-                  <el-dropdown trigger="click" @command="cmd => onNodeCmd(cmd, idx)" size="small">
-                    <el-button size="small" text class="node-more">⋯</el-button>
-                    <template #dropdown>
-                      <el-dropdown-menu>
-                        <el-dropdown-item command="config">配置</el-dropdown-item>
-                        <el-dropdown-item command="rename">重命名</el-dropdown-item>
-                        <el-dropdown-item command="delete" divided style="color: var(--danger)">删除</el-dropdown-item>
-                      </el-dropdown-menu>
-                    </template>
-                  </el-dropdown>
-                </div>
-                <div class="node-summary">{{ nodeSummary(node) }}</div>
+              <span class="palette-icon">{{ algo.icon || '🤖' }}</span>
+              <div class="palette-info">
+                <span class="palette-name">{{ algo.name }}</span>
+                <span class="palette-types">{{ modelTypeNames(algo.modelTypes) }}</span>
               </div>
             </div>
-
-            <!-- Connection Arrow -->
-            <div v-if="idx < pipelineNodes.length - 1" class="flow-connector">
-              <div class="connector-add" @click.stop="openAddStep(idx + 1)">+</div>
-              <div class="connector-line"></div>
+          </div>
+          <div class="palette-group">
+            <div class="palette-group-title">基础节点</div>
+            <div class="palette-card" draggable="true" @dragstart="onPaletteDragStart($event, null, 'data_source')">
+              <span class="palette-icon">📥</span>
+              <span class="palette-name">数据接入</span>
             </div>
-          </template>
+            <div class="palette-card" draggable="true" @dragstart="onPaletteDragStart($event, null, 'preprocessing')">
+              <span class="palette-icon">🔧</span>
+              <span class="palette-name">预处理</span>
+            </div>
+            <div class="palette-card" draggable="true" @dragstart="onPaletteDragStart($event, null, 'fill_missing')">
+              <span class="palette-icon">🩹</span>
+              <span class="palette-name">填充缺失值</span>
+            </div>
+            <div class="palette-card" draggable="true" @dragstart="onPaletteDragStart($event, null, 'feature_engineering')">
+              <span class="palette-icon">⚙️</span>
+              <span class="palette-name">特征工程</span>
+            </div>
+            <div class="palette-card" draggable="true" @dragstart="onPaletteDragStart($event, null, 'evaluation')">
+              <span class="palette-icon">📊</span>
+              <span class="palette-name">模型评估</span>
+            </div>
+            <div class="palette-card" draggable="true" @dragstart="onPaletteDragStart($event, null, 'output')">
+              <span class="palette-icon">💾</span>
+              <span class="palette-name">输出写入</span>
+            </div>
+          </div>
+        </div>
 
-          <!-- Add step at end -->
-          <div class="flow-connector">
-            <div class="connector-add" @click.stop="openAddStep(pipelineNodes.length)">+</div>
+        <!-- Drop Canvas (Center) -->
+        <div
+          class="flow-canvas"
+          @dragover.prevent
+          @drop="onCanvasDrop"
+          @click.self="selectedNodeId = null"
+        >
+          <div v-if="pipelineNodes.length === 0" class="canvas-empty">
+            <p>拖拽左侧算法或节点到此处开始编排</p>
+          </div>
+          <div class="nodes-flow">
+            <template v-for="(node, idx) in pipelineNodes" :key="node.id">
+              <!-- Node Card -->
+              <div
+                class="flow-node"
+                :class="[node.type, { selected: selectedNodeId === node.id, running: runningNodeId === node.id, done: doneNodeIds.has(node.id) }]"
+                draggable="true"
+                @dragstart="onNodeReorderStart($event, idx)"
+                @dragend="onDragEnd"
+                @click.stop="selectNode(node)"
+              >
+                <div class="node-color-bar"></div>
+                <div class="node-body">
+                  <div class="node-header">
+                    <span class="node-icon">{{ nodeIcon(node.type) }}</span>
+                    <span class="node-title">{{ node.config?.title || nodeTitle(node.type) }}</span>
+                    <span :class="['node-status-dot', isNodeConfigured(node) ? 'configured' : 'unconfigured']"
+                      :title="isNodeConfigured(node) ? '已配置' : '需要配置'"></span>
+                    <el-dropdown trigger="click" @command="cmd => onNodeCmd(cmd, idx)" @click.stop size="small">
+                      <el-button size="small" text class="node-more" @click.stop>⋯</el-button>
+                      <template #dropdown>
+                        <el-dropdown-menu>
+                          <el-dropdown-item command="config">配置</el-dropdown-item>
+                          <el-dropdown-item command="rename">重命名</el-dropdown-item>
+                          <el-dropdown-item command="delete" divided style="color: var(--danger)">删除</el-dropdown-item>
+                        </el-dropdown-menu>
+                      </template>
+                    </el-dropdown>
+                  </div>
+                  <div class="node-summary">{{ nodeSummary(node) }}</div>
+                </div>
+              </div>
+
+              <!-- Connection with drop zone -->
+              <div
+                class="flow-connector"
+                @dragover.prevent="onConnectorDragOver($event)"
+                @dragleave="onConnectorDragLeave($event)"
+                @drop.stop="onConnectorDrop($event, idx + 1)"
+              >
+                <div class="connector-line"></div>
+                <div class="connector-drop-hint">+</div>
+              </div>
+            </template>
           </div>
         </div>
       </div>
@@ -215,6 +279,26 @@
                     :label="`${col.name} (${col.type})`" :value="col.name" />
                 </el-select>
               </el-form-item>
+              <el-form-item label="特征变换">
+                <div class="transform-list">
+                  <div v-for="(tf, i) in (selectedNode.config.transforms || [])" :key="i" class="transform-row">
+                    <el-select v-model="tf.type" style="width: 120px" size="small" :teleported="false">
+                      <el-option label="对数变换" value="log" />
+                      <el-option label="多项式" value="polynomial" />
+                      <el-option label="分箱" value="binning" />
+                      <el-option label="标准化" value="standardize" />
+                      <el-option label="交互项" value="interaction" />
+                    </el-select>
+                    <el-select v-model="tf.columns" multiple placeholder="选择列" style="flex: 1" size="small" :teleported="false" filterable>
+                      <el-option v-for="col in columnOptions" :key="col.name" :label="col.name" :value="col.name" />
+                    </el-select>
+                    <el-input-number v-if="tf.type === 'polynomial'" v-model="tf.degree" :min="2" :max="4" size="small" style="width: 80px" />
+                    <el-input-number v-if="tf.type === 'binning'" v-model="tf.bins" :min="2" :max="20" size="small" style="width: 80px" />
+                    <el-button size="small" text type="danger" @click="removeTransform(i)">X</el-button>
+                  </div>
+                  <el-button size="small" type="primary" link @click="addTransform">+ 添加变换</el-button>
+                </div>
+              </el-form-item>
             </el-form>
           </template>
 
@@ -226,9 +310,7 @@
               </el-form-item>
               <el-form-item label="模型类型">
                 <el-select v-model="selectedNode.config.modelType" style="width: 100%" :teleported="false" @change="onModelTypeChange">
-                  <el-option label="分类 (Classification)" value="classification" />
-                  <el-option label="回归 (Regression)" value="regression" />
-                  <el-option label="聚类 (Clustering)" value="clustering" />
+                  <el-option v-for="mt in modelTypes" :key="mt.id" :label="mt.name" :value="mt.id" />
                 </el-select>
               </el-form-item>
               <el-form-item label="算法">
@@ -257,6 +339,19 @@
               <el-form-item label="节点名称">
                 <el-input v-model="selectedNode.config.title" />
               </el-form-item>
+              <el-form-item label="验证模式">
+                <el-select v-model="selectedNode.config.validationMode" style="width: 100%" :teleported="false" @change="val => { if (val !== 'temporal') selectedNode.config.temporalColumn = null }">
+                  <el-option label="训练/测试分割" value="train_test" />
+                  <el-option label="交叉验证" value="cv" />
+                  <el-option label="样本外验证" value="oos" />
+                  <el-option label="时间外验证" value="temporal" />
+                </el-select>
+              </el-form-item>
+              <el-form-item v-if="selectedNode.config.validationMode === 'temporal'" label="时间列">
+                <el-select v-model="selectedNode.config.temporalColumn" placeholder="选择时间列" style="width: 100%" :teleported="false" filterable>
+                  <el-option v-for="col in columnOptions" :key="col.name" :label="col.name" :value="col.name" />
+                </el-select>
+              </el-form-item>
               <el-form-item label="测试集比例">
                 <el-slider v-model="selectedNode.config.testSize" :min="10" :max="40" :step="5"
                   :format-tooltip="v => v + '%'" />
@@ -266,6 +361,51 @@
                   <el-option :label="'不使用'" :value="0" />
                   <el-option v-for="n in [3, 5, 10]" :key="n" :label="`${n}-Fold`" :value="n" />
                 </el-select>
+              </el-form-item>
+            </el-form>
+          </template>
+
+          <!-- Fill Missing Config -->
+          <template v-if="selectedNode.type === 'fill_missing'">
+            <el-form label-width="100px" size="small">
+              <el-form-item label="节点名称">
+                <el-input v-model="selectedNode.config.title" />
+              </el-form-item>
+              <el-form-item label="填充策略">
+                <el-select v-model="selectedNode.config.strategy" style="width: 100%" :teleported="false">
+                  <el-option label="自动 (数值列填均值，分类列填众数)" value="auto" />
+                  <el-option label="均值填充" value="mean" />
+                  <el-option label="中位数填充" value="median" />
+                  <el-option label="众数填充" value="mode" />
+                  <el-option label="固定值" value="constant" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="指定列">
+                <el-select v-model="selectedNode.config.columns" multiple placeholder="留空=全部列" style="width: 100%" :teleported="false" filterable>
+                  <el-option v-for="col in columnOptions" :key="col.name" :label="col.name" :value="col.name" />
+                </el-select>
+                <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px">不选则对所有含缺失的列填充</div>
+              </el-form-item>
+            </el-form>
+          </template>
+
+          <!-- Output Config -->
+          <template v-if="selectedNode.type === 'output'">
+            <el-form label-width="100px" size="small">
+              <el-form-item label="节点名称">
+                <el-input v-model="selectedNode.config.title" />
+              </el-form-item>
+              <el-form-item label="输出表名">
+                <el-input v-model="selectedNode.config.table" placeholder="如: prediction_results" />
+              </el-form-item>
+              <el-form-item label="写入模式">
+                <el-select v-model="selectedNode.config.mode" style="width: 100%" :teleported="false">
+                  <el-option label="追加 (append)" value="append" />
+                  <el-option label="替换 (replace)" value="replace" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="自动建表">
+                <el-switch v-model="selectedNode.config.autoCreate" active-text="表不存在时自动创建" />
               </el-form-item>
             </el-form>
           </template>
@@ -297,13 +437,21 @@ import { ref, computed, watch, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   fetchMiningPipelines, fetchMiningPipeline, createMiningPipeline,
-  updateMiningPipeline, deleteMiningPipeline, fetchDataSourceTables, fetchTableColumns
+  updateMiningPipeline, deleteMiningPipeline, executeMiningPipeline,
+  fetchDataSourceTables, fetchTableColumns
 } from '../api'
 import axios from 'axios'
+import { useAlgorithms } from '../composables/useAlgorithms.js'
 
 const props = defineProps({
   dataSources: { type: Array, default: () => [] }
 })
+
+const {
+  algorithms, modelTypes, algorithmGroups, loadAlgorithms,
+  getAlgorithmLabel, getAlgorithmsForModelType,
+  getAlgorithmParams, getDefaultHyperparams, getModelTypeLabel, modelTypeNames
+} = useAlgorithms()
 
 const emit = defineEmits(['close'])
 
@@ -325,6 +473,7 @@ const editingPipeline = ref(null)
 const pipelineNodes = ref([])
 const saving = ref(false)
 const running = ref(false)
+const isDragging = ref(false)
 const runningNodeId = ref(null)
 const doneNodeIds = ref(new Set())
 const filterDsId = ref(null)
@@ -347,9 +496,11 @@ const featSelectAll = ref(false)
 const stepTypes = [
   { type: 'data_source', icon: '📥', title: '数据接入', desc: '从数据库读取数据' },
   { type: 'preprocessing', icon: '🔧', title: '数据预处理', desc: '缺失值处理、编码、缩放' },
+  { type: 'fill_missing', icon: '🩹', title: '填充缺失值', desc: '按列配置缺失值填充策略' },
   { type: 'feature_engineering', icon: '⚙️', title: '特征工程', desc: '特征选择和目标定义' },
   { type: 'training', icon: '🧠', title: '模型训练', desc: '选择算法并训练模型' },
-  { type: 'evaluation', icon: '📊', title: '模型评估', desc: '评估指标和验证策略' }
+  { type: 'evaluation', icon: '📊', title: '模型评估', desc: '评估指标和验证策略' },
+  { type: 'output', icon: '💾', title: '输出写入', desc: '将预测结果写入数据库表' }
 ]
 
 // Selected node
@@ -362,79 +513,17 @@ const selectedNodeTitle = computed(() => {
   return selectedNode.value.config?.title || nodeTitle(selectedNode.value.type)
 })
 
-// Algorithm options for training node
-const algoMap = {
-  classification: [
-    { value: 'random_forest', label: '随机森林' },
-    { value: 'xgboost', label: 'XGBoost' },
-    { value: 'decision_tree', label: '决策树' },
-    { value: 'logistic_regression', label: '逻辑回归' },
-    { value: 'svm', label: 'SVM' },
-    { value: 'knn', label: 'KNN' },
-    { value: 'gradient_boosting', label: '梯度提升' }
-  ],
-  regression: [
-    { value: 'random_forest', label: '随机森林' },
-    { value: 'xgboost', label: 'XGBoost' },
-    { value: 'decision_tree', label: '决策树' },
-    { value: 'gradient_boosting', label: '梯度提升' }
-  ],
-  clustering: [
-    { value: 'kmeans', label: 'K-Means' }
-  ]
-}
 const algoOptions = computed(() => {
   const mt = selectedNode.value?.config?.modelType || 'classification'
-  return algoMap[mt] || algoMap.classification
+  return getAlgorithmsForModelType(mt).map(a => ({ value: a.algorithmId, label: (a.icon ? a.icon + ' ' : '') + a.name }))
 })
 
-// Algorithm hyperparams (reused from MiningManager)
 function algorithmParams(algo) {
-  const defs = {
-    random_forest: [
-      { key: 'n_estimators', label: '树的数量', type: 'int', min: 1, max: 1000, default: 100 },
-      { key: 'max_depth', label: '最大深度', type: 'int', min: 1, max: 100, default: 10 },
-      { key: 'min_samples_split', label: '最小分裂样本数', type: 'int', min: 2, max: 100, default: 2 },
-      { key: 'min_samples_leaf', label: '叶节点最小样本数', type: 'int', min: 1, max: 50, default: 1 }
-    ],
-    xgboost: [
-      { key: 'n_estimators', label: '树的数量', type: 'int', min: 1, max: 1000, default: 100 },
-      { key: 'max_depth', label: '最大深度', type: 'int', min: 1, max: 50, default: 6 },
-      { key: 'learning_rate', label: '学习率', type: 'float', min: 0.001, max: 1, step: 0.01, default: 0.3 },
-      { key: 'subsample', label: '子采样率', type: 'float', min: 0.1, max: 1, step: 0.1, default: 1 }
-    ],
-    decision_tree: [
-      { key: 'max_depth', label: '最大深度', type: 'int', min: 1, max: 100, default: 10 },
-      { key: 'min_samples_split', label: '最小分裂样本数', type: 'int', min: 2, max: 100, default: 2 },
-      { key: 'criterion', label: '分裂标准', type: 'select', options: ['gini', 'entropy'], default: 'gini' }
-    ],
-    logistic_regression: [
-      { key: 'C', label: '正则化强度', type: 'float', min: 0.01, max: 100, step: 0.1, default: 1 },
-      { key: 'max_iter', label: '最大迭代次数', type: 'int', min: 10, max: 10000, default: 100 }
-    ],
-    svm: [
-      { key: 'C', label: '正则化强度', type: 'float', min: 0.01, max: 100, step: 0.1, default: 1 },
-      { key: 'kernel', label: '核函数', type: 'select', options: ['rbf', 'linear', 'poly'], default: 'rbf' }
-    ],
-    knn: [
-      { key: 'n_neighbors', label: '邻居数 K', type: 'int', min: 1, max: 100, default: 5 },
-      { key: 'weights', label: '权重', type: 'select', options: ['uniform', 'distance'], default: 'uniform' }
-    ],
-    kmeans: [
-      { key: 'n_clusters', label: '聚类数', type: 'int', min: 2, max: 50, default: 3 },
-      { key: 'max_iter', label: '最大迭代次数', type: 'int', min: 10, max: 1000, default: 300 }
-    ],
-    gradient_boosting: [
-      { key: 'n_estimators', label: '树的数量', type: 'int', min: 1, max: 1000, default: 100 },
-      { key: 'max_depth', label: '最大深度', type: 'int', min: 1, max: 50, default: 3 },
-      { key: 'learning_rate', label: '学习率', type: 'float', min: 0.001, max: 1, step: 0.01, default: 0.1 }
-    ]
-  }
-  return defs[algo] || []
+  return getAlgorithmParams(algo)
 }
 
 const currentAlgoParams = computed(() => {
-  const algo = selectedNode.value?.config?.algorithm || 'random_forest'
+  const algo = selectedNode.value?.config?.algorithm || firstAlgorithm()
   return algorithmParams(algo)
 })
 
@@ -445,7 +534,11 @@ const canRun = computed(() => {
   const hasTraining = pipelineNodes.value.some(n => n.type === 'training')
   const featNode = pipelineNodes.value.find(n => n.type === 'feature_engineering')
   const hasFeatures = featNode?.config?.featureColumns && (() => {
-    try { return JSON.parse(featNode.config.featureColumns).length > 0 } catch { return false }
+    try {
+      const fc = featNode.config.featureColumns
+      const arr = Array.isArray(fc) ? fc : JSON.parse(fc)
+      return arr.length > 0
+    } catch { return false }
   })()
   return pipelineNodes.value.length >= 3 && hasTable && hasTraining && hasFeatures
 })
@@ -500,16 +593,17 @@ function formatDate(dt) {
 }
 
 function nodeIcon(type) {
-  return { data_source: '📥', preprocessing: '🔧', feature_engineering: '⚙️', training: '🧠', evaluation: '📊' }[type] || '📦'
+  return { data_source: '📥', preprocessing: '🔧', fill_missing: '🩹', feature_engineering: '⚙️', training: '🧠', evaluation: '📊', output: '💾' }[type] || '📦'
 }
 
 function nodeTitle(type) {
-  return { data_source: '数据接入', preprocessing: '数据预处理', feature_engineering: '特征工程', training: '模型训练', evaluation: '模型评估' }[type] || type
+  return { data_source: '数据接入', preprocessing: '数据预处理', fill_missing: '填充缺失值', feature_engineering: '特征工程', training: '模型训练', evaluation: '模型评估', output: '输出写入' }[type] || type
 }
 
 function nodeSummary(node) {
-  const c = node.config || {}
-  switch (node.type) {
+  try {
+    const c = node.config || {}
+    switch (node.type) {
     case 'data_source': return c.table ? `表: ${c.table}` + (c.filter ? ` | ${c.filter}` : '') : '未配置'
     case 'preprocessing': {
       const parts = []
@@ -518,27 +612,68 @@ function nodeSummary(node) {
       if (c.scaling && c.scaling !== 'none') parts.push(c.scaling === 'standard' ? '标准化' : '归一化')
       return parts.length ? parts.join(' + ') : '未配置'
     }
+    case 'fill_missing': {
+      const strategy = { auto: '自动填充', mean: '均值', median: '中位数', mode: '众数', constant: '固定值' }[c.strategy] || c.strategy || 'auto'
+      return c.columns?.length ? `${strategy} (${c.columns.length}列)` : strategy
+    }
     case 'feature_engineering': {
-      const fc = c.featureColumns ? JSON.parse(c.featureColumns) : []
+      let fc = []
+      try {
+        fc = c.featureColumns ? (Array.isArray(c.featureColumns) ? c.featureColumns : JSON.parse(c.featureColumns)) : []
+      } catch { fc = [] }
       return fc.length ? `${fc.length} 列特征` + (c.targetColumn ? ` → ${c.targetColumn}` : '') : '未配置'
     }
     case 'training': {
-      const algoLabels = { random_forest: '随机森林', xgboost: 'XGBoost', decision_tree: '决策树', logistic_regression: '逻辑回归', svm: 'SVM', knn: 'KNN', kmeans: 'K-Means', gradient_boosting: '梯度提升' }
-      return c.algorithm ? (algoLabels[c.algorithm] || c.algorithm) : '未配置'
+      return c.algorithm ? getAlgorithmLabel(c.algorithm) : '未配置'
     }
-    case 'evaluation': return `测试集 ${c.testSize || 20}%`
+    case 'evaluation': {
+      const vm = c.validationMode
+      if (vm === 'temporal') return `时间外验证 (${c.temporalColumn || '?'})`
+      if (vm === 'cv') return `${c.cvFold || 5}-Fold CV`
+      if (vm === 'oos') return `OOS ${c.cvFold || 5}-Fold + 测试集 ${c.testSize || 20}%`
+      return `测试集 ${c.testSize || 20}%`
+    }
+    case 'output': return c.table ? `→ ${c.table}` + (c.mode === 'replace' ? ' (替换)' : '') : '未配置'
     default: return ''
   }
+  } catch { return '' }
 }
 
 function defaultNodeConfig(type) {
   switch (type) {
     case 'data_source': return { title: '数据接入', table: '', filter: '' }
     case 'preprocessing': return { title: '数据预处理', handleMissing: 'drop', encoding: 'label', scaling: 'standard' }
+    case 'fill_missing': return { title: '填充缺失值', strategy: 'auto', columns: [], fillValues: {} }
     case 'feature_engineering': return { title: '特征工程', featureColumns: '[]', targetColumn: '' }
-    case 'training': return { title: '模型训练', modelType: 'classification', algorithm: 'random_forest', hyperparams: { n_estimators: 100, max_depth: 10 } }
-    case 'evaluation': return { title: '模型评估', testSize: 20, cvFold: 0 }
+    case 'training': return { title: '模型训练', modelType: firstModelType(), algorithm: firstAlgorithm(), hyperparams: {} }
+    case 'evaluation': return { title: '模型评估', testSize: 20, cvFold: 0, validationMode: 'train_test', temporalColumn: null }
+    case 'output': return { title: '输出写入', table: '', mode: 'append', autoCreate: true }
     default: return { title: type }
+  }
+}
+
+function firstModelType() {
+  return modelTypes.value.length > 0 ? modelTypes.value[0].id : 'classification'
+}
+
+function firstAlgorithm() {
+  return algorithms.value.length > 0 ? algorithms.value[0].algorithmId : 'random_forest'
+}
+
+function isNodeConfigured(node) {
+  const c = node.config || {}
+  switch (node.type) {
+    case 'data_source': return !!c.table
+    case 'preprocessing': return true
+    case 'fill_missing': return true
+    case 'feature_engineering': {
+      const fc = c.featureColumns ? (typeof c.featureColumns === 'string' ? JSON.parse(c.featureColumns) : c.featureColumns) : []
+      return fc.length > 0
+    }
+    case 'training': return !!c.algorithm
+    case 'evaluation': return true
+    case 'output': return !!c.table
+    default: return true
   }
 }
 
@@ -552,11 +687,13 @@ async function createPipeline() {
     { id: 'n2', type: 'preprocessing', config: { ...defaultNodeConfig('preprocessing') } },
     { id: 'n3', type: 'feature_engineering', config: { ...defaultNodeConfig('feature_engineering') } },
     { id: 'n4', type: 'training', config: defaultNodeConfig('training') },
-    { id: 'n5', type: 'evaluation', config: { ...defaultNodeConfig('evaluation') } }
+    { id: 'n5', type: 'evaluation', config: { ...defaultNodeConfig('evaluation') } },
+    { id: 'n6', type: 'output', config: { ...defaultNodeConfig('output') } }
   ]
   const defaultEdges = [
     { source: 'n1', target: 'n2' }, { source: 'n2', target: 'n3' },
-    { source: 'n3', target: 'n4' }, { source: 'n4', target: 'n5' }
+    { source: 'n3', target: 'n4' }, { source: 'n4', target: 'n5' },
+    { source: 'n5', target: 'n6' }
   ]
 
   try {
@@ -576,11 +713,31 @@ async function createPipeline() {
 
 function openPipeline(p) {
   editingPipeline.value = { ...p }
-  pipelineNodes.value = parsedNodes(p)
+  pipelineNodes.value = normalizeNodes(parsedNodes(p))
   selectedNodeId.value = null
   showNodeConfig.value = false
   runningNodeId.value = null
   doneNodeIds.value = new Set()
+}
+
+function normalizeNodes(nodes) {
+  return nodes.map(n => {
+    const config = { ...n.config }
+    // Normalize hyperparameters → hyperparams for training nodes
+    if (n.type === 'training' && config.hyperparameters && !config.hyperparams) {
+      config.hyperparams = config.hyperparameters
+      delete config.hyperparameters
+    }
+    // Ensure hyperparams exists
+    if (n.type === 'training' && !config.hyperparams) {
+      config.hyperparams = {}
+    }
+    // Normalize featureColumns: array → JSON string for consistency
+    if (n.type === 'feature_engineering' && Array.isArray(config.featureColumns)) {
+      config.featureColumns = JSON.stringify(config.featureColumns)
+    }
+    return { ...n, config }
+  })
 }
 
 async function runFromCard(p) {
@@ -601,6 +758,17 @@ async function savePipeline() {
   if (!editingPipeline.value) return
   saving.value = true
   try {
+    // Clean float precision in training node hyperparams
+    for (const node of pipelineNodes.value) {
+      if (node.type === 'training' && node.config?.hyperparams) {
+        const params = algorithmParams(node.config.algorithm)
+        for (const p of params) {
+          if (p.type === 'float' && typeof node.config.hyperparams[p.key] === 'number') {
+            node.config.hyperparams[p.key] = Math.round(node.config.hyperparams[p.key] * 10000) / 10000
+          }
+        }
+      }
+    }
     const edges = []
     for (let i = 0; i < pipelineNodes.value.length - 1; i++) {
       edges.push({ source: pipelineNodes.value[i].id, target: pipelineNodes.value[i + 1].id })
@@ -629,65 +797,25 @@ async function runPipeline() {
   lastRunResult.value = null
 
   try {
-    // Animate through nodes
+    // Animate through nodes while backend executes
+    const executePromise = executeMiningPipeline(editingPipeline.value.id)
+    const animDelay = 600
     for (const node of pipelineNodes.value) {
       runningNodeId.value = node.id
-      await new Promise(r => setTimeout(r, 400))
+      await new Promise(r => setTimeout(r, animDelay))
       doneNodeIds.value.add(node.id)
     }
     runningNodeId.value = null
 
-    // Execute on backend
-    const dsNode = pipelineNodes.value.find(n => n.type === 'data_source')
-    const trainNode = pipelineNodes.value.find(n => n.type === 'training')
-    const featNode = pipelineNodes.value.find(n => n.type === 'feature_engineering')
+    // Wait for backend execution to complete
+    const result = await executePromise
+    lastRunResult.value = result
 
-    if (dsNode?.config?.table && trainNode?.config?.algorithm) {
-      const features = featNode?.config?.featureColumns ? JSON.parse(featNode.config.featureColumns) : []
-      const payload = {
-        name: editingPipeline.value.name,
-        dataSourceId: editingPipeline.value.dataSourceId,
-        sourceTable: dsNode.config.table,
-        modelType: trainNode.config.modelType || 'classification',
-        algorithm: trainNode.config.algorithm,
-        featureColumns: JSON.stringify(features),
-        targetColumn: featNode?.config?.targetColumn || '',
-        hyperparameters: JSON.stringify(trainNode.config.hyperparams || {}),
-        pipelineId: editingPipeline.value.id,
-        preprocessing: JSON.stringify({
-          handleMissing: pipelineNodes.value.find(n => n.type === 'preprocessing')?.config?.handleMissing || 'drop',
-          encoding: pipelineNodes.value.find(n => n.type === 'preprocessing')?.config?.encoding || 'label',
-          scaling: pipelineNodes.value.find(n => n.type === 'preprocessing')?.config?.scaling || 'standard'
-        })
-      }
-      const apiBase = axios.create({ baseURL: '/api/v1', timeout: 180000 })
-
-      // Reuse existing model for this pipeline, or create new one
-      let modelId = null
-      const { data: { data: existingModels } } = await apiBase.get('/mining/model', { params: { dataSourceId: editingPipeline.value.dataSourceId } })
-      const existing = (existingModels || []).find(m => m.pipelineId === editingPipeline.value.id)
-      if (existing) {
-        await apiBase.put(`/mining/model/${existing.id}`, payload)
-        modelId = existing.id
-      } else {
-        const { data: { data: created } } = await apiBase.post('/mining/model', payload)
-        modelId = created?.id
-      }
-
-      if (modelId) {
-        const { data: { data: trained } } = await apiBase.post(`/mining/model/${modelId}/train`)
-        const { data: { data: fullModel } } = await apiBase.get(`/mining/model/${modelId}`)
-        lastRunResult.value = fullModel || trained
-      }
-    }
-
-    // Update pipeline status
-    await updateMiningPipeline(editingPipeline.value.id, { status: 'completed' })
-    ElMessage.success('流程执行完成')
     await loadPipelines()
+    ElMessage.success(`流程执行完成 — 模型ID: ${result.modelId}`)
   } catch (e) {
     await updateMiningPipeline(editingPipeline.value.id, { status: 'failed' })
-    ElMessage.error('执行失败: ' + (e.message || ''))
+    ElMessage.error('执行失败: ' + (e.message || '未知错误'))
   } finally {
     running.value = false
     runningNodeId.value = null
@@ -767,7 +895,8 @@ async function loadColumns(tableName) {
     // Init feature checkboxes
     const featNode = pipelineNodes.value.find(n => n.type === 'feature_engineering')
     if (featNode) {
-      const saved = featNode.config?.featureColumns ? JSON.parse(featNode.config.featureColumns) : []
+      const raw = featNode.config?.featureColumns
+      const saved = raw ? (Array.isArray(raw) ? raw : JSON.parse(raw)) : []
       const checked = {}
       columnOptions.value.forEach(c => { checked[c.name] = saved.includes(c.name) })
       featChecked.value = checked
@@ -790,17 +919,151 @@ function syncFeatCols() {
   }
 }
 
+function addTransform() {
+  if (!selectedNode.value) return
+  const transforms = selectedNode.value.config.transforms || []
+  transforms.push({ type: 'log', columns: [], degree: 2, bins: 5 })
+  selectedNode.value.config.transforms = [...transforms]
+}
+
+function removeTransform(idx) {
+  if (!selectedNode.value) return
+  const transforms = [...(selectedNode.value.config.transforms || [])]
+  transforms.splice(idx, 1)
+  selectedNode.value.config.transforms = transforms
+}
+
 function onModelTypeChange() {
   if (!selectedNode.value) return
   const c = selectedNode.value.config
-  c.algorithm = algoMap[c.modelType]?.[0]?.value || 'random_forest'
-  const params = algorithmParams(c.algorithm)
-  c.hyperparams = {}
-  params.forEach(p => { c.hyperparams[p.key] = p.default !== undefined ? p.default : (p.type === 'int' ? 100 : p.type === 'float' ? 0.1 : '') })
+  const available = getAlgorithmsForModelType(c.modelType)
+  c.algorithm = available.length ? available[0].algorithmId : firstAlgorithm()
+  const defaults = getDefaultHyperparams(c.algorithm)
+  c.hyperparams = { ...defaults }
 }
 
 // Init
+loadAlgorithms()
 loadPipelines()
+
+// Drag and Drop handlers
+function onPaletteDragStart(event, algo, nodeType) {
+  const data = algo
+    ? { type: 'algorithm', algorithmId: algo.algorithmId, name: algo.name, modelTypes: algo.modelTypes }
+    : { type: 'node', nodeType }
+  event.dataTransfer.setData('application/json', JSON.stringify(data))
+  event.dataTransfer.effectAllowed = 'copy'
+}
+
+function onNodeReorderStart(event, idx) {
+  isDragging.value = true
+  event.dataTransfer.setData('application/json', JSON.stringify({ type: 'reorder', fromIdx: idx }))
+  event.dataTransfer.effectAllowed = 'move'
+}
+
+function onDragEnd() {
+  isDragging.value = false
+}
+
+function onCanvasDrop(event) {
+  const raw = event.dataTransfer.getData('application/json')
+  if (!raw) return
+  const data = JSON.parse(raw)
+
+  // Find closest insertion index based on drop position
+  const insertIdx = findClosestInsertIndex(event.clientX, event.clientY)
+
+  if (data.type === 'algorithm') {
+    addAlgorithmNode(data, insertIdx)
+  } else if (data.type === 'node') {
+    addStep(insertIdx, data.nodeType)
+  } else if (data.type === 'reorder') {
+    reorderNode(data.fromIdx, insertIdx)
+  }
+}
+
+function findClosestInsertIndex(clientX, clientY) {
+  const nodes = document.querySelectorAll('.flow-node')
+  if (nodes.length === 0) return 0
+  let closest = nodes.length
+  let minDist = Infinity
+  nodes.forEach((el, i) => {
+    const rect = el.getBoundingClientRect()
+    const midY = rect.top + rect.height / 2
+    const dist = Math.abs(clientY - midY)
+    if (dist < minDist) {
+      minDist = dist
+      closest = clientY < midY ? i : i + 1
+    }
+  })
+  return closest
+}
+
+function onConnectorDrop(event, insertIdx) {
+  event.stopPropagation()
+  event.currentTarget?.classList?.remove('connector-drag-over')
+  const raw = event.dataTransfer.getData('application/json')
+  if (!raw) return
+  const data = JSON.parse(raw)
+  if (data.type === 'algorithm') {
+    addAlgorithmNode(data, insertIdx)
+  } else if (data.type === 'node') {
+    addStep(insertIdx, data.nodeType)
+  } else if (data.type === 'reorder') {
+    reorderNode(data.fromIdx, insertIdx)
+  }
+}
+
+function onConnectorDragOver(event) {
+  event.currentTarget?.classList?.add('connector-drag-over')
+}
+
+function onConnectorDragLeave(event) {
+  event.currentTarget?.classList?.remove('connector-drag-over')
+}
+
+function addAlgorithmNode(algoData, idx) {
+  const id = 'n' + Date.now()
+  const types = parseJson(algoData.modelTypes, ['classification'])
+  const defaults = getDefaultHyperparams(algoData.algorithmId)
+  const node = {
+    id,
+    type: 'training',
+    config: {
+      title: algoData.name,
+      modelType: types[0],
+      algorithm: algoData.algorithmId,
+      hyperparams: { ...defaults }
+    }
+  }
+  pipelineNodes.value.splice(idx, 0, node)
+}
+
+function reorderNode(fromIdx, toIdx) {
+  if (fromIdx === toIdx || fromIdx === toIdx - 1) return
+  const [node] = pipelineNodes.value.splice(fromIdx, 1)
+  const insertAt = fromIdx < toIdx ? toIdx - 1 : toIdx
+  pipelineNodes.value.splice(insertAt, 0, node)
+}
+
+function selectNode(node) {
+  if (isDragging.value) return
+  selectedNodeId.value = node.id
+  showNodeConfig.value = true
+}
+
+function parseJson(val, fallback) {
+  if (!val) return fallback
+  if (typeof val === 'string') { try { return JSON.parse(val) } catch { return fallback } }
+  return val
+}
+
+function nodeLabel(node) {
+  if (node.type === 'training' && node.config?.algorithm) {
+    return getAlgorithmLabel(node.config.algorithm)
+  }
+  return nodeTitle(node.type)
+}
 
 function parseMetrics(json) {
   try { return typeof json === 'string' ? JSON.parse(json) : json || {} } catch { return {} }
@@ -820,15 +1083,8 @@ const topFeatures = computed(() => {
     .map(([name, value]) => ({ name, value }))
 })
 
-const algorithmLabels = {
-  random_forest: '随机森林', xgboost: 'XGBoost', decision_tree: '决策树',
-  logistic_regression: '逻辑回归', svm: 'SVM', knn: 'KNN',
-  kmeans: 'K-Means', gradient_boosting: '梯度提升'
-}
-function algorithmLabel(a) { return algorithmLabels[a] || a }
-
-const modelTypeLabels = { classification: '分类', regression: '回归', clustering: '聚类' }
-function modelTypeLabel(t) { return modelTypeLabels[t] || t }
+const algorithmLabel = getAlgorithmLabel
+const modelTypeLabel = getModelTypeLabel
 </script>
 
 <style scoped>
@@ -950,12 +1206,104 @@ function modelTypeLabel(t) { return modelTypeLabels[t] || t }
   gap: 8px;
 }
 
+/* Editor Body - Three column layout */
+.editor-body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+/* Algorithm Palette (Left) */
+.algorithm-palette {
+  width: 200px;
+  min-width: 200px;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  padding: 12px;
+  background: var(--surface);
+}
+
+.palette-title {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 12px;
+  color: var(--text);
+}
+
+.palette-group {
+  margin-bottom: 12px;
+}
+
+.palette-group-title {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 6px;
+}
+
+.palette-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-bottom: 4px;
+  border-radius: 8px;
+  cursor: grab;
+  transition: background 0.15s;
+  border: 1px solid transparent;
+}
+
+.palette-card:hover {
+  background: var(--hover);
+  border-color: var(--border);
+}
+
+.palette-card:active {
+  cursor: grabbing;
+}
+
+.palette-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.palette-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.palette-name {
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.palette-types {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 /* Flow Canvas */
 .flow-canvas {
   flex: 1;
-  overflow-x: auto;
-  overflow-y: auto;
+  overflow: auto;
   padding: 20px;
+}
+
+.canvas-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 300px;
+  color: var(--text-muted);
+  font-size: 14px;
+  border: 2px dashed var(--border);
+  border-radius: 12px;
+  margin: 20px;
 }
 
 .nodes-flow {
@@ -1011,9 +1359,11 @@ function modelTypeLabel(t) { return modelTypeLabels[t] || t }
 
 .flow-node.data_source .node-color-bar { background: var(--primary); }
 .flow-node.preprocessing .node-color-bar { background: var(--success); }
+.flow-node.fill_missing .node-color-bar { background: #E91E63; }
 .flow-node.feature_engineering .node-color-bar { background: var(--warning); }
 .flow-node.training .node-color-bar { background: #9B59B6; }
 .flow-node.evaluation .node-color-bar { background: #00BCD4; }
+.flow-node.output .node-color-bar { background: #FF9800; }
 
 .node-body {
   padding: 12px;
@@ -1039,6 +1389,13 @@ function modelTypeLabel(t) { return modelTypeLabels[t] || t }
   text-overflow: ellipsis;
 }
 
+.node-status-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.node-status-dot.configured { background: var(--el-color-success); }
+.node-status-dot.unconfigured { background: var(--el-color-danger); animation: pulse-dot 2s infinite; }
+@keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
 .node-more {
   padding: 0 !important;
   min-width: 20px;
@@ -1057,7 +1414,49 @@ function modelTypeLabel(t) { return modelTypeLabels[t] || t }
   align-items: center;
   gap: 0;
   position: relative;
-  padding: 0 4px;
+  padding: 6px 8px;
+  min-width: 44px;
+  transition: background 0.15s;
+  cursor: default;
+}
+
+.flow-connector:hover {
+  background: var(--primary-light);
+  border-radius: 4px;
+}
+
+.flow-connector.connector-drag-over {
+  background: var(--primary-light);
+  border-radius: 4px;
+  padding: 6px 12px;
+}
+
+.flow-connector.connector-drag-over .connector-drop-hint {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.connector-drop-hint {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: white;
+  font-size: 14px;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transform: scale(0.5);
+  transition: all 0.15s;
+  pointer-events: none;
+  left: 50%;
+  top: 50%;
+  margin-left: -10px;
+  margin-top: -10px;
+  z-index: 2;
 }
 
 .connector-line {
@@ -1132,6 +1531,8 @@ function modelTypeLabel(t) { return modelTypeLabels[t] || t }
   border-radius: 6px;
   padding: 8px;
 }
+.transform-list { display: flex; flex-direction: column; gap: 6px; }
+.transform-row { display: flex; gap: 4px; align-items: center; }
 
 .column-grid {
   display: grid;

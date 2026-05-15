@@ -20,6 +20,9 @@ public class MiningPipeline {
     private String nodes;
     private String edges;
 
+    private LocalDateTime lastExecutedAt;
+    private String executionLog;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
 

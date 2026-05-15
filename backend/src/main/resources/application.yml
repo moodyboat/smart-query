@@ -11,7 +11,7 @@ spring:
   datasource:
     url: jdbc:mysql://localhost:3306/smart_query?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
     username: root
-    password: ${MYSQL_PASSWORD:}
+    password: ${MYSQL_PASSWORD:900110}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       maximum-pool-size: 10
@@ -70,12 +70,12 @@ smart-query:
     models:
       glm-5.1:
         api-url: https://open.bigmodel.cn/api/coding/paas/v4/chat/completions
-        api-key: ${GLM_API_KEY:}
+        api-key: ${GLM_API_KEY:9c82f455ae15490ca9372df1a707fbdb.4oDb1blqKcUWMVXr}
         max-tokens: 8192
         temperature: 0.1
       glm-4:
         api-url: https://open.bigmodel.cn/api/coding/paas/v4/chat/completions
-        api-key: ${GLM_API_KEY:}
+        api-key: ${GLM_API_KEY:9c82f455ae15490ca9372df1a707fbdb.4oDb1blqKcUWMVXr}
         max-tokens: 4096
         temperature: 0.1
       gpt-4o:

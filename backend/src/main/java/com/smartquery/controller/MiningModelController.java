@@ -3,6 +3,7 @@ package com.smartquery.controller;
 import com.smartquery.common.Result;
 import com.smartquery.entity.MiningModel;
 import com.smartquery.entity.ModelExecution;
+import com.smartquery.entity.PredictionResult;
 import com.smartquery.mapper.MiningModelMapper;
 import com.smartquery.mapper.ModelExecutionMapper;
 import com.smartquery.service.MiningService;
@@ -82,9 +83,9 @@ public class MiningModelController {
     }
 
     @PostMapping("/{id}/publish")
-    public Result<MiningModel> publish(@PathVariable Long id) {
+    public Result<MiningModel> publish(@PathVariable Long id, @RequestBody(required = false) Map<String, Object> body) {
         try {
-            return Result.ok(miningService.publishModel(id));
+            return Result.ok(miningService.publishModel(id, body));
         } catch (Exception e) {
             log.error("[MINING] Publish model failed: {}", e.getMessage());
             return Result.error(e.getMessage());
@@ -134,8 +135,12 @@ public class MiningModelController {
         if (body.containsKey("enabled")) {
             model.setScheduleEnabled(Boolean.TRUE.equals(body.get("enabled")));
         }
+        if (body.containsKey("mode")) {
+            model.setScheduleMode((String) body.get("mode"));
+        }
         miningModelMapper.updateById(model);
-        log.info("[MINING] Schedule updated for model {}: cron={}, enabled={}", id, model.getScheduleCron(), model.getScheduleEnabled());
+        log.info("[MINING] Schedule updated for model {}: cron={}, enabled={}, mode={}",
+            id, model.getScheduleCron(), model.getScheduleEnabled(), model.getScheduleMode());
         return Result.ok(model);
     }
 
@@ -154,5 +159,42 @@ public class MiningModelController {
             log.error("[MINING] Predict failed for model {}: {}", id, e.getMessage());
             return Result.error("预测失败: " + e.getMessage());
         }
+    }
+
+    /**
+     * 批量预测 — 从输入表读取数据，预测后写入结果表
+     */
+    @PostMapping("/{id}/batch-predict")
+    public Result<Map<String, Object>> batchPredict(@PathVariable Long id) {
+        try {
+            Map<String, Object> result = miningService.batchPredict(id);
+            return Result.ok(result);
+        } catch (Exception e) {
+            log.error("[MINING] Batch predict failed for model {}: {}", id, e.getMessage());
+            return Result.error("批量预测失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 训练前校验 — 检查源表、特征列、目标列、数据量
+     */
+    @GetMapping("/{id}/validate")
+    public Result<Map<String, Object>> validate(@PathVariable Long id) {
+        try {
+            return Result.ok(miningService.validateForTraining(id));
+        } catch (Exception e) {
+            log.error("[MINING] Validation failed for model {}: {}", id, e.getMessage());
+            return Result.error("校验失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 查询预测结果
+     */
+    @GetMapping("/{id}/predictions")
+    public Result<List<PredictionResult>> predictions(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "100") int limit) {
+        return Result.ok(miningService.getPredictionResults(id, limit));
     }
 }
