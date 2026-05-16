@@ -26,6 +26,9 @@ import java.util.*;
 @RequiredArgsConstructor
 public class MiningPredictionService {
 
+    @org.springframework.beans.factory.annotation.Value("${smart-query.mining.predict-timeout-ms:120000}")
+    private int predictTimeoutMs;
+
     private final MiningModelMapper miningModelMapper;
     private final DataSourceMapper dataSourceMapper;
     private final PredictionResultMapper predictionResultMapper;
@@ -40,11 +43,14 @@ public class MiningPredictionService {
         }
         MiningModel model = miningModelMapper.selectById(modelId);
         validateForPrediction(model);
+        if (saveTable != null && !saveTable.isBlank()) {
+            com.smartquery.common.IdentifierValidator.validateTableName(saveTable);
+        }
 
         logPredictionEvent(model, "mining_prediction_start", Map.of("inputRows", inputRows.size(), "mode", "single"));
 
         String pythonCode = buildPredictionScript(model, inputRows, saveTable);
-        PythonResult result = pythonExecutor.execute(pythonCode, model.getDataSourceId(), 120000);
+        PythonResult result = pythonExecutor.execute(pythonCode, model.getDataSourceId(), predictTimeoutMs);
 
         if (result.exitCode() != 0) {
             logPredictionEvent(model, "mining_prediction_complete", Map.of("status", "failed", "error", truncateLog(result.stderr(), 300)));
@@ -64,13 +70,26 @@ public class MiningPredictionService {
 
     @SuppressWarnings("unchecked")
     public Map<String, Object> batchPredict(Long modelId) {
+        return batchPredict(modelId, null);
+    }
+
+    public Map<String, Object> batchPredict(Long modelId, String overrideResultTable) {
         MiningModel model = miningModelMapper.selectById(modelId);
         validateForPrediction(model);
 
-        String inputTable = model.getPredictInputTable();
-        String resultTable = model.getPredictResultTable();
+        String inputTable = model.getPredictInputTable() != null && !model.getPredictInputTable().isBlank()
+            ? model.getPredictInputTable() : model.getSourceTable();
+        String resultTable = overrideResultTable != null && !overrideResultTable.isBlank()
+            ? overrideResultTable : model.getPredictResultTable();
         if (inputTable == null || inputTable.isBlank()) {
-            throw new IllegalStateException("未配置预测输入表，请在模型设置中指定");
+            throw new IllegalStateException("未配置预测输入表且模型无源表，请在模型设置中指定");
+        }
+        com.smartquery.common.IdentifierValidator.validateTableName(inputTable);
+        if (resultTable != null && !resultTable.isBlank()) {
+            com.smartquery.common.IdentifierValidator.validateTableName(resultTable);
+        }
+        if (model.getPredictInputFilter() != null && !model.getPredictInputFilter().isBlank()) {
+            com.smartquery.common.IdentifierValidator.validateFilter(model.getPredictInputFilter());
         }
 
         String batchId = "batch_" + System.currentTimeMillis();
@@ -157,14 +176,15 @@ public class MiningPredictionService {
         if (filter == null || filter.isBlank()) return null;
         java.time.format.DateTimeFormatter fmt = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd");
         java.time.LocalDate today = java.time.LocalDate.now();
+        String todayStr = "'" + today.format(fmt) + "'";
         String resolved = filter;
-        resolved = resolved.replace("${etl_date}", today.format(fmt));
-        resolved = resolved.replace("${today}", today.format(fmt));
-        resolved = resolved.replace("${yesterday}", today.minusDays(1).format(fmt));
+        resolved = resolved.replace("${etl_date}", todayStr);
+        resolved = resolved.replace("${today}", todayStr);
+        resolved = resolved.replace("${yesterday}", "'" + today.minusDays(1).format(fmt) + "'");
         java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\$\\{today-(\\d+)\\}").matcher(resolved);
         while (m.find()) {
             int daysAgo = Integer.parseInt(m.group(1));
-            resolved = resolved.replace(m.group(0), today.minusDays(daysAgo).format(fmt));
+            resolved = resolved.replace(m.group(0), "'" + today.minusDays(daysAgo).format(fmt) + "'");
         }
         return resolved;
     }
@@ -313,8 +333,10 @@ public class MiningPredictionService {
     }
 
     private String truncateLog(String log, int maxLen) {
-        if (log == null || log.length() <= maxLen) return log;
-        return log.substring(0, maxLen) + "\n... (truncated)";
+        if (log == null) return null;
+        String cleaned = log.replaceAll("[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f]", "");
+        if (cleaned.length() <= maxLen) return cleaned;
+        return cleaned.substring(0, maxLen) + "\n... (truncated)";
     }
 
     private void logPredictionEvent(MiningModel model, String eventType, Map<String, Object> extra) {

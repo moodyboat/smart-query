@@ -13,25 +13,56 @@ public class RateLimiter {
 
     private final Map<String, Bucket> buckets = new ConcurrentHashMap<>();
 
-    public boolean tryAcquire(String key, int maxPerMinute) {
-        Bucket bucket = buckets.computeIfAbsent(key, k -> new Bucket(maxPerMinute));
-        return bucket.tryAcquire();
+    @org.springframework.scheduling.annotation.Scheduled(fixedRate = 120_000)
+    public void cleanup() {
+        long now = System.currentTimeMillis();
+        int before = buckets.size();
+        buckets.entrySet().removeIf(e -> now - e.getValue().windowStart > 120_000);
+        int removed = before - buckets.size();
+        if (removed > 0) {
+            log.debug("[RATE] Cleaned up {} expired rate limiter buckets", removed);
+        }
     }
 
-    /**
-     * 尝试获取令牌，返回剩余容量信息
-     */
+    public record AcquireResult(boolean allowed, int remaining, int max) {}
+
+    public AcquireResult tryAcquireTiered(String userId, String operation, int globalLimit, int userLimit, int operationLimit) {
+        AcquireResult globalResult = tryAcquireWithInfo("global", globalLimit);
+        if (!globalResult.allowed()) {
+            log.warn("[RATE] Global limit reached: remaining={}/{}", globalResult.remaining(), globalLimit);
+            return globalResult;
+        }
+        AcquireResult userResult = null;
+        if (userId != null && !userId.isBlank()) {
+            userResult = tryAcquireWithInfo("user:" + userId, userLimit);
+            if (!userResult.allowed()) {
+                log.warn("[RATE] User {} limit reached: remaining={}/{}", userId, userResult.remaining(), userLimit);
+                return userResult;
+            }
+        }
+        AcquireResult opResult = null;
+        if (operation != null && !operation.isBlank()) {
+            opResult = tryAcquireWithInfo("op:" + userId + ":" + operation, operationLimit);
+            if (!opResult.allowed()) {
+                log.warn("[RATE] Operation {} for user {}: remaining={}/{}", operation, userId, opResult.remaining(), operationLimit);
+                return opResult;
+            }
+        }
+        int minRemaining = globalResult.remaining();
+        if (userResult != null) minRemaining = Math.min(minRemaining, userResult.remaining());
+        if (opResult != null) minRemaining = Math.min(minRemaining, opResult.remaining());
+        return new AcquireResult(true, minRemaining, globalLimit);
+    }
+
     public AcquireResult tryAcquireWithInfo(String key, int maxPerMinute) {
         Bucket bucket = buckets.computeIfAbsent(key, k -> new Bucket(maxPerMinute));
         return bucket.tryAcquireWithInfo();
     }
 
-    public void cleanup() {
-        long now = System.currentTimeMillis();
-        buckets.entrySet().removeIf(e -> now - e.getValue().windowStart > 120_000);
+    public boolean tryAcquire(String key, int maxPerMinute) {
+        Bucket bucket = buckets.computeIfAbsent(key, k -> new Bucket(maxPerMinute));
+        return bucket.tryAcquire();
     }
-
-    public record AcquireResult(boolean allowed, int remaining, int max) {}
 
     private static class Bucket {
         final int maxPerMinute;

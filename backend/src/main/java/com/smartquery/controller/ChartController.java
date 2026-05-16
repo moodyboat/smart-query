@@ -24,6 +24,9 @@ public class ChartController {
     private final SqlSafetyValidator sqlSafetyValidator;
     private final ObjectMapper objectMapper;
 
+    @org.springframework.beans.factory.annotation.Value("${smart-query.sql-safety.max-rows:1000}")
+    private int maxRows;
+
     @GetMapping("/{id}")
     public Result<Chart> get(@PathVariable Long id) {
         return Result.ok(chartMapper.selectById(id));
@@ -90,7 +93,7 @@ public class ChartController {
         // 自动添加 LIMIT（正则检测已存在的 LIMIT 子句）
         if (!java.util.regex.Pattern.compile("\\bLIMIT\\b", java.util.regex.Pattern.CASE_INSENSITIVE)
                 .matcher(sql).find()) {
-            sql += " LIMIT 1000";
+            sql += " LIMIT " + maxRows;
         }
 
         try {

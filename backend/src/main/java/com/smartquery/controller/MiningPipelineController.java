@@ -2,14 +2,19 @@ package com.smartquery.controller;
 
 import com.smartquery.common.BusinessException;
 import com.smartquery.common.Result;
+import com.smartquery.entity.MiningModel;
 import com.smartquery.entity.MiningPipeline;
+import com.smartquery.mapper.MiningModelMapper;
 import com.smartquery.mapper.MiningPipelineMapper;
+import com.smartquery.service.MiningService;
 import com.smartquery.service.PipelineService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -20,7 +25,9 @@ import java.util.Map;
 public class MiningPipelineController {
 
     private final MiningPipelineMapper miningPipelineMapper;
+    private final MiningModelMapper miningModelMapper;
     private final PipelineService pipelineService;
+    private final MiningService miningService;
 
     @GetMapping
     public Result<List<MiningPipeline>> list(
@@ -61,12 +68,31 @@ public class MiningPipelineController {
         if (updates.getEdges() != null) existing.setEdges(updates.getEdges());
         if (updates.getStatus() != null) existing.setStatus(updates.getStatus());
         miningPipelineMapper.updateById(existing);
+
+        if (existing.getNodes() != null) {
+            try {
+                miningService.syncPipelineToModel(id);
+            } catch (Exception e) {
+                log.warn("[PIPELINE] Failed to sync pipeline {} to model: {}", id, e.getMessage());
+            }
+        }
+
         return Result.ok(existing);
     }
 
     @DeleteMapping("/{id}")
     public Result<Void> delete(@PathVariable Long id) {
-        miningPipelineMapper.deleteById(id);
+        MiningPipeline pipeline = miningPipelineMapper.selectById(id);
+        if (pipeline == null || Integer.valueOf(1).equals(pipeline.getDeleted())) {
+            throw new BusinessException("流水线不存在: " + id);
+        }
+        if ("running".equals(pipeline.getStatus())) {
+            throw new BusinessException("流水线正在运行中，无法删除");
+        }
+        miningPipelineMapper.update(null,
+            new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<MiningPipeline>()
+                .eq(MiningPipeline::getId, id)
+                .set(MiningPipeline::getDeleted, 1));
         return Result.ok();
     }
 
@@ -89,5 +115,46 @@ public class MiningPipelineController {
             throw new BusinessException("nodeId 不能为空");
         }
         return Result.ok(pipelineService.previewStep(id, nodeId));
+    }
+
+    @GetMapping("/{id}/sync-status")
+    public Result<Map<String, Object>> syncStatus(@PathVariable Long id) {
+        MiningPipeline pipeline = miningPipelineMapper.selectById(id);
+        if (pipeline == null || Integer.valueOf(1).equals(pipeline.getDeleted())) {
+            throw new BusinessException("流水线不存在: " + id);
+        }
+
+        MiningModel model = miningModelMapper.selectOne(
+            new LambdaQueryWrapper<MiningModel>()
+                .eq(MiningModel::getPipelineId, id)
+                .eq(MiningModel::getDeleted, 0)
+                .last("LIMIT 1"));
+
+        Map<String, Object> status = new LinkedHashMap<>();
+        status.put("pipelineId", id);
+        status.put("hasLinkedModel", model != null);
+
+        if (model != null) {
+            status.put("modelId", model.getId());
+            status.put("modelName", model.getName());
+            status.put("modelUpdatedAt", model.getUpdatedAt());
+            status.put("pipelineUpdatedAt", pipeline.getUpdatedAt());
+            status.put("lastSyncedAt", pipeline.getLastSyncedAt());
+
+            LocalDateTime synced = pipeline.getLastSyncedAt();
+            LocalDateTime pUpdated = pipeline.getUpdatedAt();
+            LocalDateTime mUpdated = model.getUpdatedAt();
+            boolean inSync = synced != null
+                && (pUpdated == null || !synced.isBefore(pUpdated))
+                && (mUpdated == null || !synced.isBefore(mUpdated));
+            status.put("inSync", inSync);
+            if (!inSync) {
+                status.put("reason", synced == null ? "从未同步" : "pipeline 或 model 已修改但未同步");
+            }
+        } else {
+            status.put("inSync", true);
+        }
+
+        return Result.ok(status);
     }
 }

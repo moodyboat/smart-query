@@ -18,7 +18,10 @@
         <div v-for="p in filteredPipelines" :key="p.id" class="pipeline-card" @click="openPipeline(p)">
           <div class="pipeline-card-header">
             <span class="pipeline-name">{{ p.name }}</span>
-            <el-tag :type="statusType(p.status)" size="small">{{ statusLabel(p.status) }}</el-tag>
+            <div style="display: flex; gap: 4px; align-items: center;">
+              <el-tag v-if="p.sourceType === 'chat'" type="info" size="small" effect="plain">对话构建</el-tag>
+              <el-tag :type="statusType(p.status)" size="small">{{ statusLabel(p.status) }}</el-tag>
+            </div>
           </div>
           <div class="pipeline-card-meta">
             <span>{{ dataSourceName(p.dataSourceId) }}</span>
@@ -48,6 +51,16 @@
       <div class="editor-toolbar">
         <el-button size="small" @click="closeEditor">← 返回</el-button>
         <el-input v-model="editingPipeline.name" size="small" style="width: 200px" />
+        <div v-if="editingPipeline.sourceType === 'chat'" style="display: flex; align-items: center; gap: 4px;">
+          <el-tag type="info" size="small" effect="plain">对话构建</el-tag>
+        </div>
+        <div v-if="linkedModel" style="display: flex; align-items: center; gap: 4px; margin-left: 8px;">
+          <span style="font-size: 12px; color: var(--text-muted);">关联模型:</span>
+          <el-tag size="small" type="success">{{ linkedModel.name }}</el-tag>
+        </div>
+        <el-tooltip v-if="syncStatus && !syncStatus.inSync" :content="syncStatus.reason || '模型与流程未同步'" placement="bottom">
+          <el-tag type="warning" size="small" effect="plain" style="margin-left: 8px; cursor: pointer">未同步</el-tag>
+        </el-tooltip>
         <div class="toolbar-actions">
           <el-button size="small" @click="savePipeline" :loading="saving">保存</el-button>
           <el-button size="small" type="primary" @click="runPipeline" :loading="running" :disabled="!canRun">
@@ -157,6 +170,7 @@
               <!-- Connection with drop zone -->
               <div
                 class="flow-connector"
+                @click="openAddStep(idx + 1)"
                 @dragover.prevent="onConnectorDragOver($event)"
                 @dragleave="onConnectorDragLeave($event)"
                 @drop.stop="onConnectorDrop($event, idx + 1)"
@@ -173,23 +187,24 @@
       <div v-if="lastRunResult" class="run-results">
         <div class="results-header">
           <span class="results-title">执行结果</span>
-          <el-tag :type="lastRunResult.status === 'trained' ? 'success' : lastRunResult.status === 'trained_failed' ? 'danger' : 'warning'" size="small">
-            {{ lastRunResult.status === 'trained' ? '训练成功' : lastRunResult.status === 'trained_failed' ? '训练失败' : lastRunResult.status }}
+          <el-tag :type="(lastRunResult.status === 'trained' || lastRunResult.status === 'success') ? 'success' : 'danger'" size="small">
+            {{ (lastRunResult.status === 'trained' || lastRunResult.status === 'success') ? '训练成功' : '训练失败' }}
           </el-tag>
+          <span v-if="lastRunResult.modelName" style="font-size:12px;color:var(--text-muted);margin-left:8px">模型: {{ lastRunResult.modelName }} (#{{ lastRunResult.modelId }})</span>
           <el-button size="small" text @click="lastRunResult = null" style="margin-left: auto">关闭</el-button>
         </div>
         <div v-if="lastRunResult.metrics" class="results-metrics">
           <template v-for="(val, key) in parseMetrics(lastRunResult.metrics)" :key="key">
-            <div class="result-metric">
-              <span class="rm-value">{{ typeof val === 'number' ? (val * 100).toFixed(1) + '%' : val }}</span>
+            <div v-if="!key.startsWith('confusion_matrix') && !key.startsWith('class_labels')" class="result-metric">
+              <span class="rm-value">{{ typeof val === 'number' ? formatMetricValue(key, val) : val }}</span>
               <span class="rm-label">{{ metricLabel(key) }}</span>
             </div>
           </template>
         </div>
-        <div v-if="lastRunResult.modelType" class="results-meta">
+        <div v-if="lastRunResult.modelType || lastRunResult.model_type" class="results-meta">
           <span>{{ algorithmLabel(lastRunResult.algorithm) }}</span>
           <span>·</span>
-          <span>{{ modelTypeLabel(lastRunResult.modelType) }}</span>
+          <span>{{ modelTypeLabel(lastRunResult.modelType || lastRunResult.model_type) }}</span>
           <span>·</span>
           <span>表: {{ lastRunResult.sourceTable }}</span>
         </div>
@@ -454,19 +469,51 @@
               </el-form-item>
               <el-form-item label="特征变换">
                 <div class="transform-list">
-                  <div v-for="(tf, i) in (selectedNode.config.transforms || [])" :key="i" class="transform-row">
-                    <el-select v-model="tf.type" style="width: 120px" size="small" :teleported="false">
-                      <el-option label="对数变换" value="log" />
-                      <el-option label="多项式" value="polynomial" />
-                      <el-option label="分箱" value="binning" />
-                      <el-option label="标准化" value="standardize" />
-                      <el-option label="交互项" value="interaction" />
+                  <div v-for="(tf, i) in (selectedNode.config.transforms || [])" :key="i" class="transform-row" style="flex-wrap: wrap; gap: 4px;">
+                    <el-select v-model="tf.type" style="width: 120px" size="small" :teleported="false" @change="onTransformTypeChange(tf)">
+                      <el-option-group label="数值变换">
+                        <el-option label="对数变换" value="log" />
+                        <el-option label="多项式" value="polynomial" />
+                        <el-option label="标准化" value="standardize" />
+                        <el-option label="交互项" value="interaction" />
+                      </el-option-group>
+                      <el-option-group label="分箱">
+                        <el-option label="等宽分箱" value="binning" />
+                      </el-option-group>
+                      <el-option-group label="编码">
+                        <el-option label="目标编码" value="target_encode" />
+                        <el-option label="频率编码" value="frequency_encode" />
+                      </el-option-group>
+                      <el-option-group label="日期">
+                        <el-option label="日期提取" value="date_extract" />
+                      </el-option-group>
                     </el-select>
-                    <el-select v-model="tf.columns" multiple placeholder="选择列" style="flex: 1" size="small" :teleported="false" filterable>
+                    <el-select v-model="tf.columns" multiple placeholder="选择列" style="flex: 1; min-width: 120px" size="small" :teleported="false" filterable>
                       <el-option v-for="col in columnOptions" :key="col.name" :label="col.name" :value="col.name" />
                     </el-select>
-                    <el-input-number v-if="tf.type === 'polynomial'" v-model="tf.degree" :min="2" :max="4" size="small" style="width: 80px" />
-                    <el-input-number v-if="tf.type === 'binning'" v-model="tf.bins" :min="2" :max="20" size="small" style="width: 80px" />
+                    <!-- Polynomial degree -->
+                    <el-input-number v-if="tf.type === 'polynomial'" v-model="tf.degree" :min="2" :max="4" size="small" style="width: 80px" placeholder="阶数" />
+                    <!-- Binning config -->
+                    <template v-if="tf.type === 'binning'">
+                      <el-select v-model="tf.strategy" style="width: 100px" size="small" :teleported="false">
+                        <el-option label="等宽" value="equal_width" />
+                        <el-option label="等频" value="equal_freq" />
+                        <el-option label="最优" value="optimal" />
+                        <el-option label="自定义" value="custom" />
+                      </el-select>
+                      <el-input-number v-model="tf.bins" :min="2" :max="20" size="small" style="width: 70px" placeholder="箱数" />
+                      <el-input v-if="tf.strategy === 'custom'" v-model="tf.edgesInput" placeholder="边界,如:0,30,60,100" size="small" style="width: 160px" @change="parseEdges(tf)" />
+                    </template>
+                    <!-- Date extract parts -->
+                    <template v-if="tf.type === 'date_extract'">
+                      <el-select v-model="tf.partsArr" multiple placeholder="提取部分" style="width: 180px" size="small" :teleported="false">
+                        <el-option label="年" value="year" />
+                        <el-option label="月" value="month" />
+                        <el-option label="日" value="day" />
+                        <el-option label="星期" value="weekday" />
+                        <el-option label="季度" value="quarter" />
+                      </el-select>
+                    </template>
                     <el-button size="small" text type="danger" @click="removeTransform(i)">X</el-button>
                   </div>
                   <el-button size="small" type="primary" link @click="addTransform">+ 添加变换</el-button>
@@ -612,9 +659,9 @@ import { useMiningStore } from '../stores/mining'
 import {
   fetchMiningPipelines, fetchMiningPipeline, createMiningPipeline,
   updateMiningPipeline, deleteMiningPipeline, executeMiningPipeline,
-  validateMiningPipeline, previewStepPipeline, fetchDataSourceTables, fetchTableColumns
+  validateMiningPipeline, previewStepPipeline, fetchDataSourceTables, fetchTableColumns,
+  fetchModelByPipeline, fetchPipelineSyncStatus
 } from '../api'
-import axios from 'axios'
 import { useAlgorithms } from '../composables/useAlgorithms.js'
 
 const props = defineProps({
@@ -656,6 +703,8 @@ const lastRunResult = ref(null)
 const previewingNodeId = ref(null)
 const previewResult = ref(null)
 const showPreviewDrawer = ref(false)
+const linkedModel = ref(null)
+const syncStatus = ref(null)
 
 // Node selection
 const selectedNodeId = ref(null)
@@ -708,17 +757,19 @@ const currentAlgoParams = computed(() => {
 const selectedFeatCount = computed(() => Object.values(featChecked.value).filter(Boolean).length)
 
 const canRun = computed(() => {
-  const hasTable = pipelineNodes.value.some(n => n.type === 'data_source' && n.config?.table)
+  const dsNode = pipelineNodes.value.find(n => n.type === 'data_source')
+  const hasTable = dsNode?.config?.table
   const hasTraining = pipelineNodes.value.some(n => n.type === 'training')
   const featNode = pipelineNodes.value.find(n => n.type === 'feature_engineering')
-  const hasFeatures = featNode?.config?.featureColumns && (() => {
+  let hasFeatures = false
+  if (featNode?.config?.featureColumns) {
     try {
       const fc = featNode.config.featureColumns
       const arr = Array.isArray(fc) ? fc : JSON.parse(fc)
-      return arr.length > 0
-    } catch { return false }
-  })()
-  return pipelineNodes.value.length >= 3 && hasTable && hasTraining && hasFeatures
+      hasFeatures = arr.length > 0
+    } catch { hasFeatures = false }
+  }
+  return pipelineNodes.value.length >= 3 && !!hasTable && hasTraining && hasFeatures
 })
 
 const filteredPipelines = computed(() => {
@@ -799,7 +850,12 @@ function nodeSummary(node) {
       try {
         fc = c.featureColumns ? (Array.isArray(c.featureColumns) ? c.featureColumns : JSON.parse(c.featureColumns)) : []
       } catch { fc = [] }
-      return fc.length ? `${fc.length} 列特征` + (c.targetColumn ? ` → ${c.targetColumn}` : '') : '未配置'
+      const tfCount = Array.isArray(c.transforms) ? c.transforms.length : 0
+      const parts = []
+      if (fc.length) parts.push(`${fc.length} 列特征`)
+      if (c.targetColumn) parts.push(`→ ${c.targetColumn}`)
+      if (tfCount) parts.push(`${tfCount} 变换`)
+      return parts.length ? parts.join(' ') : '未配置'
     }
     case 'training': {
       return c.algorithm ? getAlgorithmLabel(c.algorithm) : '未配置'
@@ -845,8 +901,10 @@ function isNodeConfigured(node) {
     case 'preprocessing': return true
     case 'fill_missing': return true
     case 'feature_engineering': {
-      const fc = c.featureColumns ? (typeof c.featureColumns === 'string' ? JSON.parse(c.featureColumns) : c.featureColumns) : []
-      return fc.length > 0
+      try {
+        const fc = c.featureColumns ? (typeof c.featureColumns === 'string' ? JSON.parse(c.featureColumns) : c.featureColumns) : []
+        return fc.length > 0
+      } catch { return false }
     }
     case 'training': return !!c.algorithm
     case 'evaluation': return true
@@ -963,6 +1021,11 @@ function openPipeline(p) {
   showNodeConfig.value = false
   runningNodeId.value = null
   doneNodeIds.value = new Set()
+  linkedModel.value = null
+  syncStatus.value = null
+  fetchModelByPipeline(p.id).then(m => { linkedModel.value = m }).catch(() => {})
+  fetchPipelineSyncStatus(p.id).then(s => { syncStatus.value = s }).catch(() => {})
+  loadTableAndColumns()
 }
 
 function normalizeNodes(nodes) {
@@ -980,6 +1043,20 @@ function normalizeNodes(nodes) {
     // Normalize featureColumns: array → JSON string for consistency
     if (n.type === 'feature_engineering' && Array.isArray(config.featureColumns)) {
       config.featureColumns = JSON.stringify(config.featureColumns)
+    }
+    // Ensure transforms is a reactive array for feature_engineering nodes
+    if (n.type === 'feature_engineering') {
+      if (!config.transforms) config.transforms = []
+      else if (!Array.isArray(config.transforms)) config.transforms = []
+      // Normalize date_extract partsArr for UI
+      for (const tf of config.transforms) {
+        if (tf.type === 'date_extract' && tf.parts && !tf.partsArr) {
+          tf.partsArr = tf.parts.split(',').map(s => s.trim()).filter(Boolean)
+        }
+        if (tf.type === 'binning' && tf.edges && !tf.edgesInput) {
+          tf.edgesInput = tf.edges.join(',')
+        }
+      }
     }
     return { ...n, config }
   })
@@ -1003,13 +1080,24 @@ async function savePipeline() {
   if (!editingPipeline.value) return
   saving.value = true
   try {
-    // Clean float precision in training node hyperparams
+    // Clean float precision in training node hyperparams & normalize transforms
     for (const node of pipelineNodes.value) {
       if (node.type === 'training' && node.config?.hyperparams) {
         const params = algorithmParams(node.config.algorithm)
         for (const p of params) {
           if (p.type === 'float' && typeof node.config.hyperparams[p.key] === 'number') {
             node.config.hyperparams[p.key] = Math.round(node.config.hyperparams[p.key] * 10000) / 10000
+          }
+        }
+      }
+      // Normalize feature engineering transforms before save
+      if (node.type === 'feature_engineering' && node.config?.transforms) {
+        for (const tf of node.config.transforms) {
+          if (tf.type === 'date_extract' && tf.partsArr) {
+            tf.parts = tf.partsArr.join(',')
+          }
+          if (tf.type === 'binning' && tf.strategy === 'custom' && tf.edgesInput) {
+            tf.edges = tf.edgesInput.split(',').map(v => parseFloat(v.trim())).filter(v => !isNaN(v))
           }
         }
       }
@@ -1039,6 +1127,9 @@ async function savePipeline() {
       ElMessage.success('已保存')
     }
     await loadPipelines()
+    if (editingPipeline.value?.id) {
+      fetchPipelineSyncStatus(editingPipeline.value.id).then(s => { syncStatus.value = s }).catch(() => {})
+    }
   } catch (e) {
     ElMessage.error('保存失败: ' + (e.message || ''))
   } finally {
@@ -1055,23 +1146,50 @@ async function runPipeline() {
   lastRunResult.value = null
 
   try {
-    // Animate through nodes while backend executes
+    // Start backend execution in parallel with animation
+    let backendDone = false
     const executePromise = executeMiningPipeline(editingPipeline.value.id)
-    const animDelay = 600
-    for (const node of pipelineNodes.value) {
-      runningNodeId.value = node.id
-      await new Promise(r => setTimeout(r, animDelay))
-      doneNodeIds.value.add(node.id)
+      .then(r => { backendDone = true; return r })
+      .catch(e => { backendDone = true; throw e })
+
+    // Animate through nodes while backend executes
+    const nodeCount = pipelineNodes.value.length
+    const animDelay = Math.max(400, Math.min(1200, 6000 / nodeCount))
+    for (let i = 0; i < nodeCount; i++) {
+      if (backendDone) {
+        // Backend finished early — mark remaining nodes done instantly
+        for (let j = i; j < nodeCount; j++) doneNodeIds.value.add(pipelineNodes.value[j].id)
+        runningNodeId.value = null
+        break
+      }
+      runningNodeId.value = pipelineNodes.value[i].id
+      await Promise.race([
+        new Promise(r => setTimeout(r, animDelay)),
+        executePromise.then(() => {}).catch(() => {}) // resolves when backend finishes
+      ])
+      doneNodeIds.value.add(pipelineNodes.value[i].id)
     }
     runningNodeId.value = null
 
-    // Wait for backend execution to complete
+    // Wait for backend execution to complete (may already be done)
     const result = await executePromise
     lastRunResult.value = result
 
     await loadPipelines()
-    miningStore.loadModels() // Refresh model list in MiningManager
-    ElMessage.success(`流程执行完成 — 模型ID: ${result.modelId}`)
+    miningStore.loadModels()
+
+    // Refresh linked model after execution
+    fetchModelByPipeline(editingPipeline.value.id).then(m => { linkedModel.value = m }).catch(() => {})
+    fetchPipelineSyncStatus(editingPipeline.value.id).then(s => { syncStatus.value = s }).catch(() => {})
+
+    // Show success notification with key metrics
+    const metrics = parseMetrics(result.metrics)
+    const primaryKey = result.modelType === 'regression' ? 'test_r2' : 'test_accuracy'
+    const primary = metrics[primaryKey] ?? metrics[primaryKey.replace('test_', '')]
+    const parts = [`模型 #${result.modelId}`]
+    if (primary != null) parts.push(`${metricLabel(primaryKey)} ${primary < 10 ? primary.toFixed(4) : (primary * 100).toFixed(1) + '%'}`)
+    if (metrics.overfitting_gap != null) parts.push(`过拟合差距 ${(metrics.overfitting_gap * 100).toFixed(1)}%`)
+    ElMessage.success(`流程执行完成 — ${parts.join('，')}`)
   } catch (e) {
     await updateMiningPipeline(editingPipeline.value.id, { status: 'failed' })
     ElMessage.error('执行失败: ' + (e.message || '未知错误'))
@@ -1118,8 +1236,9 @@ function onNodeCmd(cmd, idx) {
       if (value && node.config) node.config.title = value
     }).catch(() => {})
   } else if (cmd === 'delete') {
+    const deletedId = pipelineNodes.value[idx]?.id
     pipelineNodes.value.splice(idx, 1)
-    if (selectedNodeId.value === pipelineNodes.value[idx]?.id) {
+    if (selectedNodeId.value === deletedId) {
       selectedNodeId.value = null
       showNodeConfig.value = false
     }
@@ -1197,8 +1316,27 @@ function onTargetColumnChange(target) {
 function addTransform() {
   if (!selectedNode.value) return
   const transforms = selectedNode.value.config.transforms || []
-  transforms.push({ type: 'log', columns: [], degree: 2, bins: 5 })
+  transforms.push({ type: 'log', columns: [], degree: 2, bins: 5, strategy: 'equal_width', edges: [], edgesInput: '', parts: 'year,month,day', partsArr: ['year', 'month', 'day'] })
   selectedNode.value.config.transforms = [...transforms]
+}
+
+function onTransformTypeChange(tf) {
+  if (tf.type === 'binning') {
+    tf.strategy = tf.strategy || 'equal_width'
+    tf.bins = tf.bins || 5
+  }
+  if (tf.type === 'date_extract') {
+    tf.partsArr = tf.partsArr || ['year', 'month', 'day']
+    tf.parts = tf.parts || 'year,month,day'
+  }
+}
+
+function parseEdges(tf) {
+  if (tf.edgesInput) {
+    tf.edges = tf.edgesInput.split(',').map(v => parseFloat(v.trim())).filter(v => !isNaN(v))
+  } else {
+    tf.edges = []
+  }
 }
 
 function removeTransform(idx) {
@@ -1382,13 +1520,39 @@ function parseMetrics(json) {
 }
 
 function metricLabel(key) {
-  const names = { accuracy: '准确率', precision: '精确率', recall: '召回率', f1: 'F1', mse: 'MSE', rmse: 'RMSE', r2: 'R²' }
+  const names = {
+    accuracy: '准确率', precision: '精确率', recall: '召回率', f1: 'F1',
+    mse: 'MSE', rmse: 'RMSE', r2: 'R²', mae: 'MAE',
+    overfitting_gap: '过拟合差距', cv_mean: 'CV均值', cv_std: 'CV标准差',
+    train_accuracy: '训练准确率', test_accuracy: '测试准确率',
+    train_f1: '训练F1', test_f1: '测试F1',
+    train_mse: '训练MSE', test_mse: '测试MSE',
+    train_r2: '训练R²', test_r2: '测试R²',
+    silhouette_score: '轮廓系数', inertia: '惯性'
+  }
   return names[key] || key
 }
 
+const PERCENT_METRICS = new Set([
+  'accuracy', 'precision', 'recall', 'f1',
+  'train_accuracy', 'test_accuracy', 'train_f1', 'test_f1',
+  'cv_mean', 'overfitting_gap'
+])
+
+function formatMetricValue(key, val) {
+  if (PERCENT_METRICS.has(key)) {
+    return (val * 100).toFixed(1) + '%'
+  }
+  if (key === 'silhouette_score' || key === 'silhouette') {
+    return val.toFixed(4)
+  }
+  return val < 10 ? val.toFixed(4) : val.toFixed(2)
+}
+
 const topFeatures = computed(() => {
-  if (!lastRunResult.value?.featureImportance) return []
-  const parsed = parseMetrics(lastRunResult.value.featureImportance)
+  const fi = lastRunResult.value?.featureImportance || lastRunResult.value?.feature_importance
+  if (!fi) return []
+  const parsed = parseMetrics(fi)
   return Object.entries(parsed)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 8)
@@ -1741,6 +1905,7 @@ const modelTypeLabel = getModelTypeLabel
 .flow-connector:hover {
   background: var(--primary-light);
   border-radius: var(--radius-sm);
+  cursor: pointer;
 }
 
 .flow-connector.connector-drag-over {

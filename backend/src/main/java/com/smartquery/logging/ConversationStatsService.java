@@ -20,6 +20,8 @@ public class ConversationStatsService {
     private final CostTracker costTracker;
     private final Map<String, ToolMetric> toolMetrics = new ConcurrentHashMap<>();
     private final Map<LocalDate, DailySummary> dailySummaries = new ConcurrentHashMap<>();
+    private final List<Map<String, Object>> recentLlmCalls = Collections.synchronizedList(
+        new ArrayList<>(100));
 
     public ConversationStatsService(CostTracker costTracker) {
         this.costTracker = costTracker;
@@ -85,6 +87,18 @@ public class ConversationStatsService {
                 .addTraining());
     }
 
+    public void recordLlmCall(String model, long durationMs, int turn) {
+        Map<String, Object> entry = new LinkedHashMap<>();
+        entry.put("model", model);
+        entry.put("durationMs", durationMs);
+        entry.put("turn", turn);
+        entry.put("timestamp", System.currentTimeMillis());
+        recentLlmCalls.add(entry);
+        if (recentLlmCalls.size() > 100) {
+            recentLlmCalls.subList(0, recentLlmCalls.size() - 100).clear();
+        }
+    }
+
     public Map<String, Object> getStats() {
         Map<String, Object> stats = new LinkedHashMap<>();
 
@@ -106,6 +120,7 @@ public class ConversationStatsService {
         stats.put("toolMetrics", toolStats);
 
         stats.put("dailySummaries", dailySummaries);
+        stats.put("recentLlmCalls", List.copyOf(recentLlmCalls));
 
         return stats;
     }

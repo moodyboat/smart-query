@@ -14,6 +14,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.regex.Pattern;
 
 /**
  * JSONL 对话事件持久化 — 适配 Claude Code 会话日志模式
@@ -34,6 +35,12 @@ public class ConversationEventLogger {
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final DateTimeFormatter TS_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS");
 
+    /** Sensitive data patterns to redact from logs */
+    private static final Pattern PATTERN_PASSWORD = Pattern.compile("(?i)(password|passwd|pwd)\\s*=\\s*[^\\s,;}&]+");
+    private static final Pattern PATTERN_TOKEN = Pattern.compile("(?i)(token|access_token|refresh_token|bearer)\\s*=\\s*[^\\s,;}&]+");
+    private static final Pattern PATTERN_API_KEY = Pattern.compile("(?i)(api_key|apikey|api[-_]secret)\\s*=\\s*[^\\s,;}&]+");
+    private static final Pattern PATTERN_CONN_URL = Pattern.compile("(?i)(mysql|postgres|mongodb|redis|jdbc)://([^:]+):([^@]+)@");
+
     private final ObjectMapper objectMapper;
     private final ExecutorService writeExecutor;
     private final Map<String, PrintWriter> writerCache = new ConcurrentHashMap<>();
@@ -53,15 +60,18 @@ public class ConversationEventLogger {
     public void logEvent(Long conversationId, String traceId, String eventType, Map<String, Object> payload) {
         if (conversationId == null) return;
 
+        Map<String, Object> sanitizedPayload = sanitizePayload(payload);
+
         Map<String, Object> entry = new LinkedHashMap<>();
         entry.put("ts", LocalDateTime.now().format(TS_FMT));
         entry.put("traceId", traceId != null ? traceId : "");
         entry.put("conversationId", conversationId);
         entry.put("event", eventType);
-        entry.put("payload", payload != null ? payload : Map.of());
+        entry.put("payload", sanitizedPayload);
 
         writeExecutor.submit(() -> {
             try {
+                rotateIfOversized(conversationId);
                 PrintWriter writer = getWriter(conversationId);
                 String json = objectMapper.writeValueAsString(entry);
                 writer.println(json);
@@ -120,6 +130,35 @@ public class ConversationEventLogger {
             }
         }
         return filtered;
+    }
+
+    /**
+     * Check if the current log file exceeds MAX_FILE_SIZE_BYTES and rotate it inline.
+     * Runs on the write executor thread so no extra synchronization is needed.
+     */
+    private void rotateIfOversized(Long conversationId) {
+        String dateKey = LocalDate.now().format(DATE_FMT);
+        Path file = Paths.get(BASE_DIR, dateKey, conversationId + ".jsonl");
+        if (!Files.exists(file)) return;
+
+        try {
+            if (Files.size(file) > MAX_FILE_SIZE_BYTES) {
+                // Close existing writer so buffers are flushed before rename
+                String cacheKey = dateKey + "/" + conversationId;
+                PrintWriter oldWriter = writerCache.remove(cacheKey);
+                if (oldWriter != null) {
+                    oldWriter.close();
+                }
+
+                String timestamp = String.valueOf(System.currentTimeMillis());
+                Path rotated = Paths.get(BASE_DIR, dateKey,
+                    conversationId + "." + timestamp + ".jsonl");
+                Files.move(file, rotated, StandardCopyOption.REPLACE_EXISTING);
+                log.info("[JSONL] rotated oversized file {} -> {}", file.getFileName(), rotated.getFileName());
+            }
+        } catch (IOException e) {
+            log.debug("[JSONL] inline rotation check failed: {}", e.getMessage());
+        }
     }
 
     private PrintWriter getWriter(Long conversationId) throws IOException {
@@ -314,6 +353,44 @@ public class ConversationEventLogger {
             log.debug("[JSONL] cross-date scan failed: {}", e.getMessage());
         }
         return allEvents;
+    }
+
+    /**
+     * 递归过滤 payload 中的敏感数据
+     */
+    @SuppressWarnings("unchecked")
+    Map<String, Object> sanitizePayload(Map<String, Object> payload) {
+        if (payload == null || payload.isEmpty()) return payload != null ? payload : Map.of();
+
+        Map<String, Object> sanitized = new LinkedHashMap<>(payload.size());
+        for (Map.Entry<String, Object> entry : payload.entrySet()) {
+            sanitized.put(entry.getKey(), sanitizeValue(entry.getValue()));
+        }
+        return sanitized;
+    }
+
+    private Object sanitizeValue(Object value) {
+        if (value instanceof String s) {
+            return sanitizeString(s);
+        } else if (value instanceof Map<?, ?> m) {
+            return sanitizePayload((Map<String, Object>) m);
+        } else if (value instanceof List<?> list) {
+            List<Object> result = new ArrayList<>(list.size());
+            for (Object item : list) {
+                result.add(sanitizeValue(item));
+            }
+            return result;
+        }
+        return value;
+    }
+
+    private String sanitizeString(String value) {
+        String result = value;
+        result = PATTERN_PASSWORD.matcher(result).replaceAll("$1=***");
+        result = PATTERN_TOKEN.matcher(result).replaceAll("$1=***");
+        result = PATTERN_API_KEY.matcher(result).replaceAll("$1=***");
+        result = PATTERN_CONN_URL.matcher(result).replaceAll("$1://$2:***@");
+        return result;
     }
 
     /**

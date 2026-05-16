@@ -17,8 +17,6 @@ import org.springframework.stereotype.Component;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 @Slf4j
 @Component
@@ -43,7 +41,7 @@ public class MiningModelTool implements LlmTool {
     public Map<String, Object> getJsonSchema() {
         Map<String, Object> props = new LinkedHashMap<>();
         props.put("action", Map.of("type", "string", "description",
-            "操作类型: list=查看模型列表, get=查看模型详情, create=创建新模型, update=更新模型配置, update_params=修改超参数, train=训练, validate=验证模型(训练前检查数据质量), publish=发布, offline=下线, predict=预测, batch_predict=批量预测(从输入表), explore_data=探索数据表结构和统计, list_algorithms=列出可用算法, create_algorithm=创建自定义算法, compare=并行训练多个算法并对比"));
+            "操作类型: list=查看模型列表, get=查看模型详情, create=创建新模型, update=更新模型配置, update_params=修改超参数, train=训练, retrain=更新配置并重新训练(支持修改特征/参数后一步重训并对比指标), tune=参数网格搜索(自动探索参数组合并对比), sync_pipeline=同步模型与关联流程, validate=验证模型(训练前检查数据质量), publish=发布, offline=下线, predict=预测, batch_predict=批量预测(从输入表), explore_data=探索数据表结构和统计, list_algorithms=列出可用算法, create_algorithm=创建自定义算法, compare=并行训练多个算法并对比, history=查看训练历史"));
         props.put("model_id", Map.of("type", "integer", "description", "模型ID (list操作不需要)"));
         props.put("name", Map.of("type", "string", "description", "模型名称"));
         props.put("algorithm", Map.of("type", "string", "description", "算法标识 (可通过 list_algorithms 查看所有可用算法，包括自定义算法)"));
@@ -58,19 +56,22 @@ public class MiningModelTool implements LlmTool {
         props.put("save_table", Map.of("type", "string", "description", "预测结果保存到的表名, 留空则不保存"));
         props.put("input_table", Map.of("type", "string", "description", "批量预测的输入表名 (batch_predict时使用)"));
         props.put("result_table", Map.of("type", "string", "description", "批量预测结果写入的表名 (batch_predict时使用)"));
-        props.put("input_filter", Map.of("type", "string", "description", "输入表筛选条件 (publish时使用), 支持${etl_date}等变量"));
+        props.put("input_filter", Map.of("type", "string", "description", "输入表筛选条件 (publish时使用), 支持${etl_date}变量(自动替换为当天日期), 如 application_date <= ${etl_date}"));
         props.put("schedule_enabled", Map.of("type", "boolean", "description", "发布时是否启用定时调度 (publish时使用)"));
-        props.put("schedule_cron", Map.of("type", "string", "description", "调度间隔分钟数 (publish时使用), 如 */60 表示每小时"));
+        props.put("schedule_cron", Map.of("type", "string", "description", "标准5字段cron表达式 (publish时使用), 如 */30 * * * *=每30分钟, 0 6 * * *=每天6:00, 0 8 * * 1=每周一8:00"));
         props.put("schedule_mode", Map.of("type", "string", "description", "调度模式 (publish时使用): train=定期重训, predict=定期预测"));
         props.put("validation_mode", Map.of("type", "string", "description", "验证模式: train_test=普通训练测试分割, cv=交叉验证, oos=样本外验证(训练+测试+CV), temporal=时间外验证(按时间列分割)"));
         props.put("cv_folds", Map.of("type", "integer", "description", "交叉验证折数(默认5)"));
         props.put("test_size", Map.of("type", "number", "description", "测试集比例(默认0.2)"));
         props.put("temporal_column", Map.of("type", "string", "description", "时间列名(用于时序验证,如created_at,date等)"));
+        props.put("preprocessing", Map.of("type", "object", "description", "预处理配置 (create/update时使用): {\"handleMissing\":\"drop|fill_mean|fill_median\",\"encoding\":\"label|onehot\",\"scaling\":\"none|standard|minmax\"}"));
+        props.put("feature_transforms", Map.of("type", "array", "description", "特征变换列表 (create/retrain时使用), 每个元素: {\"type\":\"...\",\"columns\":[\"col1\"]}。类型: log(对数), binning(分箱), polynomial(多项式), interaction(交互), date_extract(日期提取), target_encode(目标编码), frequency_encode(频率编码)"));
         props.put("table_name", Map.of("type", "string", "description", "数据表名 (explore_data时使用)"));
         props.put("algorithm_id", Map.of("type", "string", "description", "自定义算法英文标识 (create_algorithm时必填)"));
         props.put("python_code_template", Map.of("type", "string", "description", "自定义算法Python训练代码 (create_algorithm时必填), 代码中可用变量: params(超参), X(特征), y(目标), df(原始数据). 必须创建名为clf的模型对象"));
         props.put("model_types", Map.of("type", "array", "description", "自定义算法支持的模型类型 (create_algorithm时使用), 如['classification','regression']"));
         props.put("params_schema", Map.of("type", "array", "description", "自定义算法参数定义 (create_algorithm时使用), 每个参数包含key,label,type,defaultValue等"));
+        props.put("param_grid", Map.of("type", "object", "description", "参数网格 (tune时使用), 键为参数名, 值为候选值数组, 如 {\"n_estimators\": [50, 100, 200], \"max_depth\": [5, 10]}"));
         return Map.of("type", "object", "properties", props, "required", List.of("action"));
     }
 
@@ -87,6 +88,9 @@ public class MiningModelTool implements LlmTool {
                 case "update" -> handleUpdate(input, start);
                 case "update_params" -> handleUpdateParams(input, start);
                 case "train" -> handleTrain(input, start);
+                case "retrain" -> handleRetrain(input, context, start);
+                case "tune" -> handleTune(input, context, start);
+                case "sync_pipeline" -> handleSyncPipeline(input, start);
                 case "publish" -> handlePublish(input, start);
                 case "offline" -> handleOffline(input, start);
                 case "predict" -> handlePredict(input, start);
@@ -194,17 +198,17 @@ public class MiningModelTool implements LlmTool {
                             .toList();
                 }
                 model.setFeatureColumns(objectMapper.writeValueAsString(normalized));
-            } catch (Exception ignored) {}
+            } catch (Exception e) { log.warn("[MINING-TOOL] JSON serialization failed: {}", e.getMessage()); }
         }
         Object params = input.get("hyperparameters");
         if (params != null) {
-            try { model.setHyperparameters(objectMapper.writeValueAsString(params)); } catch (Exception ignored) {}
+            try { model.setHyperparameters(objectMapper.writeValueAsString(params)); } catch (Exception e) { log.warn("[MINING-TOOL] JSON serialization failed: {}", e.getMessage()); }
         }
         if (input.get("description") != null) model.setDescription((String) input.get("description"));
 
         Object preprocessing = input.get("preprocessing");
         if (preprocessing != null) {
-            try { model.setPreprocessing(objectMapper.writeValueAsString(preprocessing)); } catch (Exception ignored) {}
+            try { model.setPreprocessing(objectMapper.writeValueAsString(preprocessing)); } catch (Exception e) { log.warn("[MINING-TOOL] JSON serialization failed: {}", e.getMessage()); }
         }
 
         Object transforms = input.get("feature_transforms");
@@ -214,7 +218,7 @@ public class MiningModelTool implements LlmTool {
                     ? objectMapper.readValue(model.getPreprocessing(), Map.class) : new java.util.HashMap<>();
                 pp.put("transforms", transforms);
                 model.setPreprocessing(objectMapper.writeValueAsString(pp));
-            } catch (Exception ignored) {}
+            } catch (Exception e) { log.warn("[MINING-TOOL] JSON serialization failed: {}", e.getMessage()); }
         }
 
         if (input.get("validation_mode") != null) model.setValidationMode((String) input.get("validation_mode"));
@@ -244,7 +248,7 @@ public class MiningModelTool implements LlmTool {
 
         Object preprocessing = input.get("preprocessing");
         if (preprocessing != null) {
-            try { updates.setPreprocessing(objectMapper.writeValueAsString(preprocessing)); } catch (Exception ignored) {}
+            try { updates.setPreprocessing(objectMapper.writeValueAsString(preprocessing)); } catch (Exception e) { log.warn("[MINING-TOOL] JSON serialization failed: {}", e.getMessage()); }
         }
         Object transforms = input.get("feature_transforms");
         if (transforms != null) {
@@ -254,7 +258,7 @@ public class MiningModelTool implements LlmTool {
                     : new java.util.HashMap<>();
                 pp.put("transforms", transforms);
                 updates.setPreprocessing(objectMapper.writeValueAsString(pp));
-            } catch (Exception ignored) {}
+            } catch (Exception e) { log.warn("[MINING-TOOL] JSON serialization failed: {}", e.getMessage()); }
         }
 
         MiningModel updated = miningService.updateModel(id, updates);
@@ -395,8 +399,12 @@ public class MiningModelTool implements LlmTool {
         Long id = toLong(input.get("model_id"));
         if (id == null) return ToolResult.error(getName(), "需要 model_id", System.currentTimeMillis() - start);
 
+        String resultTable = input.get("result_table") instanceof String s && !s.isBlank() ? s : null;
+
         try {
-            Map<String, Object> result = miningService.batchPredict(id);
+            Map<String, Object> result = resultTable != null
+                ? miningService.batchPredict(id, resultTable)
+                : miningService.batchPredict(id);
             StringBuilder sb = new StringBuilder("批量预测完成!\n");
             sb.append("- 输入表: ").append(result.get("sourceTable")).append("\n");
             sb.append("- 结果写入: ").append(result.get("saved_to")).append("\n");
@@ -472,7 +480,7 @@ public class MiningModelTool implements LlmTool {
             StringBuilder sb = new StringBuilder("数据表 `").append(tableName).append("` 探索结果:\n\n");
 
             // Row count
-            Integer rowCount = jdbc.queryForObject("SELECT COUNT(*) FROM `" + tableName + "`", Integer.class);
+            Integer rowCount = jdbc.queryForObject("SELECT COUNT(*) FROM `" + tableName + "` LIMIT 1000000", Integer.class);
             sb.append("**总行数**: ").append(rowCount).append("\n\n");
 
             // Column info
@@ -505,30 +513,51 @@ public class MiningModelTool implements LlmTool {
                           .append(", ").append(stats.get("max_val")).append("], 均值=")
                           .append(String.format("%.2f", ((Number) stats.get("avg_val")).doubleValue()))
                           .append(", 缺失=").append(stats.get("null_count")).append("\n");
-                    } catch (Exception ignored) {}
+                    } catch (Exception e) { log.warn("[MINING-TOOL] Column stats query failed for {}.{}: {}", tableName, colName, e.getMessage()); }
                 }
             }
-
-            // Target column distribution (heuristic: look for label/flag/target columns)
+            List<String> candidateTargets = new ArrayList<>();
             for (Map<String, Object> col : columns) {
                 String colName = (String) col.get("COLUMN_NAME");
                 String colLower = colName.toLowerCase();
-                if (colLower.contains("label") || colLower.contains("flag") || colLower.contains("target")
-                    || colLower.contains("class") || colLower.contains("is_") || colLower.contains("churn")) {
+                boolean isLikelyTarget = colLower.contains("label") || colLower.contains("flag")
+                    || colLower.contains("target") || colLower.contains("class")
+                    || colLower.contains("is_") || colLower.contains("churn")
+                    || colLower.contains("default") || colLower.contains("fraud")
+                    || colLower.contains("status") || colLower.contains("type")
+                    || colLower.contains("category") || colLower.contains("result")
+                    || colLower.contains("outcome") || colLower.contains("risk");
+                if (isLikelyTarget) candidateTargets.add(colName);
+            }
+            // Also check for low-cardinality categorical columns as potential targets
+            for (Map<String, Object> col : columns) {
+                String colName = (String) col.get("COLUMN_NAME");
+                String dataType = (String) col.get("DATA_TYPE");
+                if (!candidateTargets.contains(colName) && !dataType.matches("int|bigint|decimal|double|float|tinyint|smallint|mediumint|numeric")) {
                     try {
-                        List<Map<String, Object>> dist = jdbc.queryForList(
-                            "SELECT `" + colName + "`, COUNT(*) as cnt FROM `" + tableName + "` GROUP BY `" + colName + "` ORDER BY cnt DESC LIMIT 10");
-                        sb.append("\n**").append(colName).append(" 分布**:\n");
-                        for (Map<String, Object> d : dist) {
-                            sb.append("  ").append(d.get(colName)).append(": ").append(d.get("cnt")).append(" (")
-                              .append(String.format("%.1f%%", ((Number) d.get("cnt")).doubleValue() / rowCount * 100))
-                              .append(")\n");
+                        Integer uniqueCount = jdbc.queryForObject(
+                            "SELECT COUNT(DISTINCT `" + colName + "`) FROM `" + tableName + "`", Integer.class);
+                        if (uniqueCount != null && uniqueCount >= 2 && uniqueCount <= 20) {
+                            candidateTargets.add(colName);
                         }
-                    } catch (Exception ignored) {}
+                    } catch (Exception e) { log.warn("[MINING-TOOL] Distinct count query failed for {}.{}: {}", tableName, colName, e.getMessage()); }
                 }
             }
+            for (String colName : candidateTargets) {
+                try {
+                    List<Map<String, Object>> dist = jdbc.queryForList(
+                        "SELECT `" + colName + "`, COUNT(*) as cnt FROM `" + tableName + "` GROUP BY `" + colName + "` ORDER BY cnt DESC LIMIT 10");
+                    sb.append("\n**").append(colName).append(" 分布** (候选目标列):\n");
+                    for (Map<String, Object> d : dist) {
+                        sb.append("  ").append(d.get(colName)).append(": ").append(d.get("cnt")).append(" (")
+                          .append(String.format("%.1f%%", ((Number) d.get("cnt")).doubleValue() / rowCount * 100))
+                          .append(")\n");
+                    }
+                } catch (Exception e) { log.warn("[MINING-TOOL] Distribution query failed for {}.{}: {}", tableName, colName, e.getMessage()); }
+            }
 
-            sb.append("\n**建议**: 基于以上数据，可以开始特征工程。建议选择与目标相关、缺失值少的列作为特征，排除ID和时间列。");
+            sb.append("\n**候选目标列**: ").append(candidateTargets.isEmpty() ? "未自动识别，请用户指定" : String.join(", ", candidateTargets));
+            sb.append("\n**建议**: 基于以上数据，可以开始特征工程。选择与目标相关、缺失值少的列作为特征，排除ID和时间列。");
 
             return ToolResult.ok(getName(), sb.toString(), System.currentTimeMillis() - start);
         } catch (Exception e) {
@@ -545,7 +574,7 @@ public class MiningModelTool implements LlmTool {
             try {
                 List<?> types = objectMapper.readValue(a.getModelTypes(), List.class);
                 sb.append(" | 支持: ").append(types);
-            } catch (Exception ignored) {}
+            } catch (Exception e) { log.warn("[MINING-TOOL] JSON serialization failed: {}", e.getMessage()); }
             sb.append("\n  ").append(a.getDescription());
             try {
                 List<?> params = objectMapper.readValue(a.getParamsSchema(), List.class);
@@ -557,7 +586,7 @@ public class MiningModelTool implements LlmTool {
                         }
                     }
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) { log.warn("[MINING-TOOL] JSON serialization failed: {}", e.getMessage()); }
             sb.append("\n\n");
         }
         return ToolResult.ok(getName(), sb.toString(), System.currentTimeMillis() - start);
@@ -611,7 +640,7 @@ public class MiningModelTool implements LlmTool {
                               .append(" → ").append(String.format("%.4f", lv)).append(" ").append(arrow).append("\n");
                         }
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception e) { log.warn("[MINING-TOOL] JSON serialization failed: {}", e.getMessage()); }
             }
         }
 
@@ -689,6 +718,9 @@ public class MiningModelTool implements LlmTool {
             return ToolResult.error(getName(), "compare 支持 2~5 个算法对比", System.currentTimeMillis() - start);
         }
 
+        if (context.dataSourceId() == null) {
+            return ToolResult.error(getName(), "无法确定数据源，请在对话中指定", System.currentTimeMillis() - start);
+        }
         String baseName = getString(input, "name", "对比实验");
         String modelType = getString(input, "model_type", "classification");
         String sourceTable = getString(input, "source_table", null);
@@ -701,7 +733,7 @@ public class MiningModelTool implements LlmTool {
                     ? Arrays.stream(s.split(",")).map(String::trim).filter(c -> !c.isEmpty()).toList()
                     : features;
                 featureColumnsJson = objectMapper.writeValueAsString(normalized);
-            } catch (Exception ignored) {}
+            } catch (Exception e) { log.warn("[MINING-TOOL] JSON serialization failed: {}", e.getMessage()); }
         }
 
         List<MiningModel> models = new ArrayList<>();
@@ -719,16 +751,12 @@ public class MiningModelTool implements LlmTool {
             if (input.get("cv_folds") != null) model.setCvFolds(((Number) input.get("cv_folds")).intValue());
             if (input.get("test_size") != null) model.setTestSize(((Number) input.get("test_size")).doubleValue());
             Object pp = input.get("preprocessing");
-            if (pp != null) { try { model.setPreprocessing(objectMapper.writeValueAsString(pp)); } catch (Exception ignored) {} }
+            if (pp != null) { try { model.setPreprocessing(objectMapper.writeValueAsString(pp)); } catch (Exception e) { log.warn("[MINING-TOOL] JSON serialization failed: {}", e.getMessage()); } }
             MiningModel created = miningService.createModel(model);
             models.add(created);
         }
 
-        ExecutorService executor = Executors.newFixedThreadPool(Math.min(models.size(), 3), r -> {
-            Thread t = new Thread(r, "compare-train");
-            t.setDaemon(true);
-            return t;
-        });
+        java.util.concurrent.Executor miningExecutor = miningService.getMiningExecutor();
 
         List<CompletableFuture<Map<String, Object>>> futures = models.stream()
             .map(m -> CompletableFuture.supplyAsync(() -> {
@@ -739,7 +767,7 @@ public class MiningModelTool implements LlmTool {
                     row.put("modelId", m.getId());
                     row.put("status", trained.getStatus());
                     if (trained.getMetrics() != null && !trained.getMetrics().isBlank()) {
-                        try { row.put("metrics", objectMapper.readValue(trained.getMetrics(), Map.class)); } catch (Exception ignored) {}
+                        try { row.put("metrics", objectMapper.readValue(trained.getMetrics(), Map.class)); } catch (Exception e) { log.warn("[MINING-TOOL] JSON serialization failed: {}", e.getMessage()); }
                     }
                     return row;
                 } catch (Exception e) {
@@ -750,13 +778,12 @@ public class MiningModelTool implements LlmTool {
                     row.put("error", e.getMessage());
                     return row;
                 }
-            }, executor))
+            }, miningExecutor))
             .toList();
 
         List<Map<String, Object>> results = futures.stream()
             .map(CompletableFuture::join)
             .toList();
-        executor.shutdown();
 
         StringBuilder sb = new StringBuilder();
         sb.append("## 模型对比结果\n\n");
@@ -775,6 +802,298 @@ public class MiningModelTool implements LlmTool {
         }
         sb.append("\n已创建 ").append(models.size()).append(" 个模型并并行训练完成。");
 
+        // Keep best variant, clean up the rest
+        Map<String, Object> best = null;
+        double bestScore = -Double.MAX_VALUE;
+        for (Map<String, Object> r : results) {
+            Object metricsObj = r.get("metrics");
+            if (metricsObj instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> metrics = (Map<String, Object>) metricsObj;
+                double score = metrics.containsKey("test_accuracy") ? ((Number) metrics.get("test_accuracy")).doubleValue() :
+                               metrics.containsKey("test_r2") ? ((Number) metrics.get("test_r2")).doubleValue() :
+                               metrics.containsKey("accuracy") ? ((Number) metrics.get("accuracy")).doubleValue() :
+                               metrics.containsKey("r2") ? ((Number) metrics.get("r2")).doubleValue() : -1;
+                if (score > bestScore) { bestScore = score; best = r; }
+            }
+        }
+        for (MiningModel m : models) {
+            boolean isBest = best != null && best.get("modelId") != null &&
+                ((Number) best.get("modelId")).longValue() == m.getId();
+            if (!isBest) {
+                try {
+                    miningModelMapper.update(null,
+                        new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<MiningModel>()
+                            .eq(MiningModel::getId, m.getId())
+                            .set(MiningModel::getDeleted, 1));
+                    log.info("[COMPARE] Cleaned non-best variant model {}", m.getId());
+                } catch (Exception e) {
+                    log.warn("[COMPARE] Failed to cleanup variant {}: {}", m.getId(), e.getMessage());
+                }
+            }
+        }
+        if (best != null) {
+            sb.append("\n最佳模型: ID=").append(best.get("modelId")).append(" (").append(best.get("algorithm"))
+              .append(", 得分=").append(String.format("%.4f", bestScore)).append(")");
+        }
+
         return ToolResult.ok(getName(), sb.toString(), System.currentTimeMillis() - start, results);
+    }
+
+    private ToolResult handleRetrain(Map<String, Object> input, ToolExecutionContext context, long start) {
+        Long id = toLong(input.get("model_id"));
+        if (id == null) return ToolResult.error(getName(), "需要 model_id", System.currentTimeMillis() - start);
+
+        MiningModel before = miningModelMapper.selectById(id);
+        if (before == null) return ToolResult.error(getName(), "模型不存在: " + id, System.currentTimeMillis() - start);
+        String beforeMetrics = before.getMetrics();
+        int beforeVersion = before.getVersion();
+
+        MiningModel updates = new MiningModel();
+        boolean hasUpdates = false;
+        if (input.get("source_table") != null) { updates.setSourceTable((String) input.get("source_table")); hasUpdates = true; }
+        if (input.get("feature_columns") != null) {
+            try {
+                Object normalized = input.get("feature_columns") instanceof String s
+                    ? Arrays.stream(s.split(",")).map(String::trim).filter(c -> !c.isEmpty()).toList()
+                    : input.get("feature_columns");
+                updates.setFeatureColumns(objectMapper.writeValueAsString(normalized));
+                hasUpdates = true;
+            } catch (Exception e) { log.warn("[MINING-TOOL] JSON serialization failed: {}", e.getMessage()); }
+        }
+        if (input.get("target_column") != null) { updates.setTargetColumn((String) input.get("target_column")); hasUpdates = true; }
+        if (input.get("algorithm") != null) { updates.setAlgorithm((String) input.get("algorithm")); hasUpdates = true; }
+        if (input.get("hyperparameters") != null) {
+            try { updates.setHyperparameters(objectMapper.writeValueAsString(input.get("hyperparameters"))); hasUpdates = true; }
+            catch (Exception e) { log.warn("[MINING-TOOL] JSON serialization failed: {}", e.getMessage()); }
+        }
+        if (input.get("validation_mode") != null) { updates.setValidationMode((String) input.get("validation_mode")); hasUpdates = true; }
+        if (input.get("cv_folds") != null) { updates.setCvFolds(((Number) input.get("cv_folds")).intValue()); hasUpdates = true; }
+        if (input.get("test_size") != null) { updates.setTestSize(((Number) input.get("test_size")).doubleValue()); hasUpdates = true; }
+        if (input.get("temporal_column") != null) { updates.setTemporalColumn((String) input.get("temporal_column")); hasUpdates = true; }
+        if (input.get("preprocessing") != null) {
+            try { updates.setPreprocessing(objectMapper.writeValueAsString(input.get("preprocessing"))); hasUpdates = true; }
+            catch (Exception e) { log.warn("[MINING-TOOL] JSON serialization failed: {}", e.getMessage()); }
+        }
+        Object ft = input.get("feature_transforms");
+        if (ft != null) {
+            try {
+                Map<String, Object> pp = updates.getPreprocessing() != null && !updates.getPreprocessing().isBlank()
+                    ? objectMapper.readValue(updates.getPreprocessing(), Map.class)
+                    : (before.getPreprocessing() != null && !before.getPreprocessing().isBlank()
+                        ? objectMapper.readValue(before.getPreprocessing(), Map.class) : new java.util.HashMap<>());
+                pp.put("transforms", ft);
+                updates.setPreprocessing(objectMapper.writeValueAsString(pp));
+                hasUpdates = true;
+            } catch (Exception e) { log.warn("[MINING-TOOL] JSON serialization failed: {}", e.getMessage()); }
+        }
+
+        if (hasUpdates) miningService.updateModel(id, updates);
+
+        MiningModel result = miningService.trainModel(id, "chat");
+
+        StringBuilder msg = new StringBuilder();
+        msg.append("模型「").append(result.getName()).append("」重新训练完成 (v").append(beforeVersion).append(" → v").append(result.getVersion()).append(")\n\n");
+
+        if (beforeMetrics != null && result.getMetrics() != null) {
+            msg.append("**指标对比:**\n");
+            try {
+                Map<String, Object> bm = objectMapper.readValue(beforeMetrics, Map.class);
+                Map<String, Object> am = objectMapper.readValue(result.getMetrics(), Map.class);
+                msg.append("| 指标 | 旧值 | 新值 | 变化 |\n|---|---|---|---|\n");
+                for (String key : am.keySet()) {
+                    if (bm.containsKey(key)) {
+                        double bv = ((Number) bm.get(key)).doubleValue();
+                        double av = ((Number) am.get(key)).doubleValue();
+                        String arrow = av > bv + 0.001 ? "↑" : av < bv - 0.001 ? "↓" : "→";
+                        msg.append("| ").append(key).append(" | ").append(String.format("%.4f", bv))
+                           .append(" | ").append(String.format("%.4f", av)).append(" | ").append(arrow).append(" |\n");
+                    }
+                }
+            } catch (Exception e) { log.warn("[MINING-TOOL] JSON serialization failed: {}", e.getMessage()); }
+        }
+        msg.append("\n当前指标: ").append(result.getMetrics());
+
+        return ToolResult.ok(getName(), msg.toString(), System.currentTimeMillis() - start,
+            List.of(Map.of("modelId", result.getId(), "version", result.getVersion(), "metrics", result.getMetrics() != null ? result.getMetrics() : "")));
+    }
+
+    @SuppressWarnings("unchecked")
+    private ToolResult handleTune(Map<String, Object> input, ToolExecutionContext context, long start) {
+        Long id = toLong(input.get("model_id"));
+        if (id == null) return ToolResult.error(getName(), "需要 model_id", System.currentTimeMillis() - start);
+
+        Object gridObj = input.get("param_grid");
+        if (gridObj == null) return ToolResult.error(getName(), "tune 必须提供 param_grid, 如 {\"n_estimators\": [50, 100, 200]}", System.currentTimeMillis() - start);
+
+        MiningModel baseModel = miningModelMapper.selectById(id);
+        if (baseModel == null) return ToolResult.error(getName(), "模型不存在: " + id, System.currentTimeMillis() - start);
+
+        Map<String, List<Object>> paramGrid;
+        try {
+            paramGrid = (Map<String, List<Object>>) gridObj;
+        } catch (ClassCastException e) {
+            return ToolResult.error(getName(), "param_grid 格式错误, 键为参数名, 值为候选值数组", System.currentTimeMillis() - start);
+        }
+
+        List<Map<String, Object>> combinations = generateCombinations(paramGrid);
+        if (combinations.isEmpty()) return ToolResult.error(getName(), "param_grid 为空或无法生成组合", System.currentTimeMillis() - start);
+        if (combinations.size() > 12) combinations = combinations.subList(0, 12);
+
+        java.util.concurrent.Executor miningExecutor = miningService.getMiningExecutor();
+
+        List<CompletableFuture<Map<String, Object>>> futures = combinations.stream()
+            .map(params -> CompletableFuture.supplyAsync(() -> {
+                try {
+                    MiningModel variant = new MiningModel();
+                    variant.setName(baseModel.getName() + " [tune]");
+                    variant.setAlgorithm(baseModel.getAlgorithm());
+                    variant.setModelType(baseModel.getModelType());
+                    variant.setSourceTable(baseModel.getSourceTable());
+                    variant.setTargetColumn(baseModel.getTargetColumn());
+                    variant.setFeatureColumns(baseModel.getFeatureColumns());
+                    variant.setDataSourceId(context.dataSourceId() != null ? context.dataSourceId() : baseModel.getDataSourceId());
+                    variant.setConversationId(context.conversationId());
+                    variant.setPreprocessing(baseModel.getPreprocessing());
+                    if (baseModel.getValidationMode() != null) variant.setValidationMode(baseModel.getValidationMode());
+                    if (baseModel.getCvFolds() != null) variant.setCvFolds(baseModel.getCvFolds());
+                    if (baseModel.getTestSize() != null) variant.setTestSize(baseModel.getTestSize());
+
+                    Map<String, Object> mergedParams = new LinkedHashMap<>(parseJsonMap(baseModel.getHyperparameters()));
+                    mergedParams.putAll(params);
+                    variant.setHyperparameters(objectMapper.writeValueAsString(mergedParams));
+
+                    MiningModel created = miningService.createModel(variant);
+                    MiningModel trained = miningService.trainModel(created.getId(), "tune");
+
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("params", params);
+                    row.put("modelId", created.getId());
+                    row.put("status", trained.getStatus());
+                    if (trained.getMetrics() != null && !trained.getMetrics().isBlank()) {
+                        try { row.put("metrics", objectMapper.readValue(trained.getMetrics(), Map.class)); } catch (Exception e) { log.warn("[MINING-TOOL] JSON serialization failed: {}", e.getMessage()); }
+                    }
+                    return row;
+                } catch (Exception e) {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("params", params);
+                    row.put("status", "failed");
+                    row.put("error", e.getMessage());
+                    return row;
+                }
+            }, miningExecutor))
+            .toList();
+
+        List<Map<String, Object>> results = futures.stream().map(CompletableFuture::join).toList();
+
+        StringBuilder sb = new StringBuilder("## 参数调优结果\n\n");
+        sb.append("基于模型「").append(baseModel.getName()).append("」(ID: ").append(id).append(") 探索了 ").append(combinations.size()).append(" 种参数组合\n\n");
+        sb.append("| 参数组合 | 模型ID | 状态 | 指标 |\n|---|---|---|---|\n");
+        for (Map<String, Object> r : results) {
+            String paramsStr = r.get("params") instanceof Map ? ((Map<String, Object>) r.get("params")).entrySet().stream()
+                .map(e -> e.getKey() + "=" + e.getValue()).reduce((a, b) -> a + ", " + b).orElse("") : String.valueOf(r.get("params"));
+            String metricsStr = "";
+            Object m = r.get("metrics");
+            if (m instanceof Map<?, ?> metrics) {
+                metricsStr = metrics.entrySet().stream()
+                    .map(e -> e.getKey() + "=" + e.getValue())
+                    .reduce((a, b) -> a + ", " + b).orElse("");
+            }
+            if (r.get("error") != null) metricsStr = "错误: " + r.get("error");
+            sb.append("| ").append(paramsStr).append(" | ").append(r.get("modelId"))
+              .append(" | ").append(r.get("status")).append(" | ").append(metricsStr).append(" |\n");
+        }
+        sb.append("\n已创建 ").append(results.size()).append(" 个调优变体。可发布表现最佳的模型。");
+
+        // Keep best tune variant, clean up the rest
+        Map<String, Object> best = null;
+        double bestScore = -Double.MAX_VALUE;
+        for (Map<String, Object> r : results) {
+            Object metricsObj = r.get("metrics");
+            if (metricsObj instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> metrics = (Map<String, Object>) metricsObj;
+                double score = metrics.containsKey("test_accuracy") ? ((Number) metrics.get("test_accuracy")).doubleValue() :
+                               metrics.containsKey("test_r2") ? ((Number) metrics.get("test_r2")).doubleValue() :
+                               metrics.containsKey("accuracy") ? ((Number) metrics.get("accuracy")).doubleValue() :
+                               metrics.containsKey("r2") ? ((Number) metrics.get("r2")).doubleValue() : -1;
+                if (score > bestScore) { bestScore = score; best = r; }
+            }
+        }
+        for (Map<String, Object> r : results) {
+            Object modelId = r.get("modelId");
+            boolean isBest = best != null && best.get("modelId") != null &&
+                best.get("modelId").equals(modelId);
+            if (!isBest && modelId != null) {
+                try {
+                    Long mid = ((Number) modelId).longValue();
+                    miningModelMapper.update(null,
+                        new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<MiningModel>()
+                            .eq(MiningModel::getId, mid)
+                            .set(MiningModel::getDeleted, 1));
+                    log.info("[TUNE] Cleaned non-best variant model {}", mid);
+                } catch (Exception e) {
+                    log.warn("[TUNE] Failed to cleanup variant {}: {}", modelId, e.getMessage());
+                }
+            }
+        }
+        if (best != null) {
+            sb.append("\n最佳调优模型: ID=").append(best.get("modelId")).append(" (得分=").append(String.format("%.4f", bestScore)).append(")");
+        }
+
+        return ToolResult.ok(getName(), sb.toString(), System.currentTimeMillis() - start, results);
+    }
+
+    private ToolResult handleSyncPipeline(Map<String, Object> input, long start) {
+        Long id = toLong(input.get("model_id"));
+        if (id == null) return ToolResult.error(getName(), "需要 model_id", System.currentTimeMillis() - start);
+
+        MiningModel model = miningModelMapper.selectById(id);
+        if (model == null) return ToolResult.error(getName(), "模型不存在: " + id, System.currentTimeMillis() - start);
+        if (model.getPipelineId() == null) return ToolResult.error(getName(), "模型没有关联的流程", System.currentTimeMillis() - start);
+
+        miningService.syncModelToPipeline(model.getPipelineId(), model);
+        miningService.syncPipelineToModel(model.getPipelineId());
+
+        MiningModel refreshed = miningModelMapper.selectById(id);
+        return ToolResult.ok(getName(), "模型与流程已同步",
+            System.currentTimeMillis() - start,
+            List.of(Map.of("modelId", refreshed.getId(), "pipelineId", refreshed.getPipelineId(),
+                "lastSyncedAt", refreshed.getLastSyncedAt() != null ? refreshed.getLastSyncedAt().toString() : "")));
+    }
+
+    private Map<String, Object> parseJsonMap(String json) {
+        if (json == null || json.isBlank()) return new LinkedHashMap<>();
+        try { return objectMapper.readValue(json, Map.class); }
+        catch (Exception e) { return new LinkedHashMap<>(); }
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> generateCombinations(Map<String, List<Object>> paramGrid) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        List<String> keys = new ArrayList<>(paramGrid.keySet());
+        if (keys.isEmpty()) return result;
+
+        int[] indices = new int[keys.size()];
+        int[] sizes = keys.stream().mapToInt(k -> paramGrid.get(k).size()).toArray();
+        for (int i = 0; i < sizes.length; i++) if (sizes[i] == 0) return result;
+
+        while (true) {
+            Map<String, Object> combo = new LinkedHashMap<>();
+            for (int i = 0; i < keys.size(); i++) {
+                combo.put(keys.get(i), paramGrid.get(keys.get(i)).get(indices[i]));
+            }
+            result.add(combo);
+
+            int idx = keys.size() - 1;
+            while (idx >= 0) {
+                indices[idx]++;
+                if (indices[idx] < sizes[idx]) break;
+                indices[idx] = 0;
+                idx--;
+            }
+            if (idx < 0) break;
+        }
+        return result;
     }
 }

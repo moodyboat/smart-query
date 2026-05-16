@@ -5,11 +5,14 @@ import com.smartquery.common.ModelStatus;
 import com.smartquery.datasource.DataSourceManager;
 import com.smartquery.entity.*;
 import com.smartquery.logging.ConversationEventLogger;
+import com.smartquery.logging.DiagnosticsTimer;
 import com.smartquery.mapper.*;
 import com.smartquery.python.PythonExecutor;
 import com.smartquery.python.PythonResult;
-import lombok.RequiredArgsConstructor;
+import com.smartquery.engine.Coordinator;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -17,18 +20,33 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.Executor;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class MiningService {
 
-    private static final String MODEL_WORKSPACE = System.getProperty("user.home") + "/smartquery-models";
-    private static final int MAX_CONCURRENT_TRAINING = 2;
-    private static final long TRAINING_QUEUE_TIMEOUT_MINUTES = 5;
-    private final Semaphore trainingSemaphore = new Semaphore(MAX_CONCURRENT_TRAINING);
+    @org.springframework.beans.factory.annotation.Value("${smart-query.mining.workspace:${user.home}/smartquery-models}")
+    private String modelWorkspace;
+
+    @org.springframework.beans.factory.annotation.Value("${smart-query.mining.max-concurrent-training:4}")
+    private int maxConcurrentTraining;
+
+    @org.springframework.beans.factory.annotation.Value("${smart-query.mining.queue-timeout-minutes:5}")
+    private long trainingQueueTimeoutMinutes;
+
+    @org.springframework.beans.factory.annotation.Value("${smart-query.mining.python-timeout-ms:300000}")
+    private int pythonTimeoutMs;
+
+    @org.springframework.beans.factory.annotation.Value("${smart-query.mining.overfitting-gap-threshold:0.15}")
+    private double overfittingGapThreshold;
+
+    @org.springframework.beans.factory.annotation.Value("${smart-query.mining.min-training-rows:20}")
+    private int minTrainingRows;
+
+    private Semaphore trainingSemaphore;
 
     private final MiningModelMapper miningModelMapper;
     private final MiningPipelineMapper miningPipelineMapper;
@@ -42,6 +60,49 @@ public class MiningService {
     private final MiningPredictionService predictionService;
     private final PipelineService pipelineService;
     private final ConversationEventLogger eventLogger;
+    private final Executor miningExecutor;
+    private final Coordinator coordinator;
+
+    public MiningService(
+            MiningModelMapper miningModelMapper,
+            MiningPipelineMapper miningPipelineMapper,
+            ModelExecutionMapper modelExecutionMapper,
+            DataSourceMapper dataSourceMapper,
+            PredictionResultMapper predictionResultMapper,
+            PythonExecutor pythonExecutor,
+            DataSourceManager dataSourceManager,
+            AlgorithmService algorithmService,
+            ObjectMapper objectMapper,
+            MiningPredictionService predictionService,
+            PipelineService pipelineService,
+            ConversationEventLogger eventLogger,
+            @Qualifier("miningExecutor") Executor miningExecutor,
+            @Lazy Coordinator coordinator
+    ) {
+        this.miningModelMapper = miningModelMapper;
+        this.miningPipelineMapper = miningPipelineMapper;
+        this.modelExecutionMapper = modelExecutionMapper;
+        this.dataSourceMapper = dataSourceMapper;
+        this.predictionResultMapper = predictionResultMapper;
+        this.pythonExecutor = pythonExecutor;
+        this.dataSourceManager = dataSourceManager;
+        this.algorithmService = algorithmService;
+        this.objectMapper = objectMapper;
+        this.predictionService = predictionService;
+        this.pipelineService = pipelineService;
+        this.eventLogger = eventLogger;
+        this.miningExecutor = miningExecutor;
+        this.coordinator = coordinator;
+    }
+
+    @jakarta.annotation.PostConstruct
+    void init() {
+        trainingSemaphore = new Semaphore(maxConcurrentTraining);
+    }
+
+    public Coordinator getCoordinator() {
+        return coordinator;
+    }
 
     // ======================== Model Lifecycle ========================
 
@@ -86,6 +147,11 @@ public class MiningService {
         if (updates.getTemporalColumn() != null) existing.setTemporalColumn(updates.getTemporalColumn());
 
         miningModelMapper.updateById(existing);
+
+        if (existing.getPipelineId() != null) {
+            syncModelToPipeline(existing.getPipelineId(), existing);
+        }
+
         return existing;
     }
 
@@ -167,7 +233,7 @@ public class MiningService {
             Integer rowCount = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM `" + model.getSourceTable() + "`", Integer.class);
             result.put("rowCount", rowCount);
-            if (rowCount != null && rowCount < 20) {
+            if (rowCount != null && rowCount < minTrainingRows) {
                 warnings.add("数据量仅 " + rowCount + " 行，训练结果可能不可靠（建议至少100行）");
             }
         } catch (Exception e) {
@@ -227,18 +293,33 @@ public class MiningService {
         MiningModel model = miningModelMapper.selectById(modelId);
         if (model == null) throw new IllegalArgumentException("模型不存在: " + modelId);
 
+        if (ModelStatus.TRAINING.equals(model.getStatus())) {
+            throw new IllegalStateException("模型正在训练中，请等待完成: " + model.getName());
+        }
+
         log.info("[MINING] Starting training for model '{}' (id={}, algo={}, type={})",
             model.getName(), modelId, model.getAlgorithm(), model.getModelType());
 
         boolean acquired;
         try {
-            acquired = trainingSemaphore.tryAcquire(TRAINING_QUEUE_TIMEOUT_MINUTES, TimeUnit.MINUTES);
+            acquired = trainingSemaphore.tryAcquire(trainingQueueTimeoutMinutes, TimeUnit.MINUTES);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new RuntimeException("训练等待被中断");
         }
         if (!acquired) {
-            throw new RuntimeException("训练队列已满，请稍后重试（当前最多 " + MAX_CONCURRENT_TRAINING + " 个并发训练）");
+            throw new RuntimeException("训练队列已满，请稍后重试（当前最多 " + maxConcurrentTraining + " 个并发训练）");
+        }
+
+        // DB-level atomic status check: only proceed if status is not TRAINING
+        int updated = miningModelMapper.update(null,
+            new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<MiningModel>()
+                .eq(MiningModel::getId, modelId)
+                .ne(MiningModel::getStatus, ModelStatus.TRAINING)
+                .set(MiningModel::getStatus, ModelStatus.TRAINING));
+        if (updated == 0) {
+            trainingSemaphore.release();
+            throw new IllegalStateException("模型正在训练中，请等待完成: " + model.getName());
         }
 
         ModelExecution execution = new ModelExecution();
@@ -248,9 +329,6 @@ public class MiningService {
         execution.setHyperparameters(model.getHyperparameters());
         modelExecutionMapper.insert(execution);
 
-        model.setStatus(ModelStatus.TRAINING);
-        miningModelMapper.updateById(model);
-
         logMiningEvent(model, "mining_training_start", Map.of(
             "algorithm", model.getAlgorithm(), "modelType", model.getModelType(),
             "sourceTable", model.getSourceTable(), "version", model.getVersion(),
@@ -259,7 +337,7 @@ public class MiningService {
 
         try {
             String pythonCode = buildTrainingScript(model);
-            PythonResult result = pythonExecutor.execute(pythonCode, model.getDataSourceId(), 300000);
+            PythonResult result = DiagnosticsTimer.timedSupply("mining.train", () -> pythonExecutor.execute(pythonCode, model.getDataSourceId(), pythonTimeoutMs));
 
             execution.setExecutionTimeMs(result.executionTimeMs());
             execution.setExecutionLog(truncateLog(result.stdout(), 50000));
@@ -273,7 +351,6 @@ public class MiningService {
                 model.setMetrics(toJson(parsed.get("metrics")));
                 model.setFeatureImportance(toJson(parsed.get("feature_importance")));
                 model.setTrainingLog(truncateLog(result.stdout(), 20000));
-                model.setVersion(model.getVersion() + 1);
                 if (parsed.get("model_path") != null) model.setModelPath(String.valueOf(parsed.get("model_path")));
                 if (parsed.get("validation") != null) model.setValidationMetrics(toJson(parsed.get("validation")));
 
@@ -307,19 +384,36 @@ public class MiningService {
             }
 
             model.setLastRunAt(LocalDateTime.now());
-            miningModelMapper.updateById(model);
+            // Use atomic update to avoid overwriting stale fields
+            var updateWrapper = new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<MiningModel>()
+                    .eq(MiningModel::getId, modelId)
+                    .set(MiningModel::getStatus, model.getStatus())
+                    .set(MiningModel::getMetrics, model.getMetrics())
+                    .set(MiningModel::getFeatureImportance, model.getFeatureImportance())
+                    .set(MiningModel::getModelPath, model.getModelPath())
+                    .set(MiningModel::getTrainingLog, truncateLog(model.getTrainingLog(), 20000))
+                    .set(MiningModel::getHyperparameters, model.getHyperparameters())
+                    .set(MiningModel::getPreprocessing, model.getPreprocessing())
+                    .set(MiningModel::getValidationMetrics, model.getValidationMetrics())
+                    .set(MiningModel::getLastRunAt, model.getLastRunAt());
+            if (model.getPipelineId() != null) {
+                updateWrapper.set(MiningModel::getPipelineId, model.getPipelineId());
+            }
+            miningModelMapper.update(null, updateWrapper);
             modelExecutionMapper.updateById(execution);
-            return model;
+            return miningModelMapper.selectById(modelId);
         } catch (Exception e) {
             log.error("[MINING] Training exception for model {}: {}", modelId, e.getMessage(), e);
             logMiningError(model.getConversationId(), "training_failed", modelId, e.getMessage());
             execution.setStatus(ModelStatus.FAILED);
             execution.setExecutionLog(e.getMessage());
             modelExecutionMapper.updateById(execution);
-            model.setStatus(ModelStatus.FAILED);
-            model.setTrainingLog(e.getMessage());
-            miningModelMapper.updateById(model);
-            return model;
+            miningModelMapper.update(null,
+                new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<MiningModel>()
+                    .eq(MiningModel::getId, modelId)
+                    .set(MiningModel::getStatus, ModelStatus.FAILED)
+                    .set(MiningModel::getTrainingLog, e.getMessage()));
+            return miningModelMapper.selectById(modelId);
         } finally {
             trainingSemaphore.release();
         }
@@ -348,10 +442,11 @@ public class MiningService {
                 com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
                 Map<String, Object> metrics = om.readValue(model.getMetrics(), Map.class);
                 Object overfittingGap = metrics.get("overfitting_gap");
-                if (overfittingGap instanceof Number gap && gap.doubleValue() > 0.15) {
+                boolean force = config != null && Boolean.TRUE.equals(config.get("force"));
+                if (overfittingGap instanceof Number gap && gap.doubleValue() > overfittingGapThreshold && !force) {
                     throw new IllegalStateException(
-                        String.format("过拟合风险过高 (gap=%.2f > 0.15)。建议: 减少特征、增加正则化或收集更多数据后再发布。",
-                            gap.doubleValue()));
+                        String.format("过拟合风险过高 (gap=%.2f > %.2f)。建议: 减少特征、增加正则化或收集更多数据后再发布。可传 force=true 强制发布。",
+                            gap.doubleValue(), overfittingGapThreshold));
                 }
             } catch (IllegalStateException e) { throw e; }
             catch (Exception ignored) {}
@@ -363,24 +458,41 @@ public class MiningService {
         if (config != null) {
             Object inputTable = config.getOrDefault("predictInputTable", config.getOrDefault("input_table", config.get("inputTable")));
             if (inputTable != null) { String tbl = (String) inputTable; if (!tbl.isBlank()) validateTableName(tbl); model.setPredictInputTable(tbl); }
+        }
+        // Fallback: if no predictInputTable set, use sourceTable
+        if (model.getPredictInputTable() == null || model.getPredictInputTable().isBlank()) {
+            model.setPredictInputTable(model.getSourceTable());
+        }
+        if (config != null) {
             if (config.containsKey("predictInputFilter") || config.containsKey("input_filter"))
                 model.setPredictInputFilter((String) config.getOrDefault("predictInputFilter", config.get("input_filter")));
             Object resultTable = config.getOrDefault("predictResultTable", config.getOrDefault("result_table", config.get("resultTable")));
             if (resultTable != null) { String tbl = (String) resultTable; if (!tbl.isBlank()) validateTableName(tbl); model.setPredictResultTable(tbl); }
-            if (config.containsKey("scheduleCron")) model.setScheduleCron((String) config.get("scheduleCron"));
-            if (config.containsKey("scheduleEnabled")) model.setScheduleEnabled(Boolean.TRUE.equals(config.get("scheduleEnabled")));
-            if (config.containsKey("scheduleMode")) model.setScheduleMode((String) config.get("scheduleMode"));
+            String cron = (String) config.getOrDefault("scheduleCron", config.get("schedule_cron"));
+            if (cron != null) model.setScheduleCron(cron);
+            if (config.containsKey("scheduleEnabled") || config.containsKey("schedule_enabled"))
+                model.setScheduleEnabled(Boolean.TRUE.equals(config.getOrDefault("scheduleEnabled", config.get("schedule_enabled"))));
+            String mode = (String) config.getOrDefault("scheduleMode", config.get("schedule_mode"));
+            if (mode != null) model.setScheduleMode(mode);
         }
 
         if (Boolean.TRUE.equals(model.getScheduleEnabled()) && model.getScheduleCron() != null) {
             try {
-                String cron = model.getScheduleCron();
-                long minutes = cron.startsWith("*/") ? Long.parseLong(cron.substring(2)) : 60;
-                model.setNextRunAt(LocalDateTime.now().plusMinutes(minutes));
-            } catch (Exception ignored) {}
+                java.time.LocalDateTime nextRun = computeNextRun(model.getScheduleCron());
+                model.setNextRunAt(nextRun);
+                log.info("[MINING] Schedule set: cron='{}', nextRun={}", model.getScheduleCron(), nextRun);
+            } catch (Exception e) {
+                log.warn("[MINING] Failed to parse cron '{}': {}", model.getScheduleCron(), e.getMessage());
+                model.setNextRunAt(LocalDateTime.now().plusMinutes(60));
+            }
         }
 
         miningModelMapper.updateById(model);
+        if (model.getPipelineId() != null) {
+            try { syncModelToPipeline(model.getPipelineId(), model); } catch (Exception e) {
+                log.warn("[MINING] Failed to sync pipeline after publish: {}", e.getMessage());
+            }
+        }
         logMiningEvent(model, "model_published", Map.of(
             "version", model.getVersion(),
             "scheduleEnabled", model.getScheduleEnabled(),
@@ -413,7 +525,7 @@ public class MiningService {
         miningModelMapper.updateById(model);
 
         if (model.getPipelineId() != null) {
-            syncHyperparamsToPipeline(model.getPipelineId(), hyperparametersJson);
+            syncModelToPipeline(model.getPipelineId(), model);
         }
         return model;
     }
@@ -443,6 +555,10 @@ public class MiningService {
         return predictionService.batchPredict(modelId);
     }
 
+    public Map<String, Object> batchPredict(Long modelId, String resultTable) {
+        return predictionService.batchPredict(modelId, resultTable);
+    }
+
     public List<PredictionResult> getPredictionResults(Long modelId, int limit) {
         return predictionService.getPredictionResults(modelId, limit);
     }
@@ -451,9 +567,92 @@ public class MiningService {
         return pipelineService.executePipeline(pipelineId);
     }
 
+    public Executor getMiningExecutor() {
+        return miningExecutor;
+    }
+
+    public void syncPipelineToModel(Long pipelineId) {
+        MiningPipeline pipeline = miningPipelineMapper.selectById(pipelineId);
+        if (pipeline == null) return;
+
+        var wrapper = new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<MiningModel>()
+            .eq(MiningModel::getPipelineId, pipelineId)
+            .eq(MiningModel::getDeleted, 0);
+        MiningModel model = miningModelMapper.selectOne(wrapper);
+        if (model == null) return;
+
+        try {
+            PipelineService.PipelineConfig cfg = pipelineService.extractConfigFromNodes(pipeline.getNodes());
+            if (cfg == null) return;
+
+            if (cfg.sourceTable() != null && !cfg.sourceTable().isBlank()) model.setSourceTable(cfg.sourceTable());
+            if (cfg.featureColumns() != null && !cfg.featureColumns().isEmpty())
+                model.setFeatureColumns(toJson(cfg.featureColumns()));
+            if (cfg.targetColumn() != null && !cfg.targetColumn().isBlank()) model.setTargetColumn(cfg.targetColumn());
+            if (cfg.modelType() != null) model.setModelType(cfg.modelType());
+            if (cfg.algorithm() != null) model.setAlgorithm(cfg.algorithm());
+            if (!cfg.hyperparams().isEmpty()) model.setHyperparameters(toJson(cfg.hyperparams()));
+            if (!cfg.preprocessing().isEmpty()) model.setPreprocessing(toJson(cfg.preprocessing()));
+            if (cfg.transforms() != null && !cfg.transforms().isEmpty()) {
+                Map<String, Object> pp = parseJsonMap(model.getPreprocessing());
+                pp.put("transforms", cfg.transforms());
+                model.setPreprocessing(toJson(pp));
+            }
+            if (cfg.validationMode() != null) model.setValidationMode(cfg.validationMode());
+            if (cfg.cvFold() > 0) model.setCvFolds(cfg.cvFold());
+            if (cfg.testSize() > 0) model.setTestSize(cfg.testSize());
+            if (cfg.temporalColumn() != null) model.setTemporalColumn(cfg.temporalColumn());
+
+            LocalDateTime now = LocalDateTime.now();
+            model.setLastSyncedAt(now);
+            miningModelMapper.updateById(model);
+
+            pipeline.setLastSyncedAt(now);
+            miningPipelineMapper.updateById(pipeline);
+        } catch (Exception e) {
+            log.warn("[MINING] Failed to sync pipeline to model for pipeline {}: {}", pipelineId, e.getMessage());
+        }
+    }
+
+    public MiningModel rollbackToExecution(Long modelId, Long executionId) {
+        MiningModel model = miningModelMapper.selectById(modelId);
+        if (model == null || Integer.valueOf(1).equals(model.getDeleted())) {
+            throw new IllegalArgumentException("模型不存在: " + modelId);
+        }
+
+        ModelExecution execution = modelExecutionMapper.selectById(executionId);
+        if (execution == null || !execution.getModelId().equals(modelId)) {
+            throw new IllegalArgumentException("执行记录不存在或不属于该模型: " + executionId);
+        }
+        if (!"success".equals(execution.getStatus())) {
+            throw new IllegalArgumentException("只能回滚到成功的执行记录");
+        }
+
+        if (execution.getHyperparameters() != null) {
+            model.setHyperparameters(execution.getHyperparameters());
+        }
+        if (execution.getMetrics() != null) {
+            model.setMetrics(execution.getMetrics());
+        }
+        miningModelMapper.updateById(model);
+
+        if (model.getPipelineId() != null) {
+            try { syncModelToPipeline(model.getPipelineId(), model); } catch (Exception e) {
+                log.warn("[MINING] Failed to sync after rollback for model {}: {}", modelId, e.getMessage());
+            }
+        }
+
+        log.info("[MINING] Model {} rolled back to execution {}, version={}", modelId, executionId, model.getVersion());
+        return model;
+    }
+
     // ======================== Training Script Generation ========================
 
     private String buildTrainingScript(MiningModel model) {
+        com.smartquery.common.IdentifierValidator.validateTableName(model.getSourceTable());
+        if (model.getTargetColumn() != null) com.smartquery.common.IdentifierValidator.validateColumnName(model.getTargetColumn());
+        if (model.getTemporalColumn() != null) com.smartquery.common.IdentifierValidator.validateColumnName(model.getTemporalColumn());
+
         DataSource ds = dataSourceMapper.selectById(model.getDataSourceId());
         String dbUrl = ds != null ? buildSqlalchemyUrl(ds) : "";
 
@@ -489,6 +688,54 @@ public class MiningService {
         sb.append("if _sc == 'standard' and num_cols:\n    from sklearn.preprocessing import StandardScaler\n    _scaler = StandardScaler(); X[num_cols] = _scaler.fit_transform(X[num_cols])\n");
         sb.append("elif _sc == 'minmax' and num_cols:\n    from sklearn.preprocessing import MinMaxScaler\n    _scaler = MinMaxScaler(); X[num_cols] = _scaler.fit_transform(X[num_cols])\n\n");
 
+        // Feature transforms (log, binning, polynomial, etc.)
+        sb.append("_transforms = preprocessing.get('transforms', [])\n");
+        sb.append("for _t in _transforms:\n");
+        sb.append("    _ttype = _t.get('type', '')\n");
+        sb.append("    _tcols = [c for c in _t.get('columns', []) if c in X.columns]\n");
+        sb.append("    if not _tcols: continue\n");
+        sb.append("    if _ttype == 'log':\n");
+        sb.append("        for c in _tcols: X[c] = np.log1p(X[c].clip(lower=0))\n");
+        sb.append("        print(f'[INFO] Applied log transform to {_tcols}')\n");
+        sb.append("    elif _ttype == 'binning':\n");
+        sb.append("        _bins = _t.get('bins', 5)\n");
+        sb.append("        for c in _tcols: X[c] = pd.cut(X[c], bins=_bins, labels=False, duplicates='drop')\n");
+        sb.append("        print(f'[INFO] Applied binning ({_bins} bins) to {_tcols}')\n");
+        sb.append("    elif _ttype == 'polynomial':\n");
+        sb.append("        from sklearn.preprocessing import PolynomialFeatures\n");
+        sb.append("        _deg = _t.get('degree', 2)\n");
+        sb.append("        _pf = PolynomialFeatures(degree=_deg, include_bias=False)\n");
+        sb.append("        _pf_data = _pf.fit_transform(X[_tcols].fillna(0))\n");
+        sb.append("        _pf_names = [f'{c}_poly{i}' for i, c in enumerate(_pf.get_feature_names_out(_tcols))]\n");
+        sb.append("        X = X.drop(columns=_tcols)\n");
+        sb.append("        for i, n in enumerate(_pf_names): X[n] = _pf_data[:, i]\n");
+        sb.append("        print(f'[INFO] Applied polynomial (degree={_deg}) to {_tcols}, generated {len(_pf_names)} features')\n");
+        sb.append("    elif _ttype == 'date_extract':\n");
+        sb.append("        for c in _tcols:\n");
+        sb.append("            _ds = pd.to_datetime(df[c], errors='coerce')\n");
+        sb.append("            X[f'{c}_year'] = _ds.dt.year\n");
+        sb.append("            X[f'{c}_month'] = _ds.dt.month\n");
+        sb.append("            X[f'{c}_day'] = _ds.dt.day\n");
+        sb.append("            X[f'{c}_dow'] = _ds.dt.dayofweek\n");
+        sb.append("            X = X.drop(columns=[c])\n");
+        sb.append("        print(f'[INFO] Extracted date features from {_tcols}')\n");
+        sb.append("    elif _ttype == 'interaction':\n");
+        sb.append("        import itertools\n");
+        sb.append("        for c1, c2 in itertools.combinations(_tcols, 2):\n");
+        sb.append("            X[f'{c1}_x_{c2}'] = X[c1].fillna(0) * X[c2].fillna(0)\n");
+        sb.append("        print(f'[INFO] Created interaction features from {_tcols}')\n");
+        sb.append("    elif _ttype == 'target_encode' and y is not None:\n");
+        sb.append("        for c in _tcols:\n");
+        sb.append("            _te_map = y.groupby(X[c]).mean()\n");
+        sb.append("            X[c] = X[c].map(_te_map).fillna(y.mean())\n");
+        sb.append("        print(f'[INFO] Applied target encoding to {_tcols}')\n");
+        sb.append("    elif _ttype == 'frequency_encode':\n");
+        sb.append("        for c in _tcols:\n");
+        sb.append("            _freq = X[c].value_counts(normalize=True)\n");
+        sb.append("            X[c] = X[c].map(_freq).fillna(0)\n");
+        sb.append("        print(f'[INFO] Applied frequency encoding to {_tcols}')\n");
+        sb.append("\n");
+
         String hyperparams = model.getHyperparameters();
         if (hyperparams == null || "null".equals(hyperparams) || hyperparams.isBlank()) hyperparams = "{}";
         sb.append("params = ").append(hyperparams).append("\n_model_type = '").append(model.getModelType()).append("'\n\n");
@@ -500,13 +747,16 @@ public class MiningService {
         sb.append("_test_size = ").append(model.getTestSize() != null ? model.getTestSize() : 0.2).append("\n\n");
 
         sb.append("if y is not None:\n");
-        sb.append("    if _val_mode == 'temporal' and '").append(model.getTemporalColumn() != null ? model.getTemporalColumn() : "").append("':\n");
-        sb.append("        _tcol = '").append(model.getTemporalColumn() != null ? model.getTemporalColumn() : "").append("'\n");
-        sb.append("        df_sorted = df.sort_values(_tcol).reset_index(drop=True)\n        X = df_sorted[feature_cols].copy()\n        y = df_sorted['").append(model.getTargetColumn()).append("']\n");
-        sb.append("        for c in X.select_dtypes(include=['object']).columns:\n            if c in _encoders: X[c] = _encoders[c].transform(X[c].astype(str))\n            else: X[c] = LabelEncoder().fit_transform(X[c].astype(str))\n");
-        sb.append("        if _scaler is not None:\n            _num = X.select_dtypes(include=['number']).columns.tolist()\n            if _num: X[_num] = _scaler.transform(X[_num])\n");
-        sb.append("        _split_idx = int(len(X) * (1 - _test_size))\n        X_train, X_test = X.iloc[:_split_idx], X.iloc[_split_idx:]\n        y_train, y_test = y.iloc[:_split_idx], y.iloc[_split_idx:]\n");
-        sb.append("    else:\n        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=_test_size, random_state=42)\n");
+        // Temporal validation: sort by time column first, then split sequentially
+        if ("temporal".equals(validationMode(model)) && model.getTemporalColumn() != null && !model.getTemporalColumn().isBlank()) {
+            sb.append("    _tcol = '").append(model.getTemporalColumn()).append("'\n");
+            sb.append("    _sort_idx = df.sort_values(_tcol).index\n");
+            sb.append("    X = X.loc[_sort_idx].reset_index(drop=True)\n    y = y.loc[_sort_idx].reset_index(drop=True)\n");
+            sb.append("    _split_idx = int(len(X) * (1 - _test_size))\n    X_train, X_test = X.iloc[:_split_idx], X.iloc[_split_idx:]\n    y_train, y_test = y.iloc[:_split_idx], y.iloc[_split_idx:]\n");
+            sb.append("    print(f'[INFO] Temporal split: train={len(X_train)}, test={len(X_test)}, sorted by {_tcol}')\n");
+        } else {
+            sb.append("    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=_test_size, random_state=42)\n");
+        }
         sb.append("else:\n    X_train = X; X_test = None; y_train = None; y_test = None\n\n");
         sb.append("clf.fit(X_train, y_train if y is not None else X_train)\n\n");
 
@@ -517,7 +767,7 @@ public class MiningService {
         sb.append("        result['test_recall'] = round(metrics.recall_score(y_test, y_pred, average='weighted', zero_division=0), 4)\n        result['test_f1'] = round(metrics.f1_score(y_test, y_pred, average='weighted', zero_division=0), 4)\n");
         sb.append("        result['train_accuracy'] = round(metrics.accuracy_score(y_train, y_train_pred), 4)\n");
         sb.append("        _gap = round(abs(result['train_accuracy'] - result['test_accuracy']), 4)\n        result['overfitting_gap'] = _gap\n");
-        sb.append("        if _gap > 0.15: result['overfitting_warning'] = f'训练精度({result[\"train_accuracy\"]})与测试精度({result[\"test_accuracy\"]})差值{_gap}>0.15，可能过拟合'\n");
+        sb.append("        if _gap > " + overfittingGapThreshold + ": result['overfitting_warning'] = f'训练精度({result[\"train_accuracy\"]})与测试精度({result[\"test_accuracy\"]})差值{_gap}>" + overfittingGapThreshold + "，可能过拟合'\n");
         sb.append("        try:\n            _cm = metrics.confusion_matrix(y_test, y_pred)\n            result['confusion_matrix'] = _cm.tolist()\n");
         sb.append("            _cls = sorted(set(list(y_test.astype(str)) + list(y_pred.astype(str))))\n            result['class_labels'] = _cls\n        except: pass\n");
         sb.append("    else:\n");
@@ -525,7 +775,7 @@ public class MiningService {
         sb.append("        result['test_mae'] = round(metrics.mean_absolute_error(y_test, y_pred), 4)\n");
         sb.append("        result['train_r2'] = round(metrics.r2_score(y_train, y_train_pred), 4)\n");
         sb.append("        _gap = round(abs(result['train_r2'] - result['test_r2']), 4)\n        result['overfitting_gap'] = _gap\n");
-        sb.append("        if _gap > 0.15: result['overfitting_warning'] = f'训练R²({result[\"train_r2\"]})与测试R²({result[\"test_r2\"]})差值{_gap}>0.15，可能过拟合'\n");
+        sb.append("        if _gap > " + overfittingGapThreshold + ": result['overfitting_warning'] = f'训练R²({result[\"train_r2\"]})与测试R²({result[\"test_r2\"]})差值{_gap}>" + overfittingGapThreshold + "，可能过拟合'\n");
         sb.append("else:\n    result['inertia'] = getattr(clf, 'inertia_', None)\n    if hasattr(clf, 'labels_'): result['n_clusters'] = len(set(clf.labels_))\n\n");
 
         // Sample size warning
@@ -536,7 +786,10 @@ public class MiningService {
 
         sb.append("val_result = {}\nif _val_mode in ('cv', 'oos') and y is not None:\n");
         sb.append("    _cv_scoring = 'f1_weighted' if 'classification' in '").append(model.getModelType()).append("' else 'r2'\n");
-        sb.append("    try:\n        _cv_scores = cross_val_score(clf.__class__(**params) if params else clf.__class__(), X, y, cv=_cv_folds, scoring=_cv_scoring)\n");
+        sb.append("    try:\n");
+        sb.append("        from sklearn.model_selection import StratifiedKFold\n");
+        sb.append("        _cv = StratifiedKFold(n_splits=_cv_folds, shuffle=True, random_state=42) if 'classification' in '").append(model.getModelType()).append("' else _cv_folds\n");
+        sb.append("        _cv_scores = cross_val_score(clf.__class__(**params) if params else clf.__class__(), X, y, cv=_cv, scoring=_cv_scoring)\n");
         sb.append("        val_result['cv_mean'] = round(float(_cv_scores.mean()), 4)\n        val_result['cv_std'] = round(float(_cv_scores.std()), 4)\n        val_result['cv_folds'] = _cv_folds\n");
         sb.append("    except Exception as _e: val_result['cv_error'] = str(_e)\n");
         sb.append("elif _val_mode == 'temporal' and y_test is not None:\n    val_result['temporal_split'] = 'train={}/test={}'.format(len(X_train), len(X_test))\n\n");
@@ -544,7 +797,7 @@ public class MiningService {
         sb.append("fi = {}\nif hasattr(clf, 'feature_importances_'): fi = dict(zip(X_train.columns, [round(float(v), 4) for v in clf.feature_importances_]))\n");
         sb.append("elif hasattr(clf, 'coef_'): fi = dict(zip(X_train.columns, [round(float(v), 4) for v in clf.coef_.flatten()]))\n\n");
 
-        sb.append("_workspace = '").append(MODEL_WORKSPACE).append("'\nos.makedirs(_workspace, exist_ok=True)\n");
+        sb.append("_workspace = '").append(modelWorkspace).append("'\nos.makedirs(_workspace, exist_ok=True)\n");
         sb.append("_model_path = os.path.join(_workspace, 'model_").append(model.getId()).append("_v' + clf.__class__.__name__ + '.pkl')\n");
         sb.append("joblib.dump(clf, _model_path)\n");
         sb.append("_preproc_path = os.path.join(_workspace, 'model_").append(model.getId()).append("_preprocessors.pkl')\n");
@@ -567,68 +820,236 @@ public class MiningService {
         Map<String, Object> preprocessing = parseJsonMap(model.getPreprocessing());
 
         List<Map<String, Object>> nodes = new ArrayList<>();
+        List<Map<String, Object>> edges = new ArrayList<>();
+
+        // Node 1: Data source
         Map<String, Object> dsConfig = new LinkedHashMap<>();
         dsConfig.put("title", "数据接入");
         dsConfig.put("table", model.getSourceTable());
-        nodes.add(Map.of("id", "ds_" + model.getId(), "type", "data_source", "config", dsConfig));
+        dsConfig.put("filter", "");
+        String dsId = "ds_" + model.getId();
+        nodes.add(Map.of("id", dsId, "type", "data_source", "config", dsConfig));
 
+        // Node 2: Preprocessing
         Map<String, Object> ppConfig = new LinkedHashMap<>();
         ppConfig.put("title", "数据预处理");
         ppConfig.put("handleMissing", preprocessing.getOrDefault("handleMissing", "drop"));
         ppConfig.put("encoding", preprocessing.getOrDefault("encoding", "label"));
         ppConfig.put("scaling", preprocessing.getOrDefault("scaling", "none"));
-        nodes.add(Map.of("id", "pp_" + model.getId(), "type", "preprocessing", "config", ppConfig));
+        String ppId = "pp_" + model.getId();
+        nodes.add(Map.of("id", ppId, "type", "preprocessing", "config", ppConfig));
+        edges.add(Map.of("source", dsId, "target", ppId));
 
+        String prevId = ppId;
+
+        // Node 3 (conditional): Fill missing — only when fillMissingStrategy is explicitly set
+        String fillStrategy = (String) preprocessing.get("fillMissingStrategy");
+        if (fillStrategy != null && !"none".equals(fillStrategy) && !"auto".equals(fillStrategy)) {
+            Map<String, Object> fmConfig = new LinkedHashMap<>();
+            fmConfig.put("title", "填充缺失值");
+            fmConfig.put("strategy", fillStrategy);
+            Object fillCols = preprocessing.get("fillMissingColumns");
+            if (fillCols instanceof List) fmConfig.put("columns", fillCols);
+            else fmConfig.put("columns", List.of());
+            String fmId = "fm_" + model.getId();
+            nodes.add(Map.of("id", fmId, "type", "fill_missing", "config", fmConfig));
+            edges.add(Map.of("source", prevId, "target", fmId));
+            prevId = fmId;
+        }
+
+        // Node 4: Feature engineering — include transforms from preprocessing
         Map<String, Object> feConfig = new LinkedHashMap<>();
         feConfig.put("title", "特征工程");
         feConfig.put("featureColumns", featureCols);
-        feConfig.put("targetColumn", model.getTargetColumn());
-        nodes.add(Map.of("id", "fe_" + model.getId(), "type", "feature_engineering", "config", feConfig));
+        feConfig.put("targetColumn", model.getTargetColumn() != null ? model.getTargetColumn() : "");
+        Object transforms = preprocessing.get("transforms");
+        if (transforms instanceof List && !((List<?>) transforms).isEmpty()) {
+            feConfig.put("transforms", transforms);
+        }
+        String feId = "fe_" + model.getId();
+        nodes.add(Map.of("id", feId, "type", "feature_engineering", "config", feConfig));
+        edges.add(Map.of("source", prevId, "target", feId));
 
+        // Node 5: Training
         Map<String, Object> trConfig = new LinkedHashMap<>();
         trConfig.put("title", "模型训练");
         trConfig.put("modelType", model.getModelType());
         trConfig.put("algorithm", model.getAlgorithm());
         trConfig.put("hyperparams", parseJsonMap(model.getHyperparameters()));
-        nodes.add(Map.of("id", "tr_" + model.getId(), "type", "training", "config", trConfig));
+        String trId = "tr_" + model.getId();
+        nodes.add(Map.of("id", trId, "type", "training", "config", trConfig));
+        edges.add(Map.of("source", feId, "target", trId));
 
+        // Node 6: Evaluation
         Map<String, Object> evConfig = new LinkedHashMap<>();
         evConfig.put("title", "模型评估");
         evConfig.put("testSize", (int)((model.getTestSize() != null ? model.getTestSize() : 0.2) * 100));
         evConfig.put("cvFold", model.getCvFolds() != null ? model.getCvFolds() : 5);
         if (model.getValidationMode() != null) evConfig.put("validationMode", model.getValidationMode());
         if (model.getTemporalColumn() != null) evConfig.put("temporalColumn", model.getTemporalColumn());
-        nodes.add(Map.of("id", "ev_" + model.getId(), "type", "evaluation", "config", evConfig));
+        String evId = "ev_" + model.getId();
+        nodes.add(Map.of("id", evId, "type", "evaluation", "config", evConfig));
+        edges.add(Map.of("source", trId, "target", evId));
 
+        // Node 7 (conditional): Output — only when predictResultTable is set
+        if (model.getPredictResultTable() != null && !model.getPredictResultTable().isBlank()) {
+            Map<String, Object> outConfig = new LinkedHashMap<>();
+            outConfig.put("title", "输出写入");
+            outConfig.put("table", model.getPredictResultTable());
+            outConfig.put("mode", "append");
+            outConfig.put("autoCreate", true);
+            String outId = "out_" + model.getId();
+            nodes.add(Map.of("id", outId, "type", "output", "config", outConfig));
+            edges.add(Map.of("source", evId, "target", outId));
+        }
+
+        LocalDateTime now = LocalDateTime.now();
         MiningPipeline pipeline = new MiningPipeline();
         pipeline.setName(model.getName());
         pipeline.setDataSourceId(model.getDataSourceId());
         pipeline.setConversationId(model.getConversationId());
         pipeline.setStatus("completed");
+        pipeline.setSourceType("chat");
         pipeline.setNodes(toJson(nodes));
-        pipeline.setEdges("[]");
+        pipeline.setEdges(toJson(edges));
+        pipeline.setLastSyncedAt(now);
         pipeline.setDeleted(0);
         miningPipelineMapper.insert(pipeline);
+
+        model.setLastSyncedAt(now);
+        miningModelMapper.updateById(model);
         return pipeline;
     }
 
-    private void syncHyperparamsToPipeline(Long pipelineId, String hyperparamsJson) {
+    public void syncModelToPipeline(Long pipelineId, MiningModel model) {
         try {
             MiningPipeline pipeline = miningPipelineMapper.selectById(pipelineId);
             if (pipeline == null) return;
             List<Map<String, Object>> nodes = parseJsonNodeList(pipeline.getNodes());
-            Map<String, Object> hp = parseJsonMap(hyperparamsJson);
-            for (Map<String, Object> node : nodes) {
-                if ("training".equals(node.get("type"))) {
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> config = (Map<String, Object>) node.get("config");
-                    if (config != null) config.put("hyperparams", new LinkedHashMap<>(hp));
+            Map<String, Object> preprocessing = parseJsonMap(model.getPreprocessing());
+            List<String> featureCols = parseJsonList(model.getFeatureColumns());
+            List<Map<String, Object>> edges = parseJsonNodeList(pipeline.getEdges());
+
+            boolean nodesChanged = false;
+
+            // Ensure fill_missing node exists if preprocessing has fill strategy
+            String fillStrategy = (String) preprocessing.get("fillMissingStrategy");
+            if (fillStrategy != null && !"none".equals(fillStrategy) && !"auto".equals(fillStrategy)) {
+                boolean hasFillNode = nodes.stream().anyMatch(n -> "fill_missing".equals(n.get("type")));
+                if (!hasFillNode) {
+                    int ppIdx = -1;
+                    for (int i = 0; i < nodes.size(); i++) {
+                        if ("preprocessing".equals(nodes.get(i).get("type"))) { ppIdx = i; break; }
+                    }
+                    if (ppIdx >= 0) {
+                        String fmId = "fm_" + model.getId() + "_" + System.currentTimeMillis();
+                        Map<String, Object> fmConfig = new LinkedHashMap<>();
+                        fmConfig.put("title", "填充缺失值");
+                        fmConfig.put("strategy", fillStrategy);
+                        Object fillCols = preprocessing.get("fillMissingColumns");
+                        fmConfig.put("columns", fillCols instanceof List ? fillCols : List.of());
+                        Map<String, Object> fmNode = new LinkedHashMap<>();
+                        fmNode.put("id", fmId);
+                        fmNode.put("type", "fill_missing");
+                        fmNode.put("config", fmConfig);
+                        nodes.add(ppIdx + 1, fmNode);
+
+                        // Fix edges: pp→next becomes pp→fm→next
+                        String ppId = (String) nodes.get(ppIdx).get("id");
+                        edges.removeIf(e -> ppId.equals(e.get("source")));
+                        // Find what was after preprocessing
+                        int nextIdx = ppIdx + 2; // fm is at ppIdx+1 now
+                        String nextId = nextIdx < nodes.size() ? (String) nodes.get(nextIdx).get("id") : null;
+                        edges.add(Map.of("source", ppId, "target", fmId));
+                        if (nextId != null) edges.add(Map.of("source", fmId, "target", nextId));
+                        nodesChanged = true;
+                    }
                 }
             }
+
+            // Ensure output node exists if predictResultTable is set
+            if (model.getPredictResultTable() != null && !model.getPredictResultTable().isBlank()) {
+                boolean hasOutputNode = nodes.stream().anyMatch(n -> "output".equals(n.get("type")));
+                if (!hasOutputNode) {
+                    String outId = "out_" + model.getId() + "_" + System.currentTimeMillis();
+                    Map<String, Object> outConfig = new LinkedHashMap<>();
+                    outConfig.put("title", "输出写入");
+                    outConfig.put("table", model.getPredictResultTable());
+                    outConfig.put("mode", "append");
+                    outConfig.put("autoCreate", true);
+                    Map<String, Object> outNode = new LinkedHashMap<>();
+                    outNode.put("id", outId);
+                    outNode.put("type", "output");
+                    outNode.put("config", outConfig);
+                    nodes.add(outNode);
+
+                    // Find last node and connect to output
+                    String lastId = (String) nodes.get(nodes.size() - 2).get("id"); // node before output
+                    if (lastId != null) edges.add(Map.of("source", lastId, "target", outId));
+                    nodesChanged = true;
+                }
+            }
+
+            for (Map<String, Object> node : nodes) {
+                String type = (String) node.get("type");
+                @SuppressWarnings("unchecked")
+                Map<String, Object> config = new LinkedHashMap<>((Map<String, Object>) node.getOrDefault("config", Map.of()));
+
+                switch (type) {
+                    case "data_source" -> {
+                        if (model.getSourceTable() != null) config.put("table", model.getSourceTable());
+                    }
+                    case "preprocessing" -> {
+                        if (preprocessing.containsKey("handleMissing"))
+                            config.put("handleMissing", preprocessing.get("handleMissing"));
+                        if (preprocessing.containsKey("encoding"))
+                            config.put("encoding", preprocessing.get("encoding"));
+                        if (preprocessing.containsKey("scaling"))
+                            config.put("scaling", preprocessing.get("scaling"));
+                    }
+                    case "fill_missing" -> {
+                        if (preprocessing.containsKey("fillMissingStrategy"))
+                            config.put("strategy", preprocessing.get("fillMissingStrategy"));
+                        if (preprocessing.containsKey("fillMissingColumns"))
+                            config.put("columns", preprocessing.get("fillMissingColumns"));
+                    }
+                    case "feature_engineering" -> {
+                        if (!featureCols.isEmpty()) config.put("featureColumns", featureCols);
+                        if (model.getTargetColumn() != null) config.put("targetColumn", model.getTargetColumn());
+                        Object transforms = preprocessing.get("transforms");
+                        if (transforms instanceof List) config.put("transforms", transforms);
+                    }
+                    case "training" -> {
+                        if (model.getModelType() != null) config.put("modelType", model.getModelType());
+                        if (model.getAlgorithm() != null) config.put("algorithm", model.getAlgorithm());
+                        if (model.getHyperparameters() != null) {
+                            Map<String, Object> hp = parseJsonMap(model.getHyperparameters());
+                            config.put("hyperparams", new LinkedHashMap<>(hp));
+                        }
+                    }
+                    case "evaluation" -> {
+                        if (model.getValidationMode() != null) config.put("validationMode", model.getValidationMode());
+                        if (model.getCvFolds() != null) config.put("cvFold", model.getCvFolds());
+                        if (model.getTestSize() != null) config.put("testSize", (int)(model.getTestSize() * 100));
+                        if (model.getTemporalColumn() != null) config.put("temporalColumn", model.getTemporalColumn());
+                    }
+                    case "output" -> {
+                        if (model.getPredictResultTable() != null) config.put("table", model.getPredictResultTable());
+                    }
+                }
+                node.put("config", config);
+            }
+
             pipeline.setNodes(objectMapper.writeValueAsString(nodes));
+            pipeline.setEdges(objectMapper.writeValueAsString(edges));
+            LocalDateTime now = LocalDateTime.now();
+            pipeline.setLastSyncedAt(now);
             miningPipelineMapper.updateById(pipeline);
+
+            model.setLastSyncedAt(now);
+            miningModelMapper.updateById(model);
         } catch (Exception e) {
-            log.warn("[MINING] Failed to sync hyperparams to pipeline {}: {}", pipelineId, e.getMessage());
+            log.warn("[MINING] Failed to sync model to pipeline {}: {}", pipelineId, e.getMessage());
         }
     }
 
@@ -695,8 +1116,11 @@ public class MiningService {
     }
 
     private String truncateLog(String log, int maxLen) {
-        if (log == null || log.length() <= maxLen) return log;
-        return log.substring(0, maxLen) + "\n... (truncated)";
+        if (log == null) return null;
+        // Strip control characters that break JSON serialization
+        String cleaned = log.replaceAll("[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f]", "");
+        if (cleaned.length() <= maxLen) return cleaned;
+        return cleaned.substring(0, maxLen) + "\n... (truncated)";
     }
 
     private void validateTableName(String name) {
@@ -707,6 +1131,45 @@ public class MiningService {
     private void validateColumnName(String name) {
         if (name != null && !name.isBlank() && !name.matches("^[a-zA-Z_][a-zA-Z0-9_]*$"))
             throw new IllegalArgumentException("无效的列名: " + name);
+    }
+
+    // Compute the next run time from a 5-field cron expression.
+    // Handles: every-N-minutes, daily-at-H, weekly, monthly patterns.
+    private java.time.LocalDateTime computeNextRun(String cron) {
+        if (cron == null || cron.isBlank()) return LocalDateTime.now().plusMinutes(60);
+        String[] parts = cron.trim().split("\\s+");
+        if (parts.length != 5) return LocalDateTime.now().plusMinutes(60);
+
+        // "*/N * * * *" — every N minutes
+        if (parts[0].startsWith("*/")) {
+            long mins = Long.parseLong(parts[0].substring(2));
+            return LocalDateTime.now().plusMinutes(mins);
+        }
+
+        // Standard 5-field cron: minute hour day month weekday
+        int minute = Integer.parseInt(parts[0]);
+        int hour = Integer.parseInt(parts[1]);
+        java.time.LocalDateTime now = java.time.LocalDateTime.now();
+        java.time.LocalDateTime next = now.withHour(hour).withMinute(minute).withSecond(0).withNano(0);
+        if (!next.isAfter(now)) next = next.plusDays(1);
+
+        // Weekly: "0 H * * D"
+        if (!parts[4].equals("*")) {
+            int targetDay = Integer.parseInt(parts[4]);
+            int currentDay = next.getDayOfWeek().getValue() % 7;
+            int daysUntil = (targetDay - currentDay + 7) % 7;
+            if (daysUntil == 0 && !next.isAfter(now)) daysUntil = 7;
+            next = next.plusDays(daysUntil);
+        }
+
+        // Monthly: "0 H D * *"
+        if (!parts[2].equals("*") && parts[4].equals("*")) {
+            int targetDay = Integer.parseInt(parts[2]);
+            next = next.withDayOfMonth(Math.min(targetDay, next.getMonth().length(next.toLocalDate().isLeapYear())));
+            if (!next.isAfter(now)) next = next.plusMonths(1);
+        }
+
+        return next;
     }
 
     private void logMiningEvent(MiningModel model, String eventType, Map<String, Object> extra) {

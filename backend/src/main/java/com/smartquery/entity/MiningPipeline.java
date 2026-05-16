@@ -20,6 +20,9 @@ public class MiningPipeline {
     private String nodes;
     private String edges;
 
+    private String sourceType;
+    private LocalDateTime lastSyncedAt;
+
     private LocalDateTime lastExecutedAt;
     private String executionLog;
 

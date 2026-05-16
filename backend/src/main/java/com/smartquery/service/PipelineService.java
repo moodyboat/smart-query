@@ -5,11 +5,13 @@ import com.smartquery.common.ModelStatus;
 import com.smartquery.datasource.DataSourceManager;
 import com.smartquery.entity.*;
 import com.smartquery.logging.ConversationEventLogger;
+import com.smartquery.logging.DiagnosticsTimer;
 import com.smartquery.mapper.*;
 import com.smartquery.python.PythonExecutor;
 import com.smartquery.python.PythonResult;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -23,7 +25,8 @@ import java.util.*;
 @RequiredArgsConstructor
 public class PipelineService {
 
-    private static final String MODEL_WORKSPACE = System.getProperty("user.home") + "/smartquery-models";
+    @Value("${smart-query.mining.workspace:${user.home}/smartquery-models}")
+    private String modelWorkspace;
 
     private final MiningPipelineMapper miningPipelineMapper;
     private final MiningModelMapper miningModelMapper;
@@ -34,6 +37,24 @@ public class PipelineService {
     private final AlgorithmService algorithmService;
     private final ObjectMapper objectMapper;
     private final ConversationEventLogger eventLogger;
+
+    @Value("${pipeline.execution-timeout-ms:600000}")
+    private int executionTimeoutMs;
+
+    @Value("${pipeline.preview-timeout-ms:120000}")
+    private int previewTimeoutMs;
+
+    @Value("${pipeline.default-cv-folds:5}")
+    private int defaultCvFolds;
+
+    @Value("${pipeline.default-test-size:0.2}")
+    private double defaultTestSize;
+
+    @Value("${pipeline.default-bins:5}")
+    private int defaultBins;
+
+    @Value("${pipeline.sample-rows:10}")
+    private int sampleRows;
 
     @SuppressWarnings("unchecked")
     public Map<String, Object> executePipeline(Long pipelineId) {
@@ -75,9 +96,10 @@ public class PipelineService {
         if (ds == null) throw new IllegalStateException("数据源不存在");
 
         // Validate source table exists
+        com.smartquery.common.IdentifierValidator.validateTableName(cfg.sourceTable);
         try {
             JdbcTemplate jdbc = dataSourceManager.getJdbcTemplate(ds.getId());
-            jdbc.queryForObject("SELECT 1 FROM " + cfg.sourceTable + " LIMIT 1", Integer.class);
+            jdbc.queryForObject("SELECT 1 FROM `" + cfg.sourceTable + "` LIMIT 1", Integer.class);
         } catch (Exception e) {
             throw new IllegalStateException("源表 '" + cfg.sourceTable + "' 不存在或无法访问: " + e.getMessage());
         }
@@ -85,13 +107,21 @@ public class PipelineService {
         String dbUrl = buildSqlalchemyUrl(ds);
         String algoBlock = buildAlgorithmBlock(cfg.algorithm);
         String modelFilename = "pipeline_" + pipelineId + "_v" + cfg.algorithm + ".pkl";
-        String modelPath = MODEL_WORKSPACE + "/" + modelFilename;
+        String modelPath = modelWorkspace + "/" + modelFilename;
 
         String script = buildPipelineScript(dbUrl, cfg, algoBlock, modelPath);
+        log.debug("[PIPELINE] Generated script for pipeline {} ({} chars):\n{}", pipelineId, script.length(), script);
 
-        pipeline.setStatus("running");
-        pipeline.setExecutionLog(null);
-        miningPipelineMapper.updateById(pipeline);
+        // Atomic status check: only proceed if not already running
+        int updated = miningPipelineMapper.update(null,
+            new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<MiningPipeline>()
+                .eq(MiningPipeline::getId, pipelineId)
+                .ne(MiningPipeline::getStatus, "running")
+                .set(MiningPipeline::getStatus, "running")
+                .set(MiningPipeline::getExecutionLog, null));
+        if (updated == 0) {
+            throw new IllegalStateException("流水线正在执行中，请等待完成");
+        }
 
         log.info("[PIPELINE] Executing pipeline {}: {} nodes, table={}, algo={}",
             pipelineId, nodes.size(), cfg.sourceTable, cfg.algorithm);
@@ -109,11 +139,13 @@ public class PipelineService {
         String execLog;
         Map<String, Object> result;
         try {
-            PythonResult pr = pythonExecutor.execute(script, pipeline.getDataSourceId(), 600000);
+            PythonResult pr = DiagnosticsTimer.timedSupply("pipeline.execute", () -> pythonExecutor.execute(script, pipeline.getDataSourceId(), executionTimeoutMs));
             execLog = pr.stdout();
             if (pr.exitCode() != 0) {
                 String err = pr.stderr().isBlank() ? pr.stdout() : pr.stderr();
-                throw new RuntimeException("Pipeline执行失败: " + truncateLog(err, 1000));
+                log.error("[PIPELINE] Python execution failed for pipeline {} (exit={}, time={}ms)\n--- STDERR ---\n{}\n--- STDOUT ---\n{}",
+                    pipelineId, pr.exitCode(), pr.executionTimeMs(), pr.stderr(), pr.stdout());
+                throw new RuntimeException("Pipeline执行失败: " + truncateLog(err, 5000));
             }
             result = parseResultMarker(pr.stdout(), "[PIPELINE_RESULT]");
             result.put("modelPath", modelPath);
@@ -152,6 +184,9 @@ public class PipelineService {
 
         result.put("modelId", model.getId());
         result.put("modelName", model.getName());
+        result.put("status", "trained");
+        result.put("modelType", model.getModelType());
+        result.put("featureImportance", result.get("feature_importance"));
 
         pipeline.setStatus("completed");
         pipeline.setLastExecutedAt(LocalDateTime.now());
@@ -213,7 +248,8 @@ public class PipelineService {
                         if (ds != null) {
                             try {
                                 JdbcTemplate jdbc = dataSourceManager.getJdbcTemplate(ds.getId());
-                                jdbc.queryForObject("SELECT 1 FROM " + table + " LIMIT 1", Integer.class);
+                            com.smartquery.common.IdentifierValidator.validateTableName(table);
+                                jdbc.queryForObject("SELECT 1 FROM `" + table + "` LIMIT 1", Integer.class);
                             } catch (Exception e) {
                                 errors.add("源表 '" + table + "' 不存在或无法访问");
                             }
@@ -264,13 +300,22 @@ public class PipelineService {
     ) {}
 
     @SuppressWarnings("unchecked")
+    public PipelineConfig extractConfigFromNodes(String nodesJson) {
+        try {
+            List<Map<String, Object>> nodes = objectMapper.readValue(nodesJson, List.class);
+            return extractConfig(nodes);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private PipelineConfig extractConfig(List<Map<String, Object>> nodes) {
         String sourceTable = null, filter = null, targetColumn = null;
         String modelType = null, algorithm = null, validationMode = null, temporalColumn = null;
         String outputTable = null, outputMode = "append";
         boolean outputAutoCreate = false;
-        double testSize = 0.2;
-        int cvFold = 5;
+        double testSize = this.defaultTestSize;
+        int cvFold = this.defaultCvFolds;
         Map<String, Object> preprocessing = new HashMap<>(), hyperparams = new HashMap<>();
         List<String> featureColumns = null;
         List<Map<String, Object>> transforms = new ArrayList<>();
@@ -358,8 +403,9 @@ public class PipelineService {
                     DataSource ds = dataSourceMapper.selectById(dataSourceId);
                     if (ds != null) {
                         try {
+                            com.smartquery.common.IdentifierValidator.validateTableName(table);
                             JdbcTemplate jdbc = dataSourceManager.getJdbcTemplate(ds.getId());
-                            jdbc.queryForObject("SELECT 1 FROM " + table + " LIMIT 1", Integer.class);
+                            jdbc.queryForObject("SELECT 1 FROM `" + table + "` LIMIT 1", Integer.class);
                         } catch (Exception e) { errors.add("源表 '" + table + "' 不存在或无法访问"); }
                     }
                 }
@@ -377,13 +423,22 @@ public class PipelineService {
     // ===== Pipeline script generation =====
 
     private String buildPipelineScript(String dbUrl, PipelineConfig cfg, String algoBlock, String modelPath) {
+        com.smartquery.common.IdentifierValidator.validateTableName(cfg.sourceTable);
+        if (cfg.outputTable != null && !cfg.outputTable.isBlank()) {
+            com.smartquery.common.IdentifierValidator.validateTableName(cfg.outputTable);
+        }
+        String resolvedFilter = cfg.filter;
+        if (resolvedFilter != null && !resolvedFilter.isBlank()) {
+            com.smartquery.common.IdentifierValidator.validateFilter(resolvedFilter);
+            resolvedFilter = resolveFilterVariables(resolvedFilter);
+        }
         StringBuilder sb = new StringBuilder();
         sb.append("import pandas as pd\nimport numpy as np\nimport json\nimport os\n");
         sb.append("from sqlalchemy import create_engine, text\n\n");
         sb.append("engine = create_engine('").append(dbUrl).append("')\n");
         sb.append("_query = 'SELECT * FROM `").append(cfg.sourceTable).append("`'\n");
-        if (cfg.filter != null && !cfg.filter.isBlank()) {
-            sb.append("_filter = \"").append(cfg.filter.replace("\\", "\\\\").replace("\"", "\\\"")).append("\"\n");
+        if (resolvedFilter != null && !resolvedFilter.isBlank()) {
+            sb.append("_filter = \"").append(resolvedFilter.replace("\\", "\\\\").replace("\"", "\\\"")).append("\"\n");
             sb.append("_query = 'SELECT * FROM `").append(cfg.sourceTable).append("` WHERE ' + _filter\n");
         }
         sb.append("df = pd.read_sql(_query, engine)\nprint(f'[INFO] Loaded {len(df)} rows from ").append(cfg.sourceTable).append("')\n\n");
@@ -439,17 +494,75 @@ public class PipelineService {
 
         if (cfg.transforms != null && !cfg.transforms.isEmpty()) {
             sb.append("# Feature transforms\n");
-            for (Map<String, Object> tf : cfg.transforms) {
-                String tfType = strVal(tf.get("type"));
-                Object tfCols = tf.get("columns");
-                String tfColsJson = tfCols instanceof List ? objectMapper.valueToTree(tfCols).toString() : "[]";
-                switch (tfType) {
+            appendTransformsBlock(sb, cfg);
+        }
+
+        sb.append("X = df[feature_cols].copy()\ny = df[target_col].copy() if target_col in df.columns else None\n\n");
+    }
+
+    @SuppressWarnings("unchecked")
+    private void appendTransformsBlock(StringBuilder sb, PipelineConfig cfg) {
+        for (Map<String, Object> tf : cfg.transforms) {
+            String tfType = strVal(tf.get("type"));
+            Object tfCols = tf.get("columns");
+            String tfColsJson = tfCols instanceof List ? objectMapper.valueToTree(tfCols).toString() : "[]";
+            switch (tfType) {
                     case "log" -> {
-                        sb.append("for c in ").append(tfColsJson).append(":\n    if c in df.columns and df[c].dtype in ['float64','int64']: df[c + '_log'] = np.log1p(df[c].clip(lower=0)); feature_cols.append(c + '_log')\n");
+                        sb.append("# Log transform\n");
+                        sb.append("for c in ").append(tfColsJson).append(":\n");
+                        sb.append("    if c in df.columns and df[c].dtype in ['float64','int64']:\n");
+                        sb.append("        df[c + '_log'] = np.log1p(df[c].clip(lower=0)); feature_cols.append(c + '_log')\n");
                     }
                     case "binning" -> {
                         int bins = tf.get("bins") instanceof Number ? ((Number) tf.get("bins")).intValue() : 5;
-                        sb.append("for c in ").append(tfColsJson).append(":\n    if c in df.select_dtypes(include=['number']).columns: df[c + '_bin'] = pd.cut(df[c], bins=").append(bins).append(", labels=False); feature_cols.append(c + '_bin')\n");
+                        String binStrategy = strVal(tf.getOrDefault("strategy", "equal_width"));
+                        sb.append("# Binning (").append(binStrategy).append(", bins=").append(bins).append(")\n");
+                        switch (binStrategy) {
+                            case "equal_freq" -> {
+                                sb.append("for c in ").append(tfColsJson).append(":\n");
+                                sb.append("    if c in df.select_dtypes(include=['number']).columns:\n");
+                                sb.append("        try: df[c + '_bin'] = pd.qcut(df[c], q=").append(bins).append(", labels=False, duplicates='drop'); feature_cols.append(c + '_bin')\n");
+                                sb.append("        except: pass\n");
+                            }
+                            case "custom" -> {
+                                Object edgesObj = tf.get("edges");
+                                String edgesJson = edgesObj instanceof List ? objectMapper.valueToTree(edgesObj).toString() : "[]";
+                                sb.append("_bin_edges = ").append(edgesJson).append("\n");
+                                sb.append("for c in ").append(tfColsJson).append(":\n");
+                                sb.append("    if c in df.select_dtypes(include=['number']).columns and len(_bin_edges) >= 2:\n");
+                                sb.append("        df[c + '_bin'] = pd.cut(df[c], bins=_bin_edges, labels=False); feature_cols.append(c + '_bin')\n");
+                            }
+                            case "optimal" -> {
+                                sb.append("from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor\n");
+                                sb.append("_opt_bins = ").append(bins).append("\n");
+                                sb.append("for c in ").append(tfColsJson).append(":\n");
+                                sb.append("    if c in df.select_dtypes(include=['number']).columns and target_col in df.columns:\n");
+                                sb.append("        try:\n");
+                                sb.append("            _y_tmp = df[target_col]\n");
+                                sb.append("            if _y_tmp.dtype == 'object': _y_tmp = LabelEncoder().fit_transform(_y_tmp.astype(str))\n");
+                                sb.append("            _dt = DecisionTreeClassifier(max_leaf_nodes=_opt_bins, random_state=42) if 'classification' in '").append(cfg.modelType != null ? cfg.modelType : "classification").append("' else DecisionTreeRegressor(max_leaf_nodes=_opt_bins, random_state=42)\n");
+                                sb.append("            _dt.fit(df[[c]].fillna(0), _y_tmp)\n");
+                                sb.append("            _th = sorted(set([-np.inf] + list(_dt.tree_.threshold[_dt.tree_.children_left != -1]) + [np.inf]))\n");
+                                sb.append("            if len(_th) >= 2: df[c + '_bin'] = pd.cut(df[c], bins=_th, labels=False); feature_cols.append(c + '_bin')\n");
+                                sb.append("        except: pass\n");
+                            }
+                            default -> { // equal_width
+                                sb.append("for c in ").append(tfColsJson).append(":\n");
+                                sb.append("    if c in df.select_dtypes(include=['number']).columns: df[c + '_bin'] = pd.cut(df[c], bins=").append(bins).append(", labels=False); feature_cols.append(c + '_bin')\n");
+                            }
+                        }
+                    }
+                    case "polynomial" -> {
+                        int degree = tf.get("degree") instanceof Number ? ((Number) tf.get("degree")).intValue() : 2;
+                        sb.append("# Polynomial features (degree=").append(degree).append(")\n");
+                        sb.append("from sklearn.preprocessing import PolynomialFeatures as _PF\n");
+                        sb.append("_tf_valid = [c for c in ").append(tfColsJson).append(" if c in df.select_dtypes(include=['number']).columns]\n");
+                        sb.append("if _tf_valid and len(_tf_valid) <= 5:\n");
+                        sb.append("    _pf = _PF(degree=").append(degree).append(", include_bias=False)\n");
+                        sb.append("    _pf_arr = _pf.fit_transform(df[_tf_valid])\n");
+                        sb.append("    _pf_names = _pf.get_feature_names_out(_tf_valid)\n");
+                        sb.append("    for j, pn in enumerate(_pf_names):\n");
+                        sb.append("        if pn not in _tf_valid: df[pn] = _pf_arr[:, j]; feature_cols.append(pn)\n");
                     }
                     case "standardize" -> {
                         sb.append("_tf_valid = [c for c in ").append(tfColsJson).append(" if c in df.select_dtypes(include=['number']).columns]\n");
@@ -459,12 +572,39 @@ public class PipelineService {
                         sb.append("_tf_valid = [c for c in ").append(tfColsJson).append(" if c in df.select_dtypes(include=['number']).columns]\n");
                         sb.append("for i in range(len(_tf_valid)):\n    for j in range(i+1, len(_tf_valid)):\n        col_name = _tf_valid[i] + '_x_' + _tf_valid[j]; df[col_name] = df[_tf_valid[i]] * df[_tf_valid[j]]; feature_cols.append(col_name)\n");
                     }
+                    case "date_extract" -> {
+                        String parts = strVal(tf.getOrDefault("parts", "year,month,day"));
+                        sb.append("_date_parts = '").append(parts).append("'.split(',')\n");
+                        sb.append("for c in ").append(tfColsJson).append(":\n");
+                        sb.append("    if c in df.columns:\n");
+                        sb.append("        try:\n");
+                        sb.append("            _ds = pd.to_datetime(df[c])\n");
+                        sb.append("            for p in _date_parts:\n");
+                        sb.append("                p = p.strip()\n");
+                        sb.append("                if p == 'year': df[c + '_year'] = _ds.dt.year; feature_cols.append(c + '_year')\n");
+                        sb.append("                elif p == 'month': df[c + '_month'] = _ds.dt.month; feature_cols.append(c + '_month')\n");
+                        sb.append("                elif p == 'day': df[c + '_day'] = _ds.dt.day; feature_cols.append(c + '_day')\n");
+                        sb.append("                elif p == 'weekday': df[c + '_weekday'] = _ds.dt.weekday; feature_cols.append(c + '_weekday')\n");
+                        sb.append("                elif p == 'quarter': df[c + '_quarter'] = _ds.dt.quarter; feature_cols.append(c + '_quarter')\n");
+                        sb.append("        except: pass\n");
+                    }
+                    case "target_encode" -> {
+                        sb.append("# Target encoding\n");
+                        sb.append("for c in ").append(tfColsJson).append(":\n");
+                        sb.append("    if c in df.select_dtypes(include=['object']).columns and target_col in df.columns:\n");
+                        sb.append("        _te_map = df.groupby(c)[target_col].mean().to_dict()\n");
+                        sb.append("        df[c + '_te'] = df[c].map(_te_map).fillna(df[target_col].mean()); feature_cols.append(c + '_te')\n");
+                    }
+                    case "frequency_encode" -> {
+                        sb.append("# Frequency encoding\n");
+                        sb.append("for c in ").append(tfColsJson).append(":\n");
+                        sb.append("    if c in df.columns:\n");
+                        sb.append("        _fe_map = df[c].value_counts(normalize=True).to_dict()\n");
+                        sb.append("        df[c + '_freq'] = df[c].map(_fe_map); feature_cols.append(c + '_freq')\n");
+                    }
                 }
             }
-            sb.append("\n");
-        }
-
-        sb.append("X = df[feature_cols].copy()\ny = df[target_col].copy() if target_col in df.columns else None\n\n");
+        sb.append("\n");
     }
 
     private void appendEncodingScaling(StringBuilder sb, PipelineConfig cfg) {
@@ -490,46 +630,49 @@ public class PipelineService {
         sb.append("if y is not None:\n");
         sb.append("    if _val_mode == 'temporal' and _temporal_col and _temporal_col in df.columns:\n");
         sb.append("        df_sorted = df.sort_values(_temporal_col).reset_index(drop=True)\n        _split_idx = int(len(df_sorted) * (1 - _test_size))\n");
-        sb.append("        X = df_sorted[feature_cols].copy()\n        y_sorted = df_sorted[target_col].copy()\n");
-        sb.append("        for c in X.select_dtypes(include=['object']).columns: X[c] = LabelEncoder().fit_transform(X[c].astype(str)) if 'LabelEncoder' not in dir() else le.fit_transform(X[c].astype(str))\n");
-        sb.append("        if y_sorted.dtype == 'object': y_sorted = LabelEncoder().fit_transform(y_sorted.astype(str))\n");
-        sb.append("        X_train, X_test = X.iloc[:_split_idx], X.iloc[_split_idx:]\n        y_train, y_test = y_sorted.iloc[:_split_idx], y_sorted.iloc[_split_idx:]\n");
-        sb.append("    else:\n        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=_test_size, random_state=42)\n\n");
-
-        sb.append("params = ").append(cfg.hyperparams.isEmpty() ? "{}" : objectMapper.valueToTree(cfg.hyperparams).toString()).append("\n");
-        sb.append("_model_type = '").append(cfg.modelType != null ? cfg.modelType : "classification").append("'\n");
-        sb.append(algoBlock).append("\nclf.fit(X_train, y_train)\n\n");
-
-        sb.append("from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, mean_squared_error, r2_score\n");
-        sb.append("y_pred = clf.predict(X_test)\nmetrics = {}\n");
-        sb.append("try:\n    if _model_type == 'classification':\n");
-        sb.append("        metrics['accuracy'] = round(float(accuracy_score(y_test, y_pred)), 4)\n");
-        sb.append("        metrics['precision'] = round(float(precision_score(y_test, y_pred, average='weighted', zero_division=0)), 4)\n");
-        sb.append("        metrics['recall'] = round(float(recall_score(y_test, y_pred, average='weighted', zero_division=0)), 4)\n");
-        sb.append("        metrics['f1'] = round(float(f1_score(y_test, y_pred, average='weighted', zero_division=0)), 4)\n");
-        sb.append("    elif _model_type == 'regression':\n");
-        sb.append("        metrics['mse'] = round(float(mean_squared_error(y_test, y_pred)), 4)\n        metrics['r2'] = round(float(r2_score(y_test, y_pred)), 4)\n");
-        sb.append("except Exception as e: print(f'[WARN] Metrics error: {e}')\n\n");
-
-        sb.append("try:\n    _cv_scoring = 'f1_weighted' if _model_type == 'classification' else ('r2' if _model_type == 'regression' else None)\n");
-        sb.append("    if _cv_scoring: cv_scores = cross_val_score(clf, X, y, cv=_cv_folds, scoring=_cv_scoring); metrics['cv_mean'] = round(float(cv_scores.mean()), 4); metrics['cv_std'] = round(float(cv_scores.std()), 4)\n");
-        sb.append("except Exception as e: print(f'[WARN] CV error: {e}')\n\n");
-
-        sb.append("importance = {}\ntry:\n    if hasattr(clf, 'feature_importances_'): importance = dict(zip(X.columns, [round(float(v), 4) for v in clf.feature_importances_]))\n");
-        sb.append("    elif hasattr(clf, 'coef_'): importance = dict(zip(X.columns, [round(float(v), 4) for v in (clf.coef_[0] if len(clf.coef_.shape) > 1 else clf.coef_)]))\n");
-        sb.append("except: pass\n\n");
-
-        sb.append("import joblib\nos.makedirs('").append(MODEL_WORKSPACE).append("', exist_ok=True)\n");
-        sb.append("joblib.dump(clf, '").append(modelPath).append("')\n\n");
-
-        sb.append("result = {'status': 'success', 'metrics': metrics, 'feature_importance': importance, 'train_size': len(X_train), 'test_size': len(X_test), 'feature_count': len(X.columns), 'model_type': _model_type, 'algorithm': '").append(cfg.algorithm).append("'}\n");
+        sb.append("        X_train_df = X.iloc[df_sorted.index[:_split_idx]]\n        X_test_df = X.iloc[df_sorted.index[_split_idx:]]\n");
+        sb.append("        y_train = y.iloc[df_sorted.index[:_split_idx]]\n        y_test = y.iloc[df_sorted.index[_split_idx:]]\n");
+        sb.append("    else:\n        X_train_df, X_test_df, y_train, y_test = train_test_split(X, y, test_size=_test_size, random_state=42)\n\n");
+        sb.append("    params = ").append(cfg.hyperparams.isEmpty() ? "{}" : objectMapper.valueToTree(cfg.hyperparams).toString()).append("\n");
+        sb.append("    _model_type = '").append(cfg.modelType != null ? cfg.modelType : "classification").append("'\n");
+        sb.append("    ").append(algoBlock.replace("\n", "\n    ")).append("\n    clf.fit(X_train_df, y_train)\n\n");
+        sb.append("    from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, mean_squared_error, r2_score\n");
+        sb.append("    y_pred = clf.predict(X_test_df)\n    metrics = {}\n");
+        sb.append("    try:\n        if _model_type == 'classification':\n");
+        sb.append("            metrics['test_accuracy'] = round(float(accuracy_score(y_test, y_pred)), 4)\n");
+        sb.append("            metrics['test_precision'] = round(float(precision_score(y_test, y_pred, average='weighted', zero_division=0)), 4)\n");
+        sb.append("            metrics['test_recall'] = round(float(recall_score(y_test, y_pred, average='weighted', zero_division=0)), 4)\n");
+        sb.append("            metrics['test_f1'] = round(float(f1_score(y_test, y_pred, average='weighted', zero_division=0)), 4)\n");
+        sb.append("        elif _model_type == 'regression':\n");
+        sb.append("            metrics['test_mse'] = round(float(mean_squared_error(y_test, y_pred)), 4)\n            metrics['test_r2'] = round(float(r2_score(y_test, y_pred)), 4)\n");
+        sb.append("    except Exception as e: print(f'[WARN] Metrics error: {e}')\n\n");
+        sb.append("    try:\n        _cv_scoring = 'f1_weighted' if _model_type == 'classification' else ('r2' if _model_type == 'regression' else None)\n");
+        sb.append("        if _cv_scoring: cv_scores = cross_val_score(clf, X, y, cv=_cv_folds, scoring=_cv_scoring); metrics['cv_mean'] = round(float(cv_scores.mean()), 4); metrics['cv_std'] = round(float(cv_scores.std()), 4)\n");
+        sb.append("    except Exception as e: print(f'[WARN] CV error: {e}')\n\n");
+        sb.append("    importance = {}\n    try:\n        if hasattr(clf, 'feature_importances_'): importance = dict(zip(X.columns, [round(float(v), 4) for v in clf.feature_importances_]))\n");
+        sb.append("        elif hasattr(clf, 'coef_'): importance = dict(zip(X.columns, [round(float(v), 4) for v in (clf.coef_[0] if len(clf.coef_.shape) > 1 else clf.coef_)]))\n");
+        sb.append("    except: pass\n\n");
+        sb.append("    import joblib\n    os.makedirs('").append(modelWorkspace).append("', exist_ok=True)\n");
+        sb.append("    joblib.dump(clf, '").append(modelPath).append("')\n\n");
+        sb.append("    result = {'status': 'success', 'metrics': metrics, 'feature_importance': importance, 'train_size': len(X_train_df), 'test_size': len(X_test_df), 'feature_count': len(X.columns), 'model_type': _model_type, 'algorithm': '").append(cfg.algorithm).append("'}\n");
+        sb.append("else:\n");
+        sb.append("    params = ").append(cfg.hyperparams.isEmpty() ? "{}" : objectMapper.valueToTree(cfg.hyperparams).toString()).append("\n");
+        sb.append("    ").append(algoBlock.replace("\n", "\n    ")).append("\n    clf.fit(X)\n\n");
+        sb.append("    metrics = {}\n    try:\n        from sklearn.metrics import silhouette_score\n        if len(X) >= 2: metrics['silhouette'] = round(float(silhouette_score(X, clf.labels_ if hasattr(clf, 'labels_') else clf.predict(X))), 4)\n");
+        sb.append("    except Exception as e: print(f'[WARN] Clustering metrics error: {e}')\n");
+        sb.append("    if hasattr(clf, 'inertia_'): metrics['inertia'] = round(float(clf.inertia_), 4)\n");
+        sb.append("    if hasattr(clf, 'labels_'): metrics['n_clusters'] = len(set(clf.labels_))\n");
+        sb.append("    print(f'[INFO] Clustering done, metrics: {metrics}')\n");
+        sb.append("    import joblib\n    os.makedirs('").append(modelWorkspace).append("', exist_ok=True)\n");
+        sb.append("    joblib.dump(clf, '").append(modelPath).append("')\n\n");
+        sb.append("    result = {'status': 'success', 'metrics': metrics, 'feature_count': len(X.columns), 'train_size': len(X), 'test_size': 0, 'model_type': 'clustering', 'algorithm': '").append(cfg.algorithm).append("'}\n");
     }
 
     private void appendOutput(StringBuilder sb, PipelineConfig cfg) {
         if (cfg.outputTable == null || cfg.outputTable.isBlank()) return;
         sb.append("\n# Output predictions to database\n_out_table = '").append(cfg.outputTable.replace("'", "\\'")).append("'\n");
         sb.append("_out_mode = '").append(cfg.outputMode != null ? cfg.outputMode : "append").append("'\n");
-        sb.append("X_all = df[feature_cols].copy()\nfor c in X_all.select_dtypes(include=['object']).columns: X_all[c] = LabelEncoder().fit_transform(X_all[c].astype(str))\n");
+        sb.append("X_all = df[feature_cols].copy()\nfrom sklearn.preprocessing import LabelEncoder as _LE_out\nfor c in X_all.select_dtypes(include=['object']).columns: X_all[c] = _LE_out().fit_transform(X_all[c].astype(str))\n");
         sb.append("if _sc == 'standard' and num_cols: X_all[num_cols] = StandardScaler().fit_transform(X_all[num_cols])\n");
         sb.append("elif _sc == 'minmax' and num_cols: X_all[num_cols] = MinMaxScaler().fit_transform(X_all[num_cols])\n");
         sb.append("_all_pred = clf.predict(X_all)\n_out_df = df.copy()\n_out_df['prediction'] = _all_pred\n");
@@ -583,10 +726,9 @@ public class PipelineService {
         model.setScheduleEnabled(false);
 
         if (existing != null) {
-            model.setVersion(existing.getVersion() + 1);
             miningModelMapper.updateById(model);
         } else {
-            model.setVersion(1);
+            model.setVersion(null);
             model.setDeleted(0);
             miningModelMapper.insert(model);
         }
@@ -635,7 +777,7 @@ public class PipelineService {
         log.info("[PIPELINE] Preview step pipeline={}, node={} type={}", pipelineId, nodeId, nodeType);
 
         try {
-            PythonResult pr = pythonExecutor.execute(script, pipeline.getDataSourceId(), 120000);
+            PythonResult pr = pythonExecutor.execute(script, pipeline.getDataSourceId(), previewTimeoutMs);
             if (pr.exitCode() != 0) {
                 String err = pr.stderr().isBlank() ? pr.stdout() : pr.stderr();
                 Map<String, Object> failResult = new LinkedHashMap<>();
@@ -720,22 +862,10 @@ public class PipelineService {
         sb.append("target_col = '").append(cfg.targetColumn != null ? cfg.targetColumn : "").append("'\n");
         sb.append("if not feature_cols:\n    feature_cols = [c for c in df.columns if c != target_col and c not in ('id','created_at','updated_at')]\n\n");
 
-        // Apply transforms if any
+        // Apply transforms — reuse main transform logic
         if (cfg.transforms != null && !cfg.transforms.isEmpty()) {
             sb.append("# Feature transforms\n");
-            for (Map<String, Object> tf : cfg.transforms) {
-                String tfType = strVal(tf.get("type"));
-                Object tfCols = tf.get("columns");
-                String tfColsJson = tfCols instanceof List ? objectMapper.valueToTree(tfCols).toString() : "[]";
-                switch (tfType) {
-                    case "log" -> sb.append("for c in ").append(tfColsJson).append(":\n    if c in df.columns and df[c].dtype in ['float64','int64']: df[c + '_log'] = np.log1p(df[c].clip(lower=0)); feature_cols.append(c + '_log')\n");
-                    case "binning" -> {
-                        int bins = tf.get("bins") instanceof Number ? ((Number) tf.get("bins")).intValue() : 5;
-                        sb.append("for c in ").append(tfColsJson).append(":\n    if c in df.select_dtypes(include=['number']).columns: df[c + '_bin'] = pd.cut(df[c], bins=").append(bins).append(", labels=False); feature_cols.append(c + '_bin')\n");
-                    }
-                }
-            }
-            sb.append("\n");
+            appendTransformsBlock(sb, cfg);
         }
 
         sb.append("X = df[feature_cols].copy()\n");
@@ -771,19 +901,19 @@ public class PipelineService {
         sb.append("if y is not None:\n");
         sb.append("    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=").append(cfg.testSize).append(", random_state=42)\n");
         sb.append("    params = ").append(cfg.hyperparams.isEmpty() ? "{}" : objectMapper.valueToTree(cfg.hyperparams).toString()).append("\n");
-        sb.append("    ").append(algoBlock).append("\n    clf.fit(X_train, y_train)\n\n");
+        sb.append("    ").append(algoBlock.replace("\n", "\n    ")).append("\n    clf.fit(X_train, y_train)\n\n");
 
         sb.append("    y_pred = clf.predict(X_test)\n");
         sb.append("    metrics = {}\n");
         sb.append("    _model_type = '").append(cfg.modelType != null ? cfg.modelType : "classification").append("'\n");
         sb.append("    if _model_type == 'classification':\n");
-        sb.append("        metrics['accuracy'] = round(float(accuracy_score(y_test, y_pred)), 4)\n");
-        sb.append("        metrics['precision'] = round(float(precision_score(y_test, y_pred, average='weighted', zero_division=0)), 4)\n");
-        sb.append("        metrics['recall'] = round(float(recall_score(y_test, y_pred, average='weighted', zero_division=0)), 4)\n");
-        sb.append("        metrics['f1'] = round(float(f1_score(y_test, y_pred, average='weighted', zero_division=0)), 4)\n");
+        sb.append("        metrics['test_accuracy'] = round(float(accuracy_score(y_test, y_pred)), 4)\n");
+        sb.append("        metrics['test_precision'] = round(float(precision_score(y_test, y_pred, average='weighted', zero_division=0)), 4)\n");
+        sb.append("        metrics['test_recall'] = round(float(recall_score(y_test, y_pred, average='weighted', zero_division=0)), 4)\n");
+        sb.append("        metrics['test_f1'] = round(float(f1_score(y_test, y_pred, average='weighted', zero_division=0)), 4)\n");
         sb.append("    else:\n");
-        sb.append("        metrics['mse'] = round(float(mean_squared_error(y_test, y_pred)), 4)\n");
-        sb.append("        metrics['r2'] = round(float(r2_score(y_test, y_pred)), 4)\n\n");
+        sb.append("        metrics['test_mse'] = round(float(mean_squared_error(y_test, y_pred)), 4)\n");
+        sb.append("        metrics['test_r2'] = round(float(r2_score(y_test, y_pred)), 4)\n\n");
 
         sb.append("    importance = {}\n");
         sb.append("    if hasattr(clf, 'feature_importances_'): importance = dict(zip(X.columns, [round(float(v), 4) for v in clf.feature_importances_]))\n");
@@ -849,6 +979,27 @@ public class PipelineService {
     }
 
     private String strVal(Object val) { return val != null ? String.valueOf(val) : null; }
+
+    private String resolveFilterVariables(String filter) {
+        if (filter == null || filter.isBlank()) return null;
+        java.time.format.DateTimeFormatter fmt = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd");
+        java.time.LocalDate today = java.time.LocalDate.now();
+        String todayStr = "'" + today.format(fmt) + "'";
+        String resolved = filter;
+        resolved = resolved.replace("${etl_date}", todayStr);
+        resolved = resolved.replace("${today}", todayStr);
+        resolved = resolved.replace("${yesterday}", "'" + today.minusDays(1).format(fmt) + "'");
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\$\\{today-(\\d+)\\}").matcher(resolved);
+        while (m.find()) {
+            int daysAgo = Integer.parseInt(m.group(1));
+            resolved = resolved.replace(m.group(0), "'" + today.minusDays(daysAgo).format(fmt) + "'");
+        }
+        return resolved;
+    }
     private String toJson(Object obj) { try { return obj == null ? null : objectMapper.writeValueAsString(obj); } catch (Exception e) { return String.valueOf(obj); } }
-    private String truncateLog(String log, int maxLen) { return (log == null || log.length() <= maxLen) ? log : log.substring(0, maxLen) + "\n... (truncated)"; }
+    private String truncateLog(String log, int maxLen) {
+        if (log == null) return null;
+        String cleaned = log.replaceAll("[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f]", "");
+        return cleaned.length() <= maxLen ? cleaned : cleaned.substring(0, maxLen) + "\n... (truncated)";
+    }
 }

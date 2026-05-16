@@ -4,11 +4,13 @@ import com.smartquery.llm.LlmChunk;
 import com.smartquery.llm.LlmService;
 import com.smartquery.prompt.QueryContextAssembler;
 import com.smartquery.tool.*;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
@@ -23,7 +25,6 @@ import java.util.function.Consumer;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class ReActEngine {
 
     private final LlmService llmService;
@@ -35,10 +36,39 @@ public class ReActEngine {
     private final List<LifecycleHook> lifecycleHooks;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
-    private static final int MAX_TURNS = 20;
-    private static final int MAX_TOKEN_BUDGET = 200000;
-    private static final int MICRO_COMPACT_THRESHOLD = 60000;
-    private static final int COMPACT_THRESHOLD = 80000;
+    @Value("${llm.timeout-seconds:120}")
+    private int llmTimeoutSeconds;
+
+    @Value("${react.max-turns:20}")
+    private int maxTurns;
+
+    @Value("${react.max-token-budget:200000}")
+    private int maxTokenBudget;
+
+    @Value("${react.micro-compact-threshold:60000}")
+    private int microCompactThreshold;
+
+    @Value("${react.compact-threshold:80000}")
+    private int compactThreshold;
+
+    public ReActEngine(
+            LlmService llmService,
+            ToolRegistry toolRegistry,
+            ToolOrchestrator toolOrchestrator,
+            QueryContextAssembler contextAssembler,
+            ContextCompactor contextCompactor,
+            com.smartquery.logging.ConversationStatsService statsService,
+            List<LifecycleHook> lifecycleHooks
+    ) {
+        this.llmService = llmService;
+        this.toolRegistry = toolRegistry;
+        this.toolOrchestrator = toolOrchestrator;
+        this.contextAssembler = contextAssembler;
+        this.contextCompactor = contextCompactor;
+        this.statsService = statsService;
+        this.lifecycleHooks = lifecycleHooks;
+    }
+
 
     /**
      * 向后兼容: 收集所有事件后返回
@@ -120,7 +150,7 @@ public class ReActEngine {
         // 3. 获取工具定义 (无数据源时过滤掉 DB 依赖工具)
         List<Map<String, Object>> toolDefs = toolRegistry.getToolDefinitions(dataSourceId);
 
-        log.info("[REACT] starting loop: model={}, maxTurns={}, history={}", model, MAX_TURNS, historyMessages.size());
+        log.info("[REACT] starting loop: model={}, maxTurns={}, history={}", model, maxTurns, historyMessages.size());
 
         // 4. while(true) 主循环
         while (!state.terminated()) {
@@ -130,19 +160,19 @@ public class ReActEngine {
                 eventConsumer.accept(new ReActEvent.Done(state.turnCount(), state.totalTokens(), state.totalCost()));
                 break;
             }
-            if (state.turnCount() >= MAX_TURNS) {
-                state = state.withTerminated("达到最大轮次 " + MAX_TURNS);
+            if (state.turnCount() >= maxTurns) {
+                state = state.withTerminated("达到最大轮次 " + maxTurns);
                 eventConsumer.accept(new ReActEvent.Done(state.turnCount(), state.totalTokens(), state.totalCost()));
                 break;
             }
-            if (state.totalTokens() >= MAX_TOKEN_BUDGET) {
-                state = state.withTerminated("达到 token 预算 " + MAX_TOKEN_BUDGET);
+            if (state.totalTokens() >= maxTokenBudget) {
+                state = state.withTerminated("达到 token 预算 " + maxTokenBudget);
                 eventConsumer.accept(new ReActEvent.Done(state.turnCount(), state.totalTokens(), state.totalCost()));
                 break;
             }
 
             // 微压缩 — 选择性清除旧 tool_result，延迟全量 LLM 压缩
-            if (state.totalTokens() >= MICRO_COMPACT_THRESHOLD && state.totalTokens() < COMPACT_THRESHOLD) {
+            if (state.totalTokens() >= microCompactThreshold && state.totalTokens() < compactThreshold) {
                 List<Map<String, Object>> microCompacted = contextCompactor.microCompact(state.messages());
                 if (microCompacted.size() < state.messages().size()) {
                     state = state.withMessages(microCompacted);
@@ -152,24 +182,49 @@ public class ReActEngine {
             }
 
             // 全量 LLM 上下文压缩 — 最后手段
-            if (state.totalTokens() >= COMPACT_THRESHOLD) {
+            if (state.totalTokens() >= compactThreshold) {
                 List<Map<String, Object>> compacted = contextCompactor.compact(
-                    state.messages(), COMPACT_THRESHOLD);
+                    state.messages(), compactThreshold);
                 state = state.withMessages(compacted);
                 log.info("[REACT] context compacted: realTokens={}, messages {} -> {}",
                     state.totalTokens(), state.messages().size(), compacted.size());
             }
 
-            // 调用 LLM (流式文本 token)
+            // 调用 LLM (流式文本 token) with timeout protection
+            final List<Map<String, Object>> currentMessages = state.messages();
+            final List<Map<String, Object>> currentToolDefs = toolDefs;
+            final Consumer<String> tokenConsumer = token -> eventConsumer.accept(new ReActEvent.ThinkingDelta(token));
+
+            long llmStartMs = System.currentTimeMillis();
             List<LlmChunk> chunks;
             try {
-                chunks = llmService.chatWithToolsStreaming(model, state.messages(), toolDefs,
-                    token -> eventConsumer.accept(new ReActEvent.ThinkingDelta(token)));
+                chunks = CompletableFuture.supplyAsync(() ->
+                    llmService.chatWithToolsStreaming(model, currentMessages, currentToolDefs, tokenConsumer)
+                ).get(llmTimeoutSeconds, TimeUnit.SECONDS);
+            } catch (java.util.concurrent.TimeoutException e) {
+                String msg = "LLM API call timed out after " + llmTimeoutSeconds + " seconds";
+                log.error("[REACT] {}", msg);
+                eventConsumer.accept(new ReActEvent.Error("LLM 调用超时", msg));
+                break;
+            } catch (java.util.concurrent.ExecutionException e) {
+                Throwable cause = e.getCause() != null ? e.getCause() : e;
+                log.error("[REACT] LLM call failed: {}", cause.getMessage());
+                eventConsumer.accept(new ReActEvent.Error("LLM 调用失败", cause.getMessage()));
+                break;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.error("[REACT] LLM call interrupted");
+                eventConsumer.accept(new ReActEvent.Error("LLM 调用被中断", e.getMessage()));
+                break;
             } catch (Exception e) {
                 log.error("[REACT] LLM call failed: {}", e.getMessage());
                 eventConsumer.accept(new ReActEvent.Error("LLM 调用失败", e.getMessage()));
                 break;
             }
+            long llmDurationMs = System.currentTimeMillis() - llmStartMs;
+
+            // LLM 调用遥测
+            statsService.recordLlmCall(model, llmDurationMs, state.turnCount());
 
             // 解析响应
             String assistantText = "";

@@ -21,8 +21,17 @@ export const useUIStore = defineStore('ui', () => {
     if (!val) sidebarOpen.value = false
   }
 
-  function openMining() {
+  const miningInitialModelId = ref(null)
+
+  function openMining(modelId) {
     miningVisible.value = true
+    if (modelId) miningInitialModelId.value = modelId
+  }
+
+  function consumeMiningInitialModel() {
+    const id = miningInitialModelId.value
+    miningInitialModelId.value = null
+    return id
   }
 
   function closeMining() {
@@ -44,11 +53,13 @@ export const useUIStore = defineStore('ui', () => {
     miningVisible,
     dashboardVisible,
     dashboardId,
+    miningInitialModelId,
     toggleSidebar,
     closeSidebar,
     setIsMobile,
     openMining,
     closeMining,
+    consumeMiningInitialModel,
     openDashboard,
     closeDashboard
   }

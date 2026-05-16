@@ -3,6 +3,7 @@ package com.smartquery.engine;
 import com.smartquery.llm.LlmService;
 import com.smartquery.logging.ConversationEventLogger;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
@@ -28,10 +29,17 @@ public class ContextCompactor {
     private final LlmService llmService;
     private final ConversationEventLogger eventLogger;
 
-    private static final int DEFAULT_KEEP_RECENT_TURNS = 4;
-    private static final int MICRO_COMPACT_KEEP_TURNS = 5;
-    private static final int MAX_SUMMARY_LENGTH = 3000;
-    private static final String SUMMARIZATION_MODEL = "glm-4";
+    @Value("${compactor.model:glm-4}")
+    private String summarizationModel;
+
+    @Value("${compactor.default-keep-recent-turns:4}")
+    private int defaultKeepRecentTurns;
+
+    @Value("${compactor.micro-compact-keep-turns:5}")
+    private int microCompactKeepTurns;
+
+    @Value("${compactor.max-summary-length:3000}")
+    private int maxSummaryLength;
 
     private static final String SUMMARIZATION_PROMPT = """
         你是一个对话摘要助手。请将以下对话历史压缩为结构化摘要，保留以下关键信息：
@@ -75,7 +83,7 @@ public class ContextCompactor {
         }
 
         // 保留最近 N 轮
-        int recentStart = Math.max(systemEnd, messages.size() - DEFAULT_KEEP_RECENT_TURNS * 2);
+        int recentStart = Math.max(systemEnd, messages.size() - defaultKeepRecentTurns * 2);
         List<Map<String, Object>> oldMessages = messages.subList(systemEnd, recentStart);
         List<Map<String, Object>> recentMessages = messages.subList(recentStart, messages.size());
 
@@ -112,7 +120,7 @@ public class ContextCompactor {
      * @return 压缩后的消息列表（可能和原始相同，表示无需压缩）
      */
     public List<Map<String, Object>> microCompact(List<Map<String, Object>> messages) {
-        if (messages.size() <= MICRO_COMPACT_KEEP_TURNS * 2 + 2) {
+        if (messages.size() <= microCompactKeepTurns * 2 + 2) {
             return messages;
         }
 
@@ -175,7 +183,7 @@ public class ContextCompactor {
                 break;
             }
         }
-        return Math.max(systemEnd, messages.size() - MICRO_COMPACT_KEEP_TURNS * 2);
+        return Math.max(systemEnd, messages.size() - microCompactKeepTurns * 2);
     }
 
     private String buildToolResultStub(String content) {
@@ -249,7 +257,7 @@ public class ContextCompactor {
             String summary = callLlmForSummary(rawContent);
             if (summary != null && !summary.isBlank()) {
                 log.info("[COMPACT] LLM summary generated: {} chars", summary.length());
-                return truncate(summary, MAX_SUMMARY_LENGTH);
+                return truncate(summary, maxSummaryLength);
             }
         } catch (Exception e) {
             log.warn("[COMPACT] LLM summarization failed, falling back to truncation: {}", e.getMessage());
@@ -260,7 +268,7 @@ public class ContextCompactor {
     }
 
     private String callLlmForSummary(String rawContent) {
-        if (!llmService.isAvailable(SUMMARIZATION_MODEL)) {
+        if (!llmService.isAvailable(summarizationModel)) {
             return null;
         }
 
@@ -270,7 +278,7 @@ public class ContextCompactor {
             Map.of("role", "user", "content", userContent)
         );
 
-        return llmService.chat(SUMMARIZATION_MODEL, messages);
+        return llmService.chat(summarizationModel, messages);
     }
 
     private String extractRawContent(List<Map<String, Object>> messages) {
@@ -318,7 +326,7 @@ public class ContextCompactor {
                 }
             }
 
-            if (sb.length() > MAX_SUMMARY_LENGTH) {
+            if (sb.length() > maxSummaryLength) {
                 sb.append("...(更多历史已省略)");
                 break;
             }

@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -30,6 +31,11 @@ import java.util.regex.Pattern;
 public class ToolPromptLoader {
 
     private final ResourceLoader resourceLoader;
+
+    /** Compiled prompt cache — avoids re-rendering unchanged templates */
+    private final ConcurrentHashMap<String, CachedPrompt> promptCache = new ConcurrentHashMap<>();
+
+    private static final long CACHE_TTL_MS = 5 * 60 * 1000L; // 5 minutes
 
     private static final Pattern FRONTMATTER_PATTERN = Pattern.compile(
         "^---\\s*\\n(.*?)\\n---\\s*\\n", Pattern.DOTALL);
@@ -60,18 +66,78 @@ public class ToolPromptLoader {
 
     /**
      * 直译 renderPromptTemplate: 替换 {{key}} 占位符 + 处理条件块
+     * 带编译缓存：相同 template+context 5 分钟内直接返回缓存结果
      */
     public String renderPrompt(String template, Map<String, String> context) {
+        String cacheKey = buildCacheKey(template, context);
+
+        CachedPrompt cached = promptCache.get(cacheKey);
+        if (cached != null && !cached.isExpired()) {
+            return cached.content();
+        }
+
+        String result = doRender(template, context);
+
+        promptCache.put(cacheKey, new CachedPrompt(result, extractFrontmatterMeta(template), System.currentTimeMillis()));
+        return result;
+    }
+
+    /**
+     * 清除所有编译缓存
+     */
+    public void clearCache() {
+        promptCache.clear();
+        log.debug("Prompt cache cleared");
+    }
+
+    /**
+     * 返回当前缓存条目数量
+     */
+    public int getCacheStats() {
+        return promptCache.size();
+    }
+
+    // ---- cache internals ----
+
+    private String buildCacheKey(String template, Map<String, String> context) {
+        int paramsHash = context != null ? context.hashCode() : 0;
+        int templateHash = template != null ? template.hashCode() : 0;
+        return templateHash + "_" + paramsHash;
+    }
+
+    private Map<String, String> extractFrontmatterMeta(String content) {
+        if (content == null || content.isBlank()) return Map.of();
+        Matcher m = FRONTMATTER_PATTERN.matcher(content);
+        if (!m.find()) return Map.of();
+
+        Map<String, String> meta = new LinkedHashMap<>();
+        String yaml = m.group(1);
+        for (String line : yaml.split("\n")) {
+            int colonIdx = line.indexOf(':');
+            if (colonIdx > 0) {
+                meta.put(line.substring(0, colonIdx).trim(), line.substring(colonIdx + 1).trim());
+            }
+        }
+        return Collections.unmodifiableMap(meta);
+    }
+
+    /** Actual rendering logic (extracted from renderPrompt) */
+    private String doRender(String template, Map<String, String> context) {
         String result = template;
-
-        // 处理条件块: {{#if key}}...{{/if}}
         result = processConditionals(result, context);
-
-        // 替换简单占位符: {{key}}
-        for (Map.Entry<String, String> entry : context.entrySet()) {
-            result = result.replace("{{" + entry.getKey() + "}}", entry.getValue());
+        if (context != null) {
+            for (Map.Entry<String, String> entry : context.entrySet()) {
+                result = result.replace("{{" + entry.getKey() + "}}", entry.getValue());
+            }
         }
         return result;
+    }
+
+    /** Cached compiled prompt entry */
+    record CachedPrompt(String content, Map<String, String> frontmatter, long cachedAt) {
+        boolean isExpired() {
+            return System.currentTimeMillis() - cachedAt > CACHE_TTL_MS;
+        }
     }
 
     /**

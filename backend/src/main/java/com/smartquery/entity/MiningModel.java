@@ -3,6 +3,7 @@ package com.smartquery.entity;
 import com.baomidou.mybatisplus.annotation.FieldFill;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.annotation.Version;
 import lombok.Data;
 
 import java.time.LocalDateTime;
@@ -34,6 +35,8 @@ public class MiningModel {
     private String modelPath;
 
     private String status;
+
+    @Version
     private Integer version;
 
     private String scheduleCron;
@@ -51,6 +54,8 @@ public class MiningModel {
     private Double testSize;
     private String temporalColumn;
     private String validationMetrics;
+
+    private LocalDateTime lastSyncedAt;
 
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;

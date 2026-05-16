@@ -9,6 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -19,6 +20,24 @@ public class AlgorithmService {
     private final AlgorithmMapper algorithmMapper;
     private final ObjectMapper objectMapper;
 
+    private static final Map<String, String> ALIAS_MAP = Map.ofEntries(
+        Map.entry("gbm", "gradient_boosting"),
+        Map.entry("gb", "gradient_boosting"),
+        Map.entry("rf", "random_forest"),
+        Map.entry("xgb", "xgboost"),
+        Map.entry("lgbm", "lightgbm"),
+        Map.entry("cat", "catboost"),
+        Map.entry("lr", "logistic_regression"),
+        Map.entry("linreg", "linear_regression"),
+        Map.entry("svr", "svm"),
+        Map.entry("svc", "svm"),
+        Map.entry("dt", "decision_tree"),
+        Map.entry("knn", "k_neighbors"),
+        Map.entry("nb", "naive_bayes"),
+        Map.entry("mlp", "neural_network"),
+        Map.entry("nn", "neural_network")
+    );
+
     public List<Algorithm> getAll() {
         return algorithmMapper.selectList(
             new LambdaQueryWrapper<Algorithm>()
@@ -28,10 +47,23 @@ public class AlgorithmService {
     }
 
     public Algorithm getByAlgorithmId(String algorithmId) {
-        return algorithmMapper.selectOne(
+        Algorithm algo = algorithmMapper.selectOne(
             new LambdaQueryWrapper<Algorithm>()
                 .eq(Algorithm::getAlgorithmId, algorithmId)
                 .eq(Algorithm::getDeleted, 0));
+        if (algo == null) {
+            String resolved = ALIAS_MAP.get(algorithmId.toLowerCase());
+            if (resolved != null) {
+                algo = algorithmMapper.selectOne(
+                    new LambdaQueryWrapper<Algorithm>()
+                        .eq(Algorithm::getAlgorithmId, resolved)
+                        .eq(Algorithm::getDeleted, 0));
+                if (algo != null) {
+                    log.debug("[ALGORITHM] Alias resolved: {} -> {}", algorithmId, resolved);
+                }
+            }
+        }
+        return algo;
     }
 
     public Algorithm getById(Long id) {

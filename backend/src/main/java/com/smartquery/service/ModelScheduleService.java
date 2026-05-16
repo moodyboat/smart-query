@@ -1,6 +1,7 @@
 package com.smartquery.service;
 
 import com.smartquery.common.ModelStatus;
+import com.smartquery.engine.ConversationContextHolder;
 import com.smartquery.entity.MiningModel;
 import com.smartquery.logging.ConversationEventLogger;
 import com.smartquery.mapper.MiningModelMapper;
@@ -11,6 +12,8 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Slf4j
 @Service
@@ -20,6 +23,9 @@ public class ModelScheduleService {
     private final MiningModelMapper miningModelMapper;
     private final MiningService miningService;
     private final ConversationEventLogger eventLogger;
+    private final ConversationContextHolder.SessionManager sessionManager;
+
+    private final ConcurrentHashMap<Long, AtomicBoolean> runningModels = new ConcurrentHashMap<>();
 
     @Scheduled(fixedRateString = "${mining.schedule.poll-interval-ms:60000}")
     public void checkScheduledModels() {
@@ -31,6 +37,12 @@ public class ModelScheduleService {
 
         LocalDateTime now = LocalDateTime.now();
         for (MiningModel model : models) {
+            Long modelId = model.getId();
+            AtomicBoolean lock = runningModels.computeIfAbsent(modelId, k -> new AtomicBoolean(false));
+            if (!lock.compareAndSet(false, true)) {
+                log.warn("[SCHEDULE] Skipping model {} — previous execution still running", modelId);
+                continue;
+            }
             try {
                 if (!shouldRun(model, now)) continue;
                 String mode = model.getScheduleMode();
@@ -81,8 +93,12 @@ public class ModelScheduleService {
                 }
             } catch (Exception e) {
                 log.error("[SCHEDULE] Failed to run model {}: {}", model.getId(), e.getMessage());
+            } finally {
+                lock.set(false);
             }
         }
+
+        sessionManager.cleanupStaleSessions();
     }
 
     private boolean shouldRun(MiningModel model, LocalDateTime now) {

@@ -33,11 +33,24 @@ import jakarta.annotation.PostConstruct;
 public class PythonExecutor {
 
     private final DataSourceMapper dataSourceMapper;
-    private static final int MAX_OUTPUT_BYTES = 65536;
-    private static final int MAX_TIMEOUT_MS = 600000;
-    private static final String PYTHON_CMD = "python3";
-    private static final String ARTIFACT_DIR = "/tmp/smartquery-artifacts";
-    private static final String WORKSPACE_BASE = "/tmp/smartquery-workspace";
+    private final PythonCircuitBreaker circuitBreaker;
+
+    @Value("${smart-query.python.max-output-bytes:65536}")
+    private int maxOutputBytes;
+
+    @Value("${smart-query.python.max-timeout-ms:600000}")
+    private int maxTimeoutMs;
+
+    @Value("${smart-query.python.artifact-dir:/tmp/smartquery-artifacts}")
+    private String artifactDir;
+
+    @Value("${smart-query.python.workspace-base:/tmp/smartquery-workspace}")
+    private String workspaceBase;
+
+    @Value("${smart-query.python.command:python3}")
+    private String pythonCmd;
+
+    private static final String PYTHON_CMD_DEFAULT = "python3";
 
     @Value("${smart-query.python.max-memory-mb:512}")
     private int maxMemoryMb;
@@ -48,15 +61,19 @@ public class PythonExecutor {
     @Value("${smart-query.python.execution-mode:process}")
     private String executionMode;
 
-    public PythonExecutor(DataSourceMapper dataSourceMapper) {
+    @Value("${smart-query.python.stream-drain-timeout-seconds:5}")
+    private int streamDrainTimeoutSeconds;
+
+    public PythonExecutor(DataSourceMapper dataSourceMapper, PythonCircuitBreaker circuitBreaker) {
         this.dataSourceMapper = dataSourceMapper;
+        this.circuitBreaker = circuitBreaker;
     }
 
     @PostConstruct
     void init() {
         try {
-            Files.createDirectories(Path.of(ARTIFACT_DIR));
-            Files.createDirectories(Path.of(WORKSPACE_BASE));
+            Files.createDirectories(Path.of(artifactDir));
+            Files.createDirectories(Path.of(workspaceBase));
         } catch (IOException ignored) {}
     }
 
@@ -69,14 +86,24 @@ public class PythonExecutor {
     }
 
     public PythonResult execute(String code, Long dataSourceId, int timeoutMs, Long conversationId, java.util.function.BiConsumer<String, Integer> progressCallback) {
-        timeoutMs = Math.min(Math.max(timeoutMs, 1000), MAX_TIMEOUT_MS);
+        timeoutMs = Math.min(Math.max(timeoutMs, 1000), maxTimeoutMs);
         long start = System.currentTimeMillis();
+
+        if (!circuitBreaker.allowExecution()) {
+            int elapsed = (int) (System.currentTimeMillis() - start);
+            return PythonResult.error("Python 执行暂时不可用（熔断保护中，连续失败 " +
+                circuitBreaker.getConsecutiveFailures() + " 次），请稍后重试", -10, elapsed);
+        }
 
         try {
             // 安全校验 — 阻止危险操作
             PythonSandbox.validate(code);
 
             Path tempFile = Files.createTempFile("smartquery_", ".py");
+            // Restrict temp file to owner-only to prevent credential leakage
+            Files.setPosixFilePermissions(tempFile, java.util.Set.of(
+                java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                java.nio.file.attribute.PosixFilePermission.OWNER_WRITE));
             String wrappedCode = wrapCode(code, dataSourceId, conversationId);
             Files.writeString(tempFile, wrappedCode);
 
@@ -84,7 +111,7 @@ public class PythonExecutor {
             if ("docker".equals(executionMode)) {
                 pb = buildDockerProcess(tempFile, dataSourceId);
             } else {
-                pb = new ProcessBuilder(PYTHON_CMD, tempFile.toString());
+                pb = new ProcessBuilder(pythonCmd, tempFile.toString());
             }
             pb.redirectErrorStream(false);
             pb.environment().put("PYTHONIOENCODING", "utf-8");
@@ -130,9 +157,9 @@ public class PythonExecutor {
 
             if (memoryMonitor != null) memoryMonitor.shutdownNow();
 
-            stdoutReadFuture.get(5, TimeUnit.SECONDS);
+            stdoutReadFuture.get(streamDrainTimeoutSeconds, TimeUnit.SECONDS);
             String stdout = truncateOutput(stdoutBuilder.toString());
-            String stderr = truncateOutput(stderrFuture.get(5, TimeUnit.SECONDS));
+            String stderr = truncateOutput(stderrFuture.get(streamDrainTimeoutSeconds, TimeUnit.SECONDS));
             int exitCode = process.exitValue();
 
             Files.deleteIfExists(tempFile);
@@ -143,12 +170,20 @@ public class PythonExecutor {
             log.info("[PYTHON] exit={}, time={}ms, stdout={}chars, stderr={}chars, artifacts={}",
                 exitCode, elapsed, stdout.length(), stderr.length(), artifacts.size());
 
+            if (exitCode == 0) {
+                circuitBreaker.recordSuccess();
+            } else {
+                circuitBreaker.recordFailure();
+            }
+
             return new PythonResult(stdout, stderr, exitCode, artifacts, elapsed);
         } catch (SecurityException e) {
             int elapsed = (int) (System.currentTimeMillis() - start);
+            circuitBreaker.recordFailure();
             return PythonResult.error("安全检查未通过: " + e.getMessage(), -3, elapsed);
         } catch (Exception e) {
             int elapsed = (int) (System.currentTimeMillis() - start);
+            circuitBreaker.recordFailure();
             return PythonResult.error("执行异常: " + e.getMessage(), -2, elapsed);
         }
     }
@@ -170,7 +205,7 @@ public class PythonExecutor {
 
         // Per-conversation workspace
         if (conversationId != null) {
-            String workspaceDir = WORKSPACE_BASE + "/" + conversationId;
+            String workspaceDir = workspaceBase + "/" + conversationId;
             sb.append("_workspace = '").append(workspaceDir).append("'\n");
             sb.append("os.makedirs(_workspace, exist_ok=True)\n");
         } else {
@@ -182,7 +217,7 @@ public class PythonExecutor {
         sb.append("import matplotlib\n");
         sb.append("matplotlib.use('Agg')\n");
         sb.append("import matplotlib.pyplot as plt\n");
-        sb.append("_artifact_dir = '").append(ARTIFACT_DIR).append("'\n");
+        sb.append("_artifact_dir = '").append(artifactDir).append("'\n");
         sb.append("os.makedirs(_artifact_dir, exist_ok=True)\n");
         sb.append("_fig_counter = 0\n");
         sb.append("_artifacts = []\n");
@@ -253,8 +288,8 @@ public class PythonExecutor {
     }
 
     private String truncateOutput(String output) {
-        if (output.length() <= MAX_OUTPUT_BYTES) return output;
-        int half = MAX_OUTPUT_BYTES / 2;
+        if (output.length() <= maxOutputBytes) return output;
+        int half = maxOutputBytes / 2;
         return output.substring(0, half) + "\n\n... (输出已截断) ...\n\n" +
             output.substring(output.length() - half);
     }
@@ -281,7 +316,7 @@ public class PythonExecutor {
             "--memory=" + memLimit,
             "--cpus=" + cpuLimit,
             "-v", scriptFile.getParent() + ":/scripts",
-            "-v", ARTIFACT_DIR + ":" + ARTIFACT_DIR,
+            "-v", artifactDir + ":" + artifactDir,
             "python:3.11-slim",
             "python", "/scripts/" + scriptFile.getFileName()
         );

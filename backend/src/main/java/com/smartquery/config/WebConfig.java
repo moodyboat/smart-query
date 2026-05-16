@@ -22,6 +22,17 @@ public class WebConfig implements WebMvcConfigurer {
     @Value("${smart-query.thread-pool.queue-capacity:100}")
     private int queueCapacity;
 
+    @Value("${smart-query.python.artifact-dir:/tmp/smartquery-artifacts}")
+    private String artifactDir;
+
+    @Value("${smart-query.sse.timeout-ms:300000}")
+    private long sseTimeoutMs;
+
+    @Override
+    public void configureAsyncSupport(org.springframework.web.servlet.config.annotation.AsyncSupportConfigurer configurer) {
+        configurer.setDefaultTimeout(sseTimeoutMs);
+    }
+
     @Bean("asyncExecutor")
     public Executor asyncExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
@@ -30,6 +41,8 @@ public class WebConfig implements WebMvcConfigurer {
         executor.setQueueCapacity(queueCapacity);
         executor.setThreadNamePrefix("sq-");
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(30);
         executor.initialize();
         return executor;
     }
@@ -37,6 +50,6 @@ public class WebConfig implements WebMvcConfigurer {
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
         registry.addResourceHandler("/artifacts/**")
-            .addResourceLocations("file:///tmp/smartquery-artifacts/");
+            .addResourceLocations("file:" + artifactDir + "/");
     }
 }

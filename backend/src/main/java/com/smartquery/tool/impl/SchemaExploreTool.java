@@ -20,6 +20,9 @@ public class SchemaExploreTool implements LlmTool {
 
     private final DataSourceManager dataSourceManager;
 
+    @org.springframework.beans.factory.annotation.Value("${smart-query.schema.explore-sample-rows:5}")
+    private int exploreSampleRows;
+
     @Override
     public String getName() { return "schema_explore"; }
 
@@ -116,9 +119,9 @@ public class SchemaExploreTool implements LlmTool {
             return "表 `" + tableName + "` 不存在";
         }
         String safeName = tableName.replaceAll("[^a-zA-Z0-9_.]", "");
-        List<Map<String, Object>> rows = jdbc.queryForList("SELECT * FROM " + safeName + " LIMIT 5");
+        List<Map<String, Object>> rows = jdbc.queryForList("SELECT * FROM " + safeName + " LIMIT " + exploreSampleRows);
         if (rows.isEmpty()) return "表 `" + tableName + "` 无数据";
-        StringBuilder sb = new StringBuilder("表 `").append(tableName).append("` 样例数据 (前5行):\n\n");
+        StringBuilder sb = new StringBuilder("表 `").append(tableName).append("` 样例数据 (前").append(exploreSampleRows).append("行):\n\n");
         Set<String> columns = rows.get(0).keySet();
         sb.append("| ").append(String.join(" | ", columns)).append(" |\n");
         sb.append("| ").append(columns.stream().map(c -> "---").reduce((a, b) -> a + " | " + b).orElse("")).append(" |\n");

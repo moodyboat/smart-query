@@ -29,6 +29,9 @@ public class ExecuteSqlTool implements LlmTool {
     private final DataSourceManager dataSourceManager;
     private final SqlSafetyValidator safetyValidator;
 
+    @org.springframework.beans.factory.annotation.Value("${smart-query.sql-safety.max-rows:1000}")
+    private int maxRows;
+
     @Override
     public String getName() { return "execute_sql"; }
 
@@ -102,7 +105,7 @@ public class ExecuteSqlTool implements LlmTool {
 
     private String applyAutoLimit(String sql) {
         if (!LIMIT_PATTERN.matcher(sql.trim()).find()) {
-            return sql + " LIMIT 1000";
+            return sql + " LIMIT " + maxRows;
         }
         return sql;
     }

@@ -11,6 +11,7 @@ export const useMiningStore = defineStore('mining', () => {
   const dataSources = ref([])
   const loading = ref(false)
   const filterDsId = ref(null)
+  const activeEventSource = ref(null)
 
   const selectedModel = computed(() =>
     models.value.find(m => m.id === selectedModelId.value) || null
@@ -67,9 +68,12 @@ export const useMiningStore = defineStore('mining', () => {
   }
 
   function watchModelStatus(modelId) {
+    // Close any existing EventSource before opening a new one
+    closeEventSource()
     const baseUrl = '/api/v1/mining/model'
     const url = `${baseUrl}/${modelId}/status-stream`
     const eventSource = new EventSource(url)
+    activeEventSource.value = eventSource
     eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data)
@@ -81,12 +85,23 @@ export const useMiningStore = defineStore('mining', () => {
           }
           if (['trained', 'failed', 'published'].includes(data.status)) {
             eventSource.close()
+            activeEventSource.value = null
           }
         }
       } catch {}
     }
-    eventSource.onerror = () => { eventSource.close() }
+    eventSource.onerror = () => {
+      eventSource.close()
+      activeEventSource.value = null
+    }
     return eventSource
+  }
+
+  function closeEventSource() {
+    if (activeEventSource.value) {
+      activeEventSource.value.close()
+      activeEventSource.value = null
+    }
   }
 
   return {
@@ -94,6 +109,6 @@ export const useMiningStore = defineStore('mining', () => {
     dataSources, loading, filterDsId,
     loadModels, selectModel, clearSelection,
     updateModelInList, addModel, removeModel, refreshModel,
-    watchModelStatus
+    watchModelStatus, closeEventSource
   }
 })

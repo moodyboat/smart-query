@@ -13,16 +13,34 @@ import java.util.Set;
  *   <li>blocks: 本任务完成后解除阻塞的任务 ID 列表</li>
  * </ul>
  */
-public record AgentTask(
-    String taskId,
-    String prompt,
-    List<String> toolNames,
-    Map<String, Object> context,
-    Long dataSourceId,
-    String model,
-    List<String> blockedBy,
-    List<String> blocks
-) {
+public class AgentTask {
+
+    private final String taskId;
+    private final String prompt;
+    private final List<String> toolNames;
+    private final Map<String, Object> context;
+    private final Long dataSourceId;
+    private final String model;
+    private final List<String> blockedBy;
+    private final List<String> blocks;
+
+    private TaskState status = TaskState.PENDING;
+
+    public AgentTask(String taskId, String prompt, List<String> toolNames,
+                     Map<String, Object> context, Long dataSourceId,
+                     String model, List<String> blockedBy, List<String> blocks) {
+        this.taskId = taskId;
+        this.prompt = prompt;
+        this.toolNames = toolNames;
+        this.context = context;
+        this.dataSourceId = dataSourceId;
+        this.model = model;
+        this.blockedBy = blockedBy != null ? blockedBy : List.of();
+        this.blocks = blocks != null ? blocks : List.of();
+    }
+
+    // --- Static factory methods ---
+
     public static AgentTask of(String taskId, String prompt, Long dataSourceId) {
         return new AgentTask(taskId, prompt, List.of(), Map.of(), dataSourceId, null, List.of(), List.of());
     }
@@ -37,6 +55,25 @@ public record AgentTask(
             blockedBy != null ? blockedBy : List.of(),
             blocks != null ? blocks : List.of());
     }
+
+    // --- Getters ---
+
+    public String taskId() { return taskId; }
+    public String prompt() { return prompt; }
+    public List<String> toolNames() { return toolNames; }
+    public Map<String, Object> context() { return context; }
+    public Long dataSourceId() { return dataSourceId; }
+    public String model() { return model; }
+    public List<String> blockedBy() { return blockedBy; }
+    public List<String> blocks() { return blocks; }
+
+    public TaskState getStatus() { return status; }
+
+    // --- Setters ---
+
+    public void setStatus(TaskState status) { this.status = status; }
+
+    // --- Domain helpers ---
 
     /**
      * 该任务是否被阻塞（存在未完成的依赖）

@@ -5,17 +5,13 @@ import com.smartquery.mapper.DataSourceMapper;
 import com.zaxxer.hikari.HikariDataSource;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * 动态数据源管理器 — 适配 Claude Code mcp/types.ts 的多连接管理
- *
- * <p>运行时注册/销毁 HikariCP 连接池
- */
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -24,6 +20,17 @@ public class DataSourceManager {
     private final DataSourceMapper dataSourceMapper;
     private final Map<Long, HikariDataSource> dataSourcePool = new ConcurrentHashMap<>();
     private final Map<Long, JdbcTemplate> jdbcTemplatePool = new ConcurrentHashMap<>();
+
+    @Value("${smart-query.datasource.dynamic.max-pool-size:5}")
+    private int dynamicPoolMaxSize;
+    @Value("${smart-query.datasource.dynamic.min-idle:1}")
+    private int dynamicPoolMinIdle;
+    @Value("${smart-query.datasource.dynamic.connection-timeout-ms:10000}")
+    private int dynamicPoolConnectionTimeout;
+    @Value("${smart-query.datasource.dynamic.idle-timeout-ms:300000}")
+    private int dynamicPoolIdleTimeout;
+    @Value("${smart-query.datasource.dynamic.max-lifetime-ms:600000}")
+    private int dynamicPoolMaxLifetime;
 
     /**
      * 获取 JdbcTemplate (懒加载)
@@ -82,13 +89,40 @@ public class DataSourceManager {
         ds.setDriverClassName(config.getDriverClassName());
         ds.setUsername(config.getUsername());
         ds.setPassword(config.getPassword());
-        ds.setMaximumPoolSize(5);
-        ds.setMinimumIdle(1);
-        ds.setConnectionTimeout(10000);
-        ds.setIdleTimeout(300000);
-        ds.setMaxLifetime(600000);
+        ds.setMaximumPoolSize(dynamicPoolMaxSize);
+        ds.setMinimumIdle(dynamicPoolMinIdle);
+        ds.setConnectionTimeout(dynamicPoolConnectionTimeout);
+        ds.setIdleTimeout(dynamicPoolIdleTimeout);
+        ds.setMaxLifetime(dynamicPoolMaxLifetime);
         ds.setPoolName("sq-ds-" + dataSourceId);
 
         return ds;
+    }
+
+    public int cleanupStalePools() {
+        int removed = 0;
+        var iter = dataSourcePool.entrySet().iterator();
+        while (iter.hasNext()) {
+            var entry = iter.next();
+            HikariDataSource ds = entry.getValue();
+            if (ds.isClosed()) {
+                iter.remove();
+                jdbcTemplatePool.remove(entry.getKey());
+                removed++;
+            } else if (ds.getHikariPoolMXBean() != null
+                    && ds.getHikariPoolMXBean().getActiveConnections() == 0
+                    && ds.getHikariPoolMXBean().getIdleConnections() == ds.getMaximumPoolSize()) {
+                ds.close();
+                iter.remove();
+                jdbcTemplatePool.remove(entry.getKey());
+                removed++;
+                log.info("[DATASOURCE] evicted idle pool: id={}", entry.getKey());
+            }
+        }
+        return removed;
+    }
+
+    public int poolCount() {
+        return dataSourcePool.size();
     }
 }

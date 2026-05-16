@@ -69,7 +69,7 @@
         :openDashboard="(id) => emit('openDashboard', id)"
         @retryPython="handleRetryPython"
         @retryConnection="retryConnection"
-        @openMining="() => mining.openMining()"
+        @openMining="(modelId) => ui.openMining(modelId)"
       />
 
       <div v-if="showNoResponse" class="no-response-hint">
@@ -107,13 +107,14 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, nextTick } from 'vue'
+import { ref, reactive, computed, nextTick, onBeforeUnmount } from 'vue'
 import { View, Monitor } from '@element-plus/icons-vue'
 import MessageRow from './MessageRow.vue'
 import TracePanel from './TracePanel.vue'
 import AdminStatsPanel from './AdminStatsPanel.vue'
 import { buildChatUrl, fetchReport } from '../api'
 import { useMiningStore } from '../stores/mining'
+import { useUIStore } from '../stores/ui'
 
 const props = defineProps({
   conversationId: Number,
@@ -124,6 +125,7 @@ const props = defineProps({
 const traceVisible = ref(false)
 const adminVisible = ref(false)
 const mining = useMiningStore()
+const ui = useUIStore()
 
 const messages = ref([])
 const inputText = ref('')
@@ -145,6 +147,15 @@ const exampleQueries = [
 ]
 
 const emit = defineEmits(['openDashboard', 'messageCompleted', 'toggleSidebar'])
+
+const activeAbortController = ref(null)
+
+onBeforeUnmount(() => {
+  if (activeAbortController.value) {
+    activeAbortController.value.abort()
+    activeAbortController.value = null
+  }
+})
 
 function scrollToBottom() {
   nextTick(() => {
@@ -209,6 +220,7 @@ async function sendMessage() {
   scrollToBottom()
 
   const controller = new AbortController()
+  activeAbortController.value = controller
   let safetyTimeout = null
   const resetSafety = () => {
     if (safetyTimeout) clearTimeout(safetyTimeout)
@@ -278,6 +290,7 @@ async function sendMessage() {
     }
   } finally {
     if (safetyTimeout) clearTimeout(safetyTimeout)
+    activeAbortController.value = null
     assistantMsg.loading = false
     assistantMsg._streaming = false
     assistantMsg.spinnerTip = ''
@@ -476,6 +489,19 @@ function handleEvent(evt, assistantMsg) {
       break
     }
 
+    case 'Error': {
+      assistantMsg.content.push({
+        type: 'text',
+        text: `处理出错: ${evt.message || '未知错误'}${evt.detail ? '\n' + evt.detail : ''}`
+      })
+      assistantMsg.loading = false
+      assistantMsg._streaming = false
+      assistantMsg.spinnerTip = ''
+      loading.value = false
+      connectionState.value = 'error'
+      break
+    }
+
     case 'Done': {
       if (assistantMsg.streamingText) {
         const lastBlock = assistantMsg.content[assistantMsg.content.length - 1]
@@ -485,6 +511,7 @@ function handleEvent(evt, assistantMsg) {
         assistantMsg.streamingText = ''
       }
       if (evt.totalTokens) totalTokens.value = evt.totalTokens
+      if (evt.cost !== undefined && evt.cost > 0) cost.value = evt.cost
       if (evt.totalSteps) {
         stepInfo.current = evt.totalSteps
         stepInfo.total = evt.totalSteps
@@ -525,6 +552,10 @@ function retryLastMessage() {
 function clearMessages() {
   messages.value = []
   Object.keys(pendingCharts).forEach(k => delete pendingCharts[k])
+  stepInfo.current = 0
+  stepInfo.total = 0
+  cost.value = 0
+  totalTokens.value = 0
 }
 
 function updateChartOption(chartId, newOption) {

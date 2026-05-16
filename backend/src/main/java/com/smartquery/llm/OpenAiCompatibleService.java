@@ -33,12 +33,27 @@ public class OpenAiCompatibleService implements LlmService {
 
     private final LlmConfigMapper llmConfigMapper;
     private final ObjectMapper objectMapper;
-    private final HttpClient httpClient = HttpClient.newBuilder()
-        .connectTimeout(Duration.ofSeconds(30))
-        .build();
 
-    private static final int MAX_RETRIES = 3;
-    private static final long INITIAL_DELAY_MS = 1000;
+    @org.springframework.beans.factory.annotation.Value("${smart-query.llm.http-timeout-seconds:180}")
+    private int httpTimeoutSeconds;
+
+    @org.springframework.beans.factory.annotation.Value("${smart-query.llm.max-retries:3}")
+    private int maxRetries;
+
+    @org.springframework.beans.factory.annotation.Value("${smart-query.llm.retry-delay-ms:1000}")
+    private long retryDelayMs;
+
+    @org.springframework.beans.factory.annotation.Value("${smart-query.llm.connect-timeout-seconds:30}")
+    private int connectTimeoutSeconds;
+
+    private HttpClient httpClient;
+
+    @jakarta.annotation.PostConstruct
+    void init() {
+        this.httpClient = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(connectTimeoutSeconds))
+            .build();
+    }
 
     @Override
     public String chat(String model, List<Map<String, String>> messages) {
@@ -64,7 +79,7 @@ public class OpenAiCompatibleService implements LlmService {
                                                   List<Map<String, Object>> tools, Consumer<String> textTokenConsumer) {
         LlmConfigEntity config = resolveConfig(model);
 
-        for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        for (int attempt = 0; attempt <= maxRetries; attempt++) {
             try {
                 Map<String, Object> body = new LinkedHashMap<>();
                 body.put("model", config.getApiKey() != null && !config.getApiKey().isEmpty() ? model : config.getModelCode());
@@ -85,20 +100,20 @@ public class OpenAiCompatibleService implements LlmService {
                     .header("Content-Type", "application/json")
                     .header("Authorization", "Bearer " + config.getApiKey())
                     .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
-                    .timeout(Duration.ofSeconds(180))
+                    .timeout(Duration.ofSeconds(httpTimeoutSeconds))
                     .build();
 
                 HttpResponse<java.io.InputStream> response = httpClient.send(
                     request, HttpResponse.BodyHandlers.ofInputStream());
 
                 if (response.statusCode() == 429 || response.statusCode() >= 500) {
-                    if (attempt < MAX_RETRIES) {
-                        long delay = INITIAL_DELAY_MS * (1L << attempt);
+                    if (attempt < maxRetries) {
+                        long delay = retryDelayMs * (1L << attempt);
                         log.warn("[LLM] retry after {}ms, status={}", delay, response.statusCode());
                         Thread.sleep(delay);
                         continue;
                     }
-                    throw new RuntimeException("LLM API error after " + MAX_RETRIES + " retries: " + response.statusCode());
+                    throw new RuntimeException("LLM API error after " + maxRetries + " retries: " + response.statusCode());
                 }
 
                 if (response.statusCode() != 200) {
@@ -111,8 +126,8 @@ public class OpenAiCompatibleService implements LlmService {
                 Thread.currentThread().interrupt();
                 throw new RuntimeException("LLM call interrupted", e);
             } catch (Exception e) {
-                if (attempt == MAX_RETRIES) {
-                    throw new RuntimeException("LLM call failed after " + MAX_RETRIES + " retries", e);
+                if (attempt == maxRetries) {
+                    throw new RuntimeException("LLM call failed after " + maxRetries + " retries", e);
                 }
                 log.warn("[LLM] attempt {} failed: {}", attempt, e.getMessage());
             }
@@ -223,14 +238,20 @@ public class OpenAiCompatibleService implements LlmService {
         return getDefaultConfig(model);
     }
 
+    @org.springframework.beans.factory.annotation.Value("${smart-query.llm.default-api-url:https://open.bigmodel.cn/api/coding/paas/v4/chat/completions}")
+    private String defaultApiUrl;
+
+    @org.springframework.beans.factory.annotation.Value("${smart-query.llm.default-max-tokens:4096}")
+    private int defaultMaxTokens;
+
     private LlmConfigEntity getDefaultConfig(String model) {
         LlmConfigEntity config = new LlmConfigEntity();
         config.setModelCode(model);
         String apiUrl = System.getenv("LLM_API_URL");
         String apiKey = System.getenv("LLM_API_KEY");
-        config.setApiUrl(apiUrl != null ? apiUrl : "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions");
+        config.setApiUrl(apiUrl != null ? apiUrl : defaultApiUrl);
         config.setApiKey(apiKey != null ? apiKey : "");
-        config.setMaxTokens(4096);
+        config.setMaxTokens(defaultMaxTokens);
         config.setTemperature(java.math.BigDecimal.valueOf(0.1));
         return config;
     }

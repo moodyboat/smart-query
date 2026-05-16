@@ -29,7 +29,8 @@ public class SystemPromptBuilder {
     private final ToolPromptLoader promptLoader;
     private final ToolRegistry toolRegistry;
 
-    private static final int SYSTEM_TOKEN_BUDGET = 16000;
+    @org.springframework.beans.factory.annotation.Value("${smart-query.prompt.system-token-budget:16000}")
+    private int systemTokenBudget;
     private static final int CHARS_PER_TOKEN = 4;
 
     /**
@@ -118,16 +119,16 @@ public class SystemPromptBuilder {
             .sum();
         int totalTokens = totalChars / CHARS_PER_TOKEN;
 
-        if (totalTokens <= SYSTEM_TOKEN_BUDGET) {
+        if (totalTokens <= systemTokenBudget) {
             return sections;
         }
 
         log.info("[PROMPT] budget enforcement: {} tokens > budget {}, truncating from low priority",
-            totalTokens, SYSTEM_TOKEN_BUDGET);
+            totalTokens, systemTokenBudget);
 
         List<PromptSection> result = new ArrayList<>(sections);
         // 从最低优先级 (APPEND) 开始截断
-        for (int i = result.size() - 1; i >= 0 && totalTokens > SYSTEM_TOKEN_BUDGET; i--) {
+        for (int i = result.size() - 1; i >= 0 && totalTokens > systemTokenBudget; i--) {
             PromptSection s = result.get(i);
             // OVERRIDE 和 COORDINATOR 不可截断
             if (s.priority() == PromptPriority.OVERRIDE || s.priority() == PromptPriority.COORDINATOR) {

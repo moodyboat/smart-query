@@ -5,6 +5,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.stream.Collectors;
 
 /**
  * 子任务协调器 — 按依赖 DAG 执行子任务，无依赖的并行执行
@@ -53,6 +54,8 @@ public class Coordinator {
     public Result coordinate(Plan plan, java.util.function.Consumer<ReActEvent> progressConsumer) {
         long start = System.currentTimeMillis();
         log.info("[COORDINATOR] Starting coordination: {} sub-tasks", plan.subTasks.size());
+
+        detectCycle(plan);
 
         List<AgentResult> subResults;
 
@@ -144,6 +147,95 @@ public class Coordinator {
         }
 
         return results;
+    }
+
+    // --- DAG cycle detection (Kahn's algorithm) ---
+
+    /**
+     * 使用 Kahn 算法检测依赖图中的环。
+     * 如果存在环则抛出 IllegalStateException，包含参与环的任务 ID。
+     */
+    private void detectCycle(Plan plan) {
+        if (plan.subTasks.isEmpty()) return;
+
+        // Collect all task IDs
+        Set<String> allTaskIds = plan.subTasks.stream()
+            .map(AgentTask::taskId)
+            .collect(Collectors.toSet());
+
+        // Build adjacency list and in-degree map
+        Map<String, Set<String>> adjacency = new HashMap<>();
+        Map<String, Integer> inDegree = new HashMap<>();
+        for (String id : allTaskIds) {
+            adjacency.put(id, new HashSet<>());
+            inDegree.put(id, 0);
+        }
+
+        // Populate edges from plan-level dependencies
+        Map<String, List<String>> deps = plan.dependencies;
+        for (AgentTask task : plan.subTasks) {
+            String taskId = task.taskId();
+            List<String> taskDeps = (deps != null)
+                ? deps.getOrDefault(taskId, List.of())
+                : List.of();
+
+            // Fall back to AgentTask.blockedBy if no plan-level deps
+            if (taskDeps.isEmpty() && !task.blockedBy().isEmpty()) {
+                taskDeps = task.blockedBy();
+            }
+
+            for (String depId : taskDeps) {
+                if (allTaskIds.contains(depId)) {
+                    // Edge: depId -> taskId (depId must complete before taskId)
+                    if (adjacency.get(depId).add(taskId)) {
+                        inDegree.merge(taskId, 1, Integer::sum);
+                    }
+                }
+            }
+        }
+
+        // Kahn's algorithm
+        Queue<String> queue = new LinkedList<>();
+        for (Map.Entry<String, Integer> entry : inDegree.entrySet()) {
+            if (entry.getValue() == 0) {
+                queue.add(entry.getKey());
+            }
+        }
+
+        Set<String> visited = new HashSet<>();
+        while (!queue.isEmpty()) {
+            String current = queue.poll();
+            visited.add(current);
+            for (String neighbor : adjacency.getOrDefault(current, Set.of())) {
+                int newDegree = inDegree.merge(neighbor, -1, Integer::sum);
+                if (newDegree == 0) {
+                    queue.add(neighbor);
+                }
+            }
+        }
+
+        if (visited.size() < allTaskIds.size()) {
+            Set<String> cycleNodes = new LinkedHashSet<>(allTaskIds);
+            cycleNodes.removeAll(visited);
+            String cycleDesc = cycleNodes.stream()
+                .map(id -> {
+                    List<String> taskDeps = (deps != null)
+                        ? deps.getOrDefault(id, List.of())
+                        : List.of();
+                    AgentTask task = plan.subTasks.stream()
+                        .filter(t -> t.taskId().equals(id))
+                        .findFirst().orElse(null);
+                    if ((taskDeps == null || taskDeps.isEmpty()) && task != null && !task.blockedBy().isEmpty()) {
+                        taskDeps = task.blockedBy();
+                    }
+                    return id + " -> " + taskDeps;
+                })
+                .collect(Collectors.joining(", "));
+            throw new IllegalStateException(
+                "Dependency cycle detected among tasks: [" + cycleDesc + "]");
+        }
+
+        log.debug("[COORDINATOR] DAG validation passed, no cycles detected");
     }
 
     private String buildSummary(List<AgentResult> results) {

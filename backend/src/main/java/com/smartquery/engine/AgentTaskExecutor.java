@@ -1,6 +1,7 @@
 package com.smartquery.engine;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
@@ -17,27 +18,47 @@ import java.util.function.Consumer;
 public class AgentTaskExecutor {
 
     private final ReActEngine reActEngine;
-    private final ExecutorService executor;
-    private final Semaphore concurrencyLimiter;
+    private ExecutorService executor;
+    private Semaphore concurrencyLimiter;
 
-    private static final int DEFAULT_MAX_CONCURRENCY = 3;
-    private static final int DEFAULT_TIMEOUT_MINUTES = 10;
+    @Value("${agent-task.max-concurrency:3}")
+    private int maxConcurrency;
+
+    @Value("${agent-task.timeout-minutes:10}")
+    private int timeoutMinutes;
 
     public AgentTaskExecutor(ReActEngine reActEngine) {
         this.reActEngine = reActEngine;
-        this.concurrencyLimiter = new Semaphore(DEFAULT_MAX_CONCURRENCY);
-        this.executor = Executors.newFixedThreadPool(DEFAULT_MAX_CONCURRENCY, r -> {
+    }
+
+    @jakarta.annotation.PostConstruct
+    void init() {
+        this.concurrencyLimiter = new Semaphore(maxConcurrency);
+        this.executor = Executors.newFixedThreadPool(maxConcurrency, r -> {
             Thread t = new Thread(r, "agent-task");
             t.setDaemon(true);
             return t;
         });
     }
 
+    @jakarta.annotation.PreDestroy
+    void shutdown() {
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {
+                executor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            executor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
+
     /**
      * 执行单个子任务，阻塞等待结果
      */
     public AgentResult execute(AgentTask task) {
-        return execute(task, DEFAULT_TIMEOUT_MINUTES);
+        return execute(task, timeoutMinutes);
     }
 
     /**
@@ -85,7 +106,7 @@ public class AgentTaskExecutor {
             futures.add(executor.submit(() -> {
                 boolean acquired = false;
                 try {
-                    acquired = concurrencyLimiter.tryAcquire(DEFAULT_TIMEOUT_MINUTES, TimeUnit.MINUTES);
+                    acquired = concurrencyLimiter.tryAcquire(timeoutMinutes, TimeUnit.MINUTES);
                     if (!acquired) {
                         return AgentResult.failure(task.taskId(), "排队超时", 0);
                     }
@@ -102,7 +123,7 @@ public class AgentTaskExecutor {
         List<AgentResult> results = new ArrayList<>();
         for (Future<AgentResult> f : futures) {
             try {
-                results.add(f.get(DEFAULT_TIMEOUT_MINUTES, TimeUnit.MINUTES));
+                results.add(f.get(timeoutMinutes, TimeUnit.MINUTES));
             } catch (Exception e) {
                 results.add(AgentResult.failure("unknown", e.getMessage(), 0));
             }
@@ -116,6 +137,7 @@ public class AgentTaskExecutor {
 
     private AgentResult runTask(AgentTask task, Consumer<ReActEvent> progressConsumer) {
         long start = System.currentTimeMillis();
+        task.setStatus(TaskState.RUNNING);
         log.info("[AGENT-TASK] Starting task '{}' with {} tools", task.taskId(), task.toolNames().size());
 
         try {
@@ -153,11 +175,13 @@ public class AgentTaskExecutor {
             }
 
             long duration = System.currentTimeMillis() - start;
+            task.setStatus(TaskState.COMPLETED);
             log.info("[AGENT-TASK] Task '{}' completed in {}ms, {} tokens", task.taskId(), duration, tokens);
 
             return AgentResult.success(task.taskId(), output.toString(), artifacts, duration, tokens);
         } catch (Exception e) {
             long duration = System.currentTimeMillis() - start;
+            task.setStatus(TaskState.FAILED);
             log.error("[AGENT-TASK] Task '{}' failed: {}", task.taskId(), e.getMessage());
             return AgentResult.failure(task.taskId(), e.getMessage(), duration);
         }

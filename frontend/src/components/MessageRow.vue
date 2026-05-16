@@ -271,7 +271,7 @@
                 <div class="mining-model-meta">
                   <span v-if="block.result.algorithm">算法: {{ block.result.algorithm }}</span>
                 </div>
-                <button class="mining-action-btn" @click="emit('openMining')">在挖掘模块中查看</button>
+                <button class="mining-action-btn" @click="emit('openMining', block.result.modelId)">在挖掘模块中查看</button>
               </div>
               <div v-html="renderMarkdown(block.result.message)" />
             </div>
@@ -289,7 +289,7 @@
                 </div>
               </div>
               <div v-html="renderMarkdown(block.result.message)" />
-              <button v-if="block.result.modelId" class="mining-action-btn" @click="emit('openMining')">查看模型详情</button>
+              <button v-if="block.result.modelId" class="mining-action-btn" @click="emit('openMining', block.result.modelId)">查看模型详情</button>
             </div>
             <!-- Validation result -->
             <div v-else-if="block.result.action === 'validate'" class="mining-validate">

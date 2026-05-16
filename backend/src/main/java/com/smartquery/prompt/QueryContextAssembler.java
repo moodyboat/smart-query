@@ -25,7 +25,8 @@ public class QueryContextAssembler {
     private final ToolPromptLoader promptLoader;
     private final SchemaContextBuilder schemaContextBuilder;
 
-    private static final int SYSTEM_TOKEN_BUDGET = 16000;
+    @org.springframework.beans.factory.annotation.Value("${smart-query.prompt.system-token-budget:16000}")
+    private int systemTokenBudget;
     private static final int CHARS_PER_TOKEN = 4;
 
     public record PromptParts(
@@ -51,7 +52,7 @@ public class QueryContextAssembler {
 
         // 注入数据字典上下文 — 带 token 预算控制
         int systemTokens = systemPrompt.length() / CHARS_PER_TOKEN;
-        int remainingTokens = Math.max(0, SYSTEM_TOKEN_BUDGET - systemTokens);
+        int remainingTokens = Math.max(0, systemTokenBudget - systemTokens);
         String schemaContext = schemaContextBuilder.buildSchemaContext(dataSourceId, remainingTokens);
         if (schemaContext != null) {
             systemPrompt = systemPrompt + "\n\n" + schemaContext;
@@ -59,7 +60,7 @@ public class QueryContextAssembler {
 
         int finalTokens = systemPrompt.length() / CHARS_PER_TOKEN;
         log.debug("[CTX-ASM] system prompt: {} chars, ~{} tokens (budget {}), schema budget: {} tokens",
-            systemPrompt.length(), finalTokens, SYSTEM_TOKEN_BUDGET, remainingTokens);
+            systemPrompt.length(), finalTokens, systemTokenBudget, remainingTokens);
 
         return new PromptParts(systemPrompt, context, context);
     }

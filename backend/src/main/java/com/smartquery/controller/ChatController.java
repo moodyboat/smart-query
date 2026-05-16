@@ -8,11 +8,15 @@ import com.smartquery.logging.ConversationStatsService;
 import com.smartquery.tool.ToolRegistry;
 import com.smartquery.entity.ChatMessage;
 import com.smartquery.logging.ConversationEventLogger;
+import com.smartquery.logging.DiagnosticsTimer;
+import com.smartquery.prompt.SchemaContextBuilder;
+import com.smartquery.prompt.ToolPromptLoader;
 import com.smartquery.mapper.ChatMessageMapper;
 import com.smartquery.mapper.ConversationMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.env.Environment;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -41,15 +45,24 @@ public class ChatController {
     private final ConcurrentHashMap<Long, AtomicBoolean> activeConversations = new ConcurrentHashMap<>();
     private final ConversationContextHolder.SessionManager sessionManager = new ConversationContextHolder.SessionManager();
     private final RateLimiter rateLimiter;
+    private final ToolPromptLoader toolPromptLoader;
+    private final SchemaContextBuilder schemaContextBuilder;
+    private final Environment environment;
+
+    @org.springframework.beans.factory.annotation.Value("${smart-query.llm.default-model:glm-5.1}")
+    private String defaultModel;
+
+    @org.springframework.beans.factory.annotation.Value("${smart-query.rate-limit.chat-per-minute:30}")
+    private int chatRateLimit;
 
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chatPost(
         @RequestParam Long conversationId,
         @RequestBody Map<String, String> body,
         @RequestParam(required = false) Long dataSourceId,
-        @RequestParam(defaultValue = "glm-5.1") String model
+        @RequestParam(defaultValue = "") String model
     ) {
-        var rateResult = rateLimiter.tryAcquireWithInfo("chat:" + conversationId, 30);
+        var rateResult = rateLimiter.tryAcquireWithInfo("chat:" + conversationId, chatRateLimit);
         if (!rateResult.allowed()) {
             SseEmitter emitter = new SseEmitter();
             try {
@@ -69,7 +82,7 @@ public class ChatController {
             emitter.complete();
             return emitter;
         }
-        return chat(conversationId, message, dataSourceId, model);
+        return chat(conversationId, message, dataSourceId, model.isBlank() ? defaultModel : model);
     }
 
     @GetMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -77,9 +90,10 @@ public class ChatController {
         @RequestParam Long conversationId,
         @RequestParam String message,
         @RequestParam(required = false) Long dataSourceId,
-        @RequestParam(defaultValue = "glm-5.1") String model
+        @RequestParam(defaultValue = "") String model
     ) {
         // Per-conversation lock: reject concurrent requests to the same conversation
+        String resolvedModel = model.isBlank() ? defaultModel : model;
         AtomicBoolean active = activeConversations.computeIfAbsent(conversationId, k -> new AtomicBoolean(false));
         if (!active.compareAndSet(false, true)) {
             SseEmitter reject = new SseEmitter();
@@ -91,12 +105,14 @@ public class ChatController {
             return reject;
         }
 
-        SseEmitter emitter = new SseEmitter(300000L);
+        SseEmitter emitter = new SseEmitter(
+            Long.parseLong(environment.getProperty("smart-query.sse.timeout-ms", "300000")));
         AtomicBoolean aborted = new AtomicBoolean(false);
 
         Runnable releaseLock = () -> {
             aborted.set(true);
             active.set(false);
+            activeConversations.remove(conversationId, active);
         };
 
         emitter.onCompletion(releaseLock);
@@ -112,19 +128,20 @@ public class ChatController {
         CompletableFuture.runAsync(() -> {
             ConversationContextHolder.setConversationId(conversationId);
             ConversationContextHolder.setDataSourceId(dataSourceId);
+            ConversationContextHolder.setTraceId(UUID.randomUUID().toString().substring(0, 8));
             sessionManager.register(conversationId, dataSourceId, null);
             try {
                 queryEngine.submitMessageStreaming(
-                    conversationId, message, dataSourceId, model,
+                    conversationId, message, dataSourceId, resolvedModel,
                     aborted::get,
                     event -> {
+                        if (aborted.get()) return;
                         try {
                             Map<String, Object> data = serializeEvent(event);
                             String json = objectMapper.writeValueAsString(data);
                             emitter.send(SseEmitter.event().data(json));
-                        } catch (IOException e) {
+                        } catch (Exception e) {
                             aborted.set(true);
-                            throw new RuntimeException("SSE send failed", e);
                         }
                     }
                 );
@@ -288,5 +305,33 @@ public class ChatController {
     @PostMapping("/admin/logs/maintain")
     public Map<String, Object> maintainLogs() {
         return eventLogger.performLogMaintenance();
+    }
+
+    @GetMapping("/admin/diagnostics")
+    public Map<String, Object> getDiagnostics() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("operations", DiagnosticsTimer.getOperationStats());
+        result.put("promptCache", Map.of("entries", toolPromptLoader.getCacheStats()));
+        result.put("schemaCache", schemaContextBuilder.getCacheStats());
+        result.put("activeSessions", sessionManager.activeCount());
+        result.put("activeConversations", activeConversations.size());
+
+        Runtime runtime = Runtime.getRuntime();
+        Map<String, Object> mem = new LinkedHashMap<>();
+        mem.put("maxMb", runtime.maxMemory() / 1024 / 1024);
+        mem.put("totalMb", runtime.totalMemory() / 1024 / 1024);
+        mem.put("freeMb", runtime.freeMemory() / 1024 / 1024);
+        mem.put("usedMb", (runtime.totalMemory() - runtime.freeMemory()) / 1024 / 1024);
+        result.put("jvmMemory", mem);
+        result.put("threads", Thread.activeCount());
+        return result;
+    }
+
+    @GetMapping("/admin/prompts")
+    public Map<String, Object> getPromptDebug() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("promptCacheEntries", toolPromptLoader.getCacheStats());
+        result.put("schemaCache", schemaContextBuilder.getCacheStats());
+        return result;
     }
 }

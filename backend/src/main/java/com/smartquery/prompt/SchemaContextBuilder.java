@@ -7,14 +7,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
-/**
- * 数据字典上下文构建器 — 将已知的表结构注入 system prompt
- *
- * <p>参考 Claude Code 的 memory/env_info 动态段模式:
- * 将运行时上下文作为 system prompt 的一部分注入，减少不必要的工具调用。
- */
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -23,6 +18,11 @@ public class SchemaContextBuilder {
     private final DataDictMapper dataDictMapper;
 
     private static final int CHARS_PER_TOKEN = 4;
+    private static final long CACHE_TTL_MS = 5 * 60 * 1000;
+
+    private record CachedEntry(String content, long cachedAt) {}
+
+    private final ConcurrentHashMap<String, CachedEntry> schemaCache = new ConcurrentHashMap<>();
 
     /**
      * 构建数据库结构上下文 (无 token 限制)
@@ -40,6 +40,13 @@ public class SchemaContextBuilder {
      */
     public String buildSchemaContext(Long dataSourceId, int maxTokens) {
         if (dataSourceId == null) return null;
+
+        String cacheKey = dataSourceId + ":" + maxTokens;
+        CachedEntry cached = schemaCache.get(cacheKey);
+        if (cached != null && System.currentTimeMillis() - cached.cachedAt < CACHE_TTL_MS) {
+            log.debug("[SCHEMA-CTX] cache hit for dataSourceId={}", dataSourceId);
+            return cached.content;
+        }
 
         List<DataDict> dicts = dataDictMapper.selectList(
             new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<DataDict>()
@@ -63,6 +70,7 @@ public class SchemaContextBuilder {
         if (fullContext.length() <= maxChars) {
             log.debug("[SCHEMA-CTX] built full context for dataSourceId={}: {} tables, {} chars",
                 dataSourceId, tableGroups.size(), fullContext.length());
+            schemaCache.put(cacheKey, new CachedEntry(fullContext, System.currentTimeMillis()));
             return fullContext;
         }
 
@@ -70,7 +78,25 @@ public class SchemaContextBuilder {
         String summaryContext = buildSummaryContext(dataSourceId, tableGroups, maxChars);
         log.info("[SCHEMA-CTX] schema truncated to summary for dataSourceId={}: {} tables, full={} chars, summary={} chars, budget={} tokens",
             dataSourceId, tableGroups.size(), fullContext.length(), summaryContext.length(), maxTokens);
+        schemaCache.put(cacheKey, new CachedEntry(summaryContext, System.currentTimeMillis()));
         return summaryContext;
+    }
+
+    public void clearCache() {
+        schemaCache.clear();
+        log.info("[SCHEMA-CTX] cache cleared");
+    }
+
+    public void evictStaleEntries() {
+        long now = System.currentTimeMillis();
+        schemaCache.entrySet().removeIf(e -> now - e.getValue().cachedAt > CACHE_TTL_MS);
+    }
+
+    public Map<String, Object> getCacheStats() {
+        return Map.of(
+            "size", schemaCache.size(),
+            "ttlMs", CACHE_TTL_MS
+        );
     }
 
     private String buildFullContext(Long dataSourceId, Map<String, List<DataDict>> tableGroups) {

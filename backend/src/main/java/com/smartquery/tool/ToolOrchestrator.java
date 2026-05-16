@@ -3,6 +3,7 @@ package com.smartquery.tool;
 import com.smartquery.logging.ConversationEventLogger;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
@@ -31,6 +32,15 @@ public class ToolOrchestrator {
     private final Executor asyncExecutor;
     private final List<ToolHook> hooks;
     private final ConversationEventLogger eventLogger;
+
+    @Value("${tool.default-timeout-ms:30000}")
+    private long defaultToolTimeoutMs;
+
+    @Value("${tool.retry.max-attempts:2}")
+    private int retryMaxAttempts;
+
+    @Value("${tool.retry.backoff-ms:1000}")
+    private long retryBackoffMs;
 
     public ToolOrchestrator(ToolRegistry toolRegistry,
                             @Qualifier("asyncExecutor") Executor asyncExecutor,
@@ -168,19 +178,7 @@ public class ToolOrchestrator {
 
         log.debug("[ORCHESTRATOR] executing tool: {} (concurrencySafe={}, timeout={}ms)", tool.getName(), tool.isConcurrencySafe(), tool.getTimeoutMs());
 
-        ToolResult result;
-        try {
-            result = tool.execute(input, context);
-        } catch (Exception e) {
-            log.error("[ORCHESTRATOR] tool {} execution failed", tool.getName(), e);
-            eventLogger.logEvent(context.conversationId(), context.traceId(), "tool_error",
-                Map.of("tool", tool.getName(), "error", e.getMessage(),
-                       "category", e.getClass().getSimpleName(),
-                       "input_keys", input.keySet()));
-            return ToolResult.error(toolCall.toolName(),
-                ToolError.of(ToolError.ErrorCode.TOOL_ERROR,
-                    tool.getName() + " 执行失败: " + e.getMessage(), e.getClass().getSimpleName()), 0);
-        }
+        ToolResult result = executeWithRetry(tool, input, context, toolCall);
 
         // PostToolUse hooks — log but don't block on failure
         for (ToolHook hook : hooks) {
@@ -194,8 +192,44 @@ public class ToolOrchestrator {
         return result;
     }
 
+    private ToolResult executeWithRetry(LlmTool tool, Map<String, Object> input,
+                                         ToolExecutionContext context, ToolCall toolCall) {
+        Exception lastException = null;
+        for (int attempt = 0; attempt <= retryMaxAttempts; attempt++) {
+            try {
+                ToolResult result = tool.execute(input, context);
+                if (attempt > 0) {
+                    log.info("[ORCHESTRATOR] tool {} succeeded on attempt {}", tool.getName(), attempt + 1);
+                }
+                return result;
+            } catch (Exception e) {
+                lastException = e;
+                if (attempt < retryMaxAttempts) {
+                    long delay = retryBackoffMs * (1L << attempt);
+                    log.warn("[ORCHESTRATOR] tool {} failed (attempt {}/{}), retrying in {}ms: {}",
+                        tool.getName(), attempt + 1, retryMaxAttempts + 1, delay, e.getMessage());
+                    try { Thread.sleep(delay); } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+            }
+        }
+        log.error("[ORCHESTRATOR] tool {} failed after {} attempts", tool.getName(), retryMaxAttempts + 1, lastException);
+        eventLogger.logEvent(context.conversationId(), context.traceId(), "tool_error",
+            Map.of("tool", tool.getName(), "error", lastException != null ? lastException.getMessage() : "unknown",
+                   "category", lastException != null ? lastException.getClass().getSimpleName() : "",
+                   "attempts", retryMaxAttempts + 1,
+                   "input_keys", input.keySet()));
+        return ToolResult.error(toolCall.toolName(),
+            ToolError.of(ToolError.ErrorCode.TOOL_ERROR,
+                tool.getName() + " 执行失败(" + (retryMaxAttempts + 1) + "次重试): " +
+                (lastException != null ? lastException.getMessage() : "unknown"),
+                lastException != null ? lastException.getClass().getSimpleName() : ""), 0);
+    }
+
     private long getTimeoutForTool(String toolName) {
-        return toolRegistry.getTool(toolName).map(LlmTool::getTimeoutMs).orElse(30000L);
+        return toolRegistry.getTool(toolName).map(LlmTool::getTimeoutMs).orElse(defaultToolTimeoutMs);
     }
 
     @SuppressWarnings("unchecked")

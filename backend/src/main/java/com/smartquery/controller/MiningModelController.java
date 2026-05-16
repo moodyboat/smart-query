@@ -32,6 +32,11 @@ public class MiningModelController {
 
     private final MiningModelMapper miningModelMapper;
     private final ModelExecutionMapper modelExecutionMapper;
+
+    @org.springframework.beans.factory.annotation.Value("${smart-query.mining.train-poll-interval-ms:2000}")
+    private int trainPollIntervalMs;
+    @org.springframework.beans.factory.annotation.Value("${smart-query.mining.status-stream-timeout-ms:120000}")
+    private long statusStreamTimeoutMs;
     private final MiningService miningService;
     private final DataSourceManager dataSourceManager;
     private final ConversationEventLogger eventLogger;
@@ -58,6 +63,15 @@ public class MiningModelController {
         return Result.ok(model);
     }
 
+    @GetMapping("/by-pipeline/{pipelineId}")
+    public Result<MiningModel> getByPipeline(@PathVariable Long pipelineId) {
+        MiningModel model = miningModelMapper.selectOne(
+            new LambdaQueryWrapper<MiningModel>()
+                .eq(MiningModel::getPipelineId, pipelineId)
+                .eq(MiningModel::getDeleted, 0));
+        return Result.ok(model);
+    }
+
     @PostMapping
     public Result<MiningModel> create(@RequestBody MiningModel model) {
         return Result.ok(miningService.createModel(model));
@@ -70,7 +84,17 @@ public class MiningModelController {
 
     @DeleteMapping("/{id}")
     public Result<Void> delete(@PathVariable Long id) {
-        miningModelMapper.deleteById(id);
+        MiningModel model = miningModelMapper.selectById(id);
+        if (model == null || Integer.valueOf(1).equals(model.getDeleted())) {
+            throw new BusinessException("模型不存在: " + id);
+        }
+        if ("training".equals(model.getStatus())) {
+            throw new BusinessException("模型正在训练中，无法删除");
+        }
+        miningModelMapper.update(null,
+            new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<MiningModel>()
+                .eq(MiningModel::getId, id)
+                .set(MiningModel::getDeleted, 1));
         return Result.ok();
     }
 
@@ -174,6 +198,7 @@ public class MiningModelController {
             throw new BusinessException("模型不存在: " + id);
         }
         JdbcTemplate jdbc = dataSourceManager.getJdbcTemplate(model.getDataSourceId());
+        com.smartquery.common.IdentifierValidator.validateTableName(tableName);
         Integer count = jdbc.queryForObject(
             "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?",
             Integer.class, tableName);
@@ -185,6 +210,26 @@ public class MiningModelController {
             limit < 1 || limit > 100 ? 10 : limit);
         List<String> columns = rows.isEmpty() ? List.of() : List.copyOf(rows.get(0).keySet());
         return Result.ok(Map.of("rows", rows, "columns", columns, "tableName", tableName));
+    }
+
+    @PostMapping("/{id}/sync-pipeline")
+    public Result<MiningModel> syncPipeline(@PathVariable Long id) {
+        MiningModel model = miningModelMapper.selectById(id);
+        if (model == null || Integer.valueOf(1).equals(model.getDeleted())) {
+            throw new BusinessException("模型不存在: " + id);
+        }
+        if (model.getPipelineId() == null) {
+            throw new BusinessException("模型未关联流程");
+        }
+        miningService.syncModelToPipeline(model.getPipelineId(), model);
+        miningService.syncPipelineToModel(model.getPipelineId());
+        model = miningModelMapper.selectById(id);
+        return Result.ok(model);
+    }
+
+    @PostMapping("/{id}/rollback/{executionId}")
+    public Result<MiningModel> rollback(@PathVariable Long id, @PathVariable Long executionId) {
+        return Result.ok(miningService.rollbackToExecution(id, executionId));
     }
 
     @GetMapping("/{id}/lineage")
@@ -207,7 +252,7 @@ public class MiningModelController {
      */
     @GetMapping(value = "/{id}/status-stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter statusStream(@PathVariable Long id) {
-        SseEmitter emitter = new SseEmitter(120000L);
+        SseEmitter emitter = new SseEmitter(statusStreamTimeoutMs);
         sseExecutor.submit(() -> {
             try {
                 String lastStatus = null;
@@ -233,7 +278,7 @@ public class MiningModelController {
                         }
                     }
                     lastStatus = status;
-                    Thread.sleep(2000);
+                    Thread.sleep(trainPollIntervalMs);
                 }
             } catch (Exception e) {
                 // client disconnected or timeout, normal

@@ -126,6 +126,16 @@ export async function fetchMiningModel(id) {
   return data.data
 }
 
+export async function fetchModelByPipeline(pipelineId) {
+  const { data } = await api.get(`/mining/model/by-pipeline/${pipelineId}`)
+  return data.data
+}
+
+export async function syncModelPipeline(modelId) {
+  const { data } = await api.post(`/mining/model/${modelId}/sync-pipeline`)
+  return data.data
+}
+
 export async function createMiningModel(model) {
   const { data } = await api.post('/mining/model', model)
   return data.data
@@ -237,6 +247,16 @@ export async function validateMiningPipeline(id) {
 
 export async function previewStepPipeline(id, nodeId) {
   const { data } = await api.post(`/mining/pipeline/${id}/preview-step`, { nodeId })
+  return data.data
+}
+
+export async function fetchPipelineSyncStatus(id) {
+  const { data } = await api.get(`/mining/pipeline/${id}/sync-status`)
+  return data.data
+}
+
+export async function rollbackModel(modelId, executionId) {
+  const { data } = await api.post(`/mining/model/${modelId}/rollback/${executionId}`)
   return data.data
 }
 

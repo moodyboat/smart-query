@@ -8,7 +8,8 @@
 
 1. **探索数据** → `explore_data` 了解表结构、列类型、分布、缺失情况
 2. **分析特征** → 基于数据探索结果，建议合适的特征列和目标列
-3. **创建模型** → `create` 配置好特征、目标、算法
+3. **创建模型** → `create` 配置好特征、目标、算法、预处理和验证模式
+   - 时序数据务必设置 validation_mode="temporal" 并指定 temporal_column
 4. **验证数据** → `validate` 检查数据质量(缺失值、数据量、特征分布)
 5. **训练** → `train` 执行训练
 6. **评估** → 查看 `train` 返回的指标(accuracy, F1, precision, recall)，如果指标不好:
@@ -68,6 +69,26 @@
 用户说「增加树的深度到10」→ action: "update_params", model_id, hyperparameters: {"max_depth": 10}
 用户说「调参试试」「微调一下模型」→ 先 get 查看当前参数，再 update_params 修改
 
+### 一步重训（推荐调参方式）
+用户说「把树数量改成200并重新训练」「换个特征再训练」「增加收入列再训练」
+→ action: "retrain", model_id, 可同时传入 feature_columns/hyperparameters/validation_mode 等任意字段
+- 一步完成: 更新配置 → 同步流程 → 重新训练 → 返回前后指标对比
+- 自动显示新旧指标对比表格（箭头标注升降）
+
+### 参数网格搜索
+用户说「调优随机森林，试50/100/200棵树」「搜索最佳参数组合」
+→ action: "tune", model_id, param_grid: {"n_estimators": [50, 100, 200], "max_depth": [5, 10]}
+- 自动生成所有参数组合并并行训练
+- 最多探索12种组合
+- 返回对比表格，可从中选择最佳模型发布
+
+### 同步模型与流程
+用户说「同步模型和流程」「确保流程是最新的」
+→ action: "sync_pipeline", model_id
+- 强制双向同步模型配置与关联流程
+- 模型字段变更 → 更新流程节点配置
+- 流程节点变更 → 更新模型配置
+
 ### 创建模型
 用户说「帮我创建一个预测客户流失的模型」→ action: "create", name, algorithm, source_table, feature_columns, target_column
 - 建议先 explore_data 了解数据，再选择特征
@@ -76,8 +97,12 @@
 - `preprocessing`: 预处理配置 `{"handleMissing":"drop|fill_mean|fill_median","encoding":"label","scaling":"none|standard|minmax"}`
 - `feature_transforms`: 特征变换列表 `[{"type":"log","columns":["amount"]},{"type":"binning","columns":["age"],"bins":5},{"type":"polynomial","columns":["income"],"degree":2}]`
   - `log`: 对数变换，适合右偏分布(金额、收入等)
-  - `polynomial`: 多项式特征，适合非线性关系
-  - `binning`: 分箱，适合连续变量离散化
+  - `polynomial`: 多项式特征，适合非线性关系，需指定 degree
+  - `binning`: 分箱离散化，需指定 bins
+  - `interaction`: 交互特征，自动生成列间乘积
+  - `date_extract`: 日期提取(年/月/日/星期几)，适合日期列
+  - `target_encode`: 目标编码，适合高基数分类特征(分类任务)
+  - `frequency_encode`: 频率编码，将类别替换为其出现频率
 
 ### 训练模型
 用户说「训练XX模型」→ action: "train", model_id
@@ -86,8 +111,9 @@
 
 ### 批量预测
 用户说「批量预测」「跑一下预测」→ action: "batch_predict", model_id
-- 需要模型已发布且配置了 predict_input_table
-- 结果写入 predict_result_table
+- 可选参数 result_table: 指定输出表名，不传则用模型配置的 predict_result_table
+- 需要模型已训练（status=trained 或 published）
+- 结果自动写入指定表（无表时自动建表）
 
 ### 模型对比
 用户说「对比随机森林和XGBoost」「哪种算法效果好」→ action: "compare", algorithms: ["random_forest", "xgboost"], source_table, feature_columns, target_column
@@ -98,15 +124,15 @@
 
 ### 发布/下线
 用户说「发布XX模型」→ action: "publish", model_id
-用户说「发布并每天定时预测」→ action: "publish", model_id, schedule_enabled: true, schedule_cron: "*/1440", schedule_mode: "predict", input_table: "表名", result_table: "结果表名"
+用户说「发布并每天定时预测」→ action: "publish", model_id, schedule_enabled: true, schedule_cron: "0 6 * * *", schedule_mode: "predict", input_table: "表名", result_table: "结果表名"
 用户说「把XX模型下线」→ action: "offline", model_id
 
 发布时可选配置:
 - input_table: 批量预测的输入表
 - result_table: 预测结果写入的表(不存在时自动创建)
-- input_filter: 输入表筛选条件, 支持${etl_date}等变量
+- input_filter: 输入表筛选条件, 支持 ${etl_date} 变量(自动替换为当天日期并加引号), 如 "application_date <= ${etl_date}"
 - schedule_enabled: 是否启用定时调度
-- schedule_cron: 调度间隔(分钟数), 如 "*/60"=每小时, "*/1440"=每天
+- schedule_cron: 标准5字段cron表达式, 如 "*/30 * * * *"=每30分钟, "0 6 * * *"=每天6:00, "0 8 * * 1"=每周一8:00, "0 0 1 * *"=每月1号0:00
 - schedule_mode: "train"=定期重训, "predict"=定期预测
 
 ### 预测

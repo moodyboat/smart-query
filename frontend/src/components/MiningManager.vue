@@ -53,6 +53,7 @@
               <el-tag v-if="model.conversationId" size="small" effect="plain" type="info">对话构建</el-tag>
               <el-tag v-else-if="model.pipelineId" size="small" effect="plain" type="success">流程编排</el-tag>
               <span v-if="model.pipelineId" class="meta-item secondary" style="cursor:pointer;color:var(--el-color-primary)" @click="goToPipeline(model.pipelineId)">流程 #{{ model.pipelineId }}</span>
+              <el-tag v-if="needsSync(model)" size="small" effect="dark" type="warning" style="cursor:pointer" @click="handleSyncPipeline(model)">未同步</el-tag>
             </div>
             <div v-if="model.description" class="model-desc">{{ model.description }}</div>
             <div v-if="model.metrics" class="model-metrics">
@@ -88,6 +89,7 @@
                   <el-dropdown-item command="schedule">{{ model.scheduleEnabled ? '调度设置 (已启用)' : '调度设置' }}</el-dropdown-item>
                   <el-dropdown-item v-if="model.status === 'published' || model.status === 'trained'" command="predictResults">预测记录</el-dropdown-item>
                   <el-dropdown-item v-if="model.pipelineId" command="viewPipeline">查看流程</el-dropdown-item>
+                  <el-dropdown-item v-if="model.pipelineId" command="syncPipeline">同步流程</el-dropdown-item>
                   <el-dropdown-item command="delete" divided style="color: var(--el-color-danger)">删除</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
@@ -274,7 +276,7 @@
           </el-form-item>
           <el-form-item v-if="scheduleMode === 'predict'" label="输入表">
             <el-select v-model="scheduleInputTable" placeholder="选择预测输入表" style="width: 100%" :teleported="false" filterable>
-              <el-option v-for="t in tableOptions" :key="t.name" :label="t.name" :value="t.name" />
+              <el-option v-for="t in scheduleTableOptions" :key="t.name" :label="t.name" :value="t.name" />
             </el-select>
           </el-form-item>
           <el-form-item v-if="scheduleMode === 'predict'" label="结果表">
@@ -316,7 +318,7 @@
         <el-form label-width="100px" size="default">
           <el-form-item label="预测输入表">
             <el-select v-model="publishConfig.predictInputTable" placeholder="选择预测输入表（可选）" style="width: 100%" :teleported="false" filterable clearable>
-              <el-option v-for="t in tableOptions" :key="t.name" :label="t.name" :value="t.name">
+              <el-option v-for="t in publishTableOptions" :key="t.name" :label="t.name" :value="t.name">
                 <span>{{ t.name }}</span>
                 <span style="float: right; color: var(--text-muted); font-size: 12px">{{ t.rows }}行</span>
               </el-option>
@@ -411,7 +413,7 @@
           </el-form-item>
           <el-form-item label="输入表" required>
             <el-select v-model="batchInputTable" placeholder="选择要预测的数据表" style="width: 100%" :teleported="false" filterable>
-              <el-option v-for="t in tableOptions" :key="t.name" :label="t.name" :value="t.name">
+              <el-option v-for="t in batchTableOptions" :key="t.name" :label="t.name" :value="t.name">
                 <span>{{ t.name }}</span>
                 <span style="float: right; color: var(--text-muted); font-size: 12px">{{ t.rows }}行</span>
               </el-option>
@@ -493,9 +495,12 @@
           <el-descriptions-item label="目标列">{{ detailModel.targetColumn || '-' }}</el-descriptions-item>
           <el-descriptions-item label="版本">v{{ detailModel.version }}</el-descriptions-item>
           <el-descriptions-item v-if="detailModel.pipelineId" label="来源">
-            <el-button size="small" link type="primary" @click="goToPipeline(detailModel.pipelineId)">
-              关联流程 #{{ detailModel.pipelineId }}
-            </el-button>
+            <div style="display: flex; align-items: center; gap: 8px">
+              <el-button size="small" link type="primary" @click="goToPipeline(detailModel.pipelineId)">
+                关联流程 #{{ detailModel.pipelineId }}
+              </el-button>
+              <el-tag v-if="needsSync(detailModel)" size="small" effect="dark" type="warning" style="cursor:pointer" @click="handleSyncPipeline(detailModel)">配置未同步，点击同步</el-tag>
+            </div>
           </el-descriptions-item>
           <el-descriptions-item label="创建时间">{{ formatDate(detailModel.createdAt) }}</el-descriptions-item>
         </el-descriptions>
@@ -527,6 +532,9 @@
 
         <div v-if="detailModel.metrics" class="detail-section">
           <h4>评估指标</h4>
+          <div v-if="overfittingWarning(detailModel)" class="overfitting-warning">
+            {{ overfittingWarning(detailModel) }}
+          </div>
           <div class="metrics-grid">
             <div v-for="(val, key) in parsedMetrics(detailModel.metrics)" :key="key" class="metric-card">
               <span class="metric-value">{{ formatMetricValue(key, val) }}</span>
@@ -604,10 +612,12 @@
                 <span class="exec-time">{{ exec.executionTimeMs ? (exec.executionTimeMs / 1000).toFixed(1) + 's' : '-' }}</span>
                 <span class="exec-trigger">{{ execTriggerLabel(exec.triggerType) }}</span>
                 <span class="exec-date">{{ formatDate(exec.createdAt) }}</span>
+                <el-button v-if="exec.status === 'success' && detailModel" size="small" text type="warning"
+                  @click="handleRollback(detailModel.id, exec.id)" style="margin-left:auto">回滚</el-button>
               </div>
               <div v-if="exec.metrics && exec.status === 'success'" class="exec-metrics">
                 <template v-for="(val, key) in parsedMetrics(exec.metrics)" :key="key">
-                  <span v-if="['accuracy','f1','precision','recall','r2','rmse','mae','silhouette_score'].includes(key)" class="exec-metric-chip">{{ formatMetricName(key) }} {{ formatMetricValue(key, val) }}</span>
+                  <span v-if="['accuracy','f1','precision','recall','r2','rmse','mae','silhouette_score','train_accuracy','test_accuracy','train_f1','test_f1','overfitting_gap','cv_mean','cv_std'].includes(key)" class="exec-metric-chip">{{ formatMetricName(key) }} {{ formatMetricValue(key, val) }}</span>
                 </template>
               </div>
               <div v-if="exec.status === 'failed' && exec.executionLog" class="exec-error">
@@ -629,6 +639,7 @@
             @click="handleOffline(detailModel.id)">下线</el-button>
           <el-button v-if="detailModel.status === 'published' || detailModel.status === 'trained'" size="small" type="primary"
             @click="showDetail = false; openPredict(detailModel)">预测</el-button>
+          <el-button size="small" @click="openEditModel(detailModel)">编辑</el-button>
           <el-button size="small" @click="showDetail = false; editModel(detailModel)">调参</el-button>
         </div>
       </template>
@@ -637,7 +648,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PipelineEditor from './PipelineEditor.vue'
 import {
@@ -646,14 +657,16 @@ import {
   updateModelHyperparams, fetchModelExecutions, fetchDataSources,
   fetchDataSourceTables, fetchTableColumns, updateModelSchedule, predictMiningModel,
   batchPredictMiningModel, validateMiningModel, fetchModelPredictions,
-  fetchMiningPipeline, previewResultTable
+  fetchMiningPipeline, previewResultTable, syncModelPipeline, rollbackModel
 } from '../api'
 import { useAlgorithms } from '../composables/useAlgorithms.js'
 import { useMiningStore } from '../stores/mining'
+import { useUIStore } from '../stores/ui'
 
 const emit = defineEmits(['close'])
 
 const mining = useMiningStore()
+const ui = useUIStore()
 
 const {
   algorithms, modelTypes, loadAlgorithms,
@@ -677,12 +690,17 @@ const savingParams = ref(false)
 const loadingExecutions = ref(false)
 const pipelineEditorRef = ref(null)
 
-// Table/Column selectors
+// Table/Column selectors (for create/edit dialog)
 const tableOptions = ref([])
 const columnOptions = ref([])
 const loadingTables = ref(false)
 const featureChecked = ref({})
 const selectAllFeatures = ref(false)
+
+// Per-dialog table options to prevent clobbering
+const publishTableOptions = ref([])
+const scheduleTableOptions = ref([])
+const batchTableOptions = ref([])
 
 // Create/Edit form
 const showCreateDialog = ref(false)
@@ -835,6 +853,8 @@ const filteredModels = computed(() => {
 const modelTypeLabel = getModelTypeLabel
 
 function isPrimary(key, modelType) {
+  if (key.startsWith('train_') || key.startsWith('test_') ||
+      ['overfitting_gap', 'cv_mean', 'cv_std', 'confusion_matrix', 'class_labels'].includes(key)) return false
   if (modelType === 'regression') return key === 'r2'
   if (modelType === 'clustering') return key === 'inertia'
   return key === 'accuracy'
@@ -876,21 +896,58 @@ function metricQuality(val, modelType, key) {
   return 'poor'
 }
 
+function overfittingWarning(model) {
+  const m = parsedMetrics(model.metrics)
+  const gap = m.overfitting_gap
+  if (gap == null) return null
+  if (gap >= 0.15) return `过拟合警告 (差距 ${(gap * 100).toFixed(1)}%): 训练表现远好于测试，建议减少特征或增加正则化`
+  if (gap >= 0.05) return `轻微过拟合迹象 (差距 ${(gap * 100).toFixed(1)}%)，可考虑优化`
+  return null
+}
+
 function modelTypeIcon(t) {
   return { classification: '🏷️', regression: '📈', clustering: '🎯', anomaly_detection: '🔍' }[t] || '🤖'
 }
 
 function formatMetricValue(key, val) {
   if (val == null) return '-'
-  const pctKeys = ['accuracy', 'precision', 'recall', 'f1', 'r2']
+  if (typeof val !== 'number') return String(val)
+  if (key === 'overfitting_gap') return (val * 100).toFixed(1) + '%'
+  if (key === 'cv_mean' || key === 'cv_std') return (val * 100).toFixed(1) + '%'
+  const pctKeys = ['accuracy', 'precision', 'recall', 'f1', 'r2',
+    'train_accuracy', 'test_accuracy', 'train_f1', 'test_f1',
+    'train_precision', 'test_precision', 'train_recall', 'test_recall',
+    'train_r2', 'test_r2', 'silhouette_score']
   return pctKeys.includes(key) ? (val * 100).toFixed(1) + '%' : Number(val).toFixed(4)
 }
 function formatMetricName(key) {
-  const names = { accuracy: '准确率', precision: '精确率', recall: '召回率', f1: 'F1', mse: 'MSE', rmse: 'RMSE', r2: 'R²' }
+  const names = {
+    accuracy: '准确率', precision: '精确率', recall: '召回率', f1: 'F1',
+    mse: 'MSE', rmse: 'RMSE', r2: 'R²', mae: 'MAE',
+    overfitting_gap: '过拟合差距', cv_mean: 'CV均值', cv_std: 'CV标准差',
+    train_accuracy: '训练准确率', test_accuracy: '测试准确率',
+    train_f1: '训练F1', test_f1: '测试F1',
+    train_r2: '训练R²', test_r2: '测试R²',
+    train_precision: '训练精确率', test_precision: '测试精确率',
+    train_recall: '训练召回率', test_recall: '测试召回率',
+    silhouette_score: '轮廓系数', inertia: '惯性',
+    confusion_matrix: '混淆矩阵', class_labels: '类别标签'
+  }
   return names[key] || key
 }
 function parsedMetrics(json) {
-  try { return typeof json === 'string' ? JSON.parse(json) : json || {} } catch { return {} }
+  try {
+    const raw = typeof json === 'string' ? JSON.parse(json) : json || {}
+    // Normalize test_/train_ prefixed keys so UI can find canonical names (accuracy, f1, etc.)
+    const result = { ...raw }
+    for (const [k, v] of Object.entries(raw)) {
+      if (k.startsWith('test_')) {
+        const canonical = k.slice(5) // e.g. test_accuracy → accuracy
+        if (!(canonical in result)) result[canonical] = v
+      }
+    }
+    return result
+  } catch { return {} }
 }
 function parseJson(json, fallback) {
   try { return typeof json === 'string' ? JSON.parse(json) : json || fallback } catch { return fallback }
@@ -986,12 +1043,30 @@ watch(() => form.value.modelType, (mt) => {
     form.value.algorithm = available[0].algorithmId
   }
 })
+
+// Auto-populate default hyperparams when algorithm changes during model creation
+watch(() => form.value.algorithm, (algo) => {
+  if (!algo) return
+  const defaults = getDefaultHyperparams(algo)
+  if (defaults && Object.keys(defaults).length > 0) {
+    form.value.hyperparameters = defaults
+  }
+})
 onMounted(() => {
   loadAlgorithms()
   loadModels()
+  const initialId = ui.consumeMiningInitialModel()
+  if (initialId) {
+    nextTick(() => mining.selectModel(initialId))
+  }
+})
+
+onBeforeUnmount(() => {
+  mining.closeEventSource()
 })
 
 async function handleTrain(id) {
+  if (trainingId.value) return
   trainingId.value = id
   try {
     const model = await trainMiningModel(id)
@@ -1029,16 +1104,25 @@ async function handleTrain(id) {
 
 function showTrainingResult(model) {
   if (model.status === 'trained') {
-    const metrics = parseJson(model.metrics, {})
+    const metrics = parsedMetrics(model.metrics)
     const primaryKeys = ['accuracy', 'f1', 'r2']
     const primary = primaryKeys.find(k => metrics[k] != null)
+    const parts = []
     if (primary) {
       const val = metrics[primary]
       const pct = ['accuracy', 'f1', 'precision', 'recall', 'r2'].includes(primary)
-      ElMessage.success(`训练完成！${formatMetricName(primary)} = ${pct ? (val * 100).toFixed(1) + '%' : val.toFixed(4)}`)
-    } else {
-      ElMessage.success('训练完成！')
+      parts.push(`${formatMetricName(primary)} = ${pct ? (val * 100).toFixed(1) + '%' : val.toFixed(4)}`)
     }
+    if (metrics.overfitting_gap != null) {
+      parts.push(`过拟合差距 ${(metrics.overfitting_gap * 100).toFixed(1)}%`)
+    }
+    if (metrics.train_accuracy != null && metrics.test_accuracy != null) {
+      parts.push(`训练/测试 ${(metrics.train_accuracy * 100).toFixed(1)}% / ${(metrics.test_accuracy * 100).toFixed(1)}%`)
+    }
+    if (metrics.train_r2 != null && metrics.test_r2 != null) {
+      parts.push(`训练/测试 R² ${metrics.train_r2.toFixed(3)} / ${metrics.test_r2.toFixed(3)}`)
+    }
+    ElMessage.success(parts.length ? `训练完成！${parts.join('，')}` : '训练完成！')
   } else if (model.status === 'failed' || model.status === 'trained_failed') {
     ElMessage.error('训练失败，请查看执行历史了解详情')
   } else {
@@ -1062,7 +1146,7 @@ async function handlePublish(id) {
   // Load tables for this model's data source
   if (model.dataSourceId) {
     fetchDataSourceTables(model.dataSourceId).then(tables => {
-      tableOptions.value = tables || []
+      publishTableOptions.value = tables || []
     }).catch(() => {})
   }
 }
@@ -1089,7 +1173,35 @@ async function confirmPublish() {
       ? '模型已发布，定时调度已启用'
       : '模型已发布')
   } catch (e) {
-    ElMessage.error(e.message || '发布失败')
+    if (e.message && e.message.includes('过拟合')) {
+      try {
+        await ElMessageBox.confirm(e.message, '过拟合警告', {
+          confirmButtonText: '强制发布',
+          cancelButtonText: '取消',
+          type: 'warning',
+          dangerouslyUseHTMLString: false
+        })
+        publishLoading.value = true
+        const config = {
+          predictInputTable: publishConfig.value.predictInputTable || null,
+          predictInputFilter: publishConfig.value.predictInputFilter || null,
+          predictResultTable: publishConfig.value.predictResultTable || null,
+          scheduleEnabled: publishConfig.value.scheduleEnabled,
+          force: true,
+          ...(publishConfig.value.scheduleEnabled ? {
+            scheduleCron: publishConfig.value.scheduleCron,
+            scheduleMode: publishConfig.value.scheduleMode
+          } : {})
+        }
+        const model = await publishMiningModel(publishModel_ref.value.id, config)
+        mining.updateModelInList(model)
+        if (detailModel.value?.id === publishModel_ref.value.id) detailModel.value = model
+        showPublishDialog.value = false
+        ElMessage.success('模型已强制发布')
+      } catch { /* user cancelled */ }
+    } else {
+      ElMessage.error('发布失败: ' + (e.message || '未知错误'))
+    }
   } finally {
     publishLoading.value = false
   }
@@ -1130,7 +1242,7 @@ function openSchedule(model) {
   // Load tables for this model's data source
   if (model.dataSourceId) {
     fetchDataSourceTables(model.dataSourceId).then(tables => {
-      tableOptions.value = tables || []
+      scheduleTableOptions.value = tables || []
     }).catch(() => {})
   }
 }
@@ -1228,19 +1340,63 @@ function resetForm() {
   form.value = { ...defaultForm(), dataSourceId: ds?.id || null }
 }
 
+function openEditModel(model) {
+  editingModel.value = model
+  let preprocessing = { handleMissing: 'drop', encoding: 'label', scaling: 'none' }
+  try { preprocessing = typeof model.preprocessing === 'string' ? JSON.parse(model.preprocessing) : model.preprocessing || preprocessing } catch {}
+  let featureCols = []
+  try { featureCols = typeof model.featureColumns === 'string' ? JSON.parse(model.featureColumns) : model.featureColumns || [] } catch {}
+
+  form.value = {
+    name: model.name || '',
+    dataSourceId: model.dataSourceId,
+    sourceTable: model.sourceTable || '',
+    modelType: model.modelType || 'classification',
+    algorithm: model.algorithm || 'random_forest',
+    featureColumnsList: featureCols,
+    targetColumn: model.targetColumn || '',
+    description: model.description || '',
+    preprocessing: { ...preprocessing },
+    validationMode: model.validationMode || 'train_test',
+    cvFolds: model.cvFolds || 5,
+    testSize: model.testSize || 0.2,
+    temporalColumn: model.temporalColumn || ''
+  }
+
+  // Load tables and columns for this model's data source
+  if (model.dataSourceId) {
+    loadingTables.value = true
+    fetchDataSourceTables(model.dataSourceId).then(tables => {
+      tableOptions.value = tables || []
+      if (model.sourceTable) {
+        fetchTableColumns(model.dataSourceId, model.sourceTable).then(cols => {
+          columnOptions.value = cols || []
+          const checked = {}
+          cols.forEach(c => { checked[c.name] = featureCols.includes(c.name) })
+          featureChecked.value = checked
+        }).catch(() => { columnOptions.value = [] })
+      }
+    }).catch(() => { tableOptions.value = [] })
+    .finally(() => { loadingTables.value = false })
+  }
+
+  showDetail.value = false
+  showCreateDialog.value = true
+}
+
 watch(showCreateDialog, (v) => {
-  if (v) {
+  if (v && !editingModel.value) {
     const ds = dataSources.value.find(d => d.databaseName !== 'smart_query') || dataSources.value[0]
     form.value = { ...defaultForm(), dataSourceId: ds?.id || null }
     if (ds?.id) onDataSourceChange(ds.id)
-  } else {
-    editingModel.value = null
-    form.value = defaultForm()
-    tableOptions.value = []
-    columnOptions.value = []
-    featureChecked.value = {}
+  } else if (!v) {
+  editingModel.value = null
+  form.value = defaultForm()
+  tableOptions.value = []
+  columnOptions.value = []
+  featureChecked.value = {}
   }
-})
+  })
 
 async function handleSave() {
   if (!form.value.name || !form.value.dataSourceId || !form.value.sourceTable || !form.value.algorithm) {
@@ -1265,7 +1421,7 @@ async function handleSave() {
       algorithm: form.value.algorithm,
       featureColumns: JSON.stringify(form.value.featureColumnsList),
       targetColumn: form.value.targetColumn,
-      hyperparameters: '{}',
+      hyperparameters: form.value.hyperparameters ? JSON.stringify(form.value.hyperparameters) : '{}',
       description: form.value.description,
       preprocessing: JSON.stringify(form.value.preprocessing),
       validationMode: form.value.validationMode || 'train_test',
@@ -1313,7 +1469,7 @@ async function handleSaveAndTrain() {
       algorithm: form.value.algorithm,
       featureColumns: JSON.stringify(form.value.featureColumnsList),
       targetColumn: form.value.targetColumn,
-      hyperparameters: '{}',
+      hyperparameters: form.value.hyperparameters ? JSON.stringify(form.value.hyperparameters) : '{}',
       description: form.value.description,
       preprocessing: JSON.stringify(form.value.preprocessing),
       validationMode: form.value.validationMode || 'train_test',
@@ -1324,12 +1480,33 @@ async function handleSaveAndTrain() {
     const created = await createMiningModel(payload)
     mining.addModel(created)
     showCreateDialog.value = false
+    saving.value = false
     ElMessage.success('已创建，开始训练...')
     trainingId.value = created.id
     const trained = await trainMiningModel(created.id)
     mining.updateModelInList(trained)
-    if (trained.status === 'trained') ElMessage.success('训练完成！')
-    else ElMessage.warning('训练未成功: ' + (trained.status || '未知'))
+
+    if (trained.status === 'training') {
+      ElMessage.info('训练已启动，正在监听状态...')
+      mining.watchModelStatus(created.id)
+      await new Promise((resolve) => {
+        const unwatch = watch(
+          () => mining.models.find(m => m.id === created.id),
+          (m) => {
+            if (m && ['trained', 'failed', 'trained_failed', 'published'].includes(m.status)) {
+              showTrainingResult(m)
+              if (detailModel.value?.id === created.id) detailModel.value = m
+              unwatch()
+              resolve()
+            }
+          },
+          { deep: true }
+        )
+        setTimeout(() => { unwatch(); resolve() }, 300000)
+      })
+    } else {
+      showTrainingResult(trained)
+    }
   } catch (e) {
     ElMessage.error('操作失败: ' + (e.message || ''))
   } finally {
@@ -1381,6 +1558,7 @@ function onActionCmd(cmd, model) {
   else if (cmd === 'batchPredict') openBatchPredict(model)
   else if (cmd === 'predictResults') openPredictResults(model)
   else if (cmd === 'viewPipeline') goToPipeline(model.pipelineId)
+  else if (cmd === 'syncPipeline') handleSyncPipeline(model)
   else if (cmd === 'delete') handleDelete(model.id, model.name)
 }
 
@@ -1395,7 +1573,7 @@ function openBatchPredict(model) {
   // Load tables for this model's data source
   if (model.dataSourceId) {
     fetchDataSourceTables(model.dataSourceId).then(tables => {
-      tableOptions.value = tables || []
+      batchTableOptions.value = tables || []
     }).catch(() => {})
   }
 }
@@ -1531,6 +1709,32 @@ function goToPipeline(pipelineId) {
     pipelineEditorRef.value?.openPipelineById(pipelineId)
   })
 }
+
+function needsSync(model) {
+  if (!model.pipelineId || !model.updatedAt) return false
+  if (!model.lastSyncedAt) return true
+  return new Date(model.updatedAt) > new Date(model.lastSyncedAt)
+}
+
+async function handleSyncPipeline(model) {
+  try {
+    await syncModelPipeline(model.id)
+    ElMessage.success('模型与流程已同步')
+    await loadModels()
+  } catch (e) {
+    ElMessage.error('同步失败: ' + (e.message || '未知错误'))
+  }
+}
+
+async function handleRollback(modelId, executionId) {
+  try {
+    const result = await rollbackModel(modelId, executionId)
+    ElMessage.success(`已回滚到执行记录 #${executionId}`)
+    await loadModels()
+  } catch (e) {
+    ElMessage.error('回滚失败: ' + (e.message || '未知错误'))
+  }
+}
 </script>
 
 <style scoped>
@@ -1628,6 +1832,7 @@ function goToPipeline(pipelineId) {
 .status-draft { background: var(--color-info-light); color: var(--color-info); }
 .status-training { background: var(--color-warning-light); color: var(--color-warning); }
 .status-trained { background: var(--color-success-light); color: var(--color-success); }
+.status-trained_failed { background: var(--color-danger-light); color: var(--color-danger); }
 .status-published { background: var(--primary-light); color: var(--primary); }
 .status-offline { background: var(--border-light); color: var(--text-muted); }
 .status-failed { background: var(--color-danger-light); color: var(--color-danger); }
@@ -1640,6 +1845,7 @@ function goToPipeline(pipelineId) {
 
 /* Detail drawer */
 .detail-section { margin-top: var(--space-lg); }
+.overfitting-warning { padding: 8px 12px; border-radius: 6px; margin-bottom: 8px; font-size: 13px; background: var(--el-color-warning-light-9); color: var(--el-color-warning-dark-2); border: 1px solid var(--el-color-warning-light-7); }
 .detail-section h4 {
   font-size: var(--font-base); font-weight: 600; color: var(--text-primary);
   margin-bottom: var(--space-sm); padding-bottom: var(--space-xs);
