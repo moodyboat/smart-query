@@ -489,8 +489,10 @@ public class PipelineService {
     private void appendFeatureEngineering(StringBuilder sb, PipelineConfig cfg) {
         String fcList = cfg.featureColumns != null ? objectMapper.valueToTree(cfg.featureColumns).toString() : "[]";
         sb.append("feature_cols = ").append(fcList).append("\nif isinstance(feature_cols, str): feature_cols = [c.strip() for c in feature_cols.split(',') if c.strip()]\n");
+        sb.append("_missing = [c for c in feature_cols if c not in df.columns]\nif _missing: raise ValueError(f'特征列不存在于表中: {_missing}. 可用列: {list(df.columns)}')\n");
         sb.append("if not feature_cols:\n    feature_cols = [c for c in df.columns if c != '").append(cfg.targetColumn != null ? cfg.targetColumn : "").append("' and c not in ('id','created_at','updated_at')]\n");
-        sb.append("target_col = '").append(cfg.targetColumn != null ? cfg.targetColumn : "").append("'\n\n");
+        sb.append("target_col = '").append(cfg.targetColumn != null ? cfg.targetColumn : "").append("'\n");
+        sb.append("if target_col and target_col not in df.columns: raise ValueError(f'目标列 \"{target_col}\" 不存在于表中. 可用列: {list(df.columns)}')\n\n");
 
         if (cfg.transforms != null && !cfg.transforms.isEmpty()) {
             sb.append("# Feature transforms\n");
