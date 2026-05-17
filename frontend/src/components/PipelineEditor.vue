@@ -109,6 +109,14 @@
         @copy-script="copyScript"
       />
 
+      <!-- Segmented Script Viewer -->
+      <ScriptTabs
+        v-model:show="showSegmentedDrawer"
+        :segments="segmentedSegments"
+        :full-script="segmentedFullScript"
+        :loading="segmentedLoading"
+      />
+
       <!-- Node Config Panel -->
       <NodeConfigPanel
         :selected-node="selectedNode"
@@ -178,6 +186,7 @@ import {
 import { useAlgorithms } from '../composables/useAlgorithms.js'
 import { usePipelineCanvas } from '../composables/usePipelineCanvas.js'
 import { useMissingValueTrial } from '../composables/useMissingValueTrial.js'
+import { usePipelineStream } from '../composables/usePipelineStream.js'
 import { DEFAULT_MODEL_TYPE, DEFAULT_ALGORITHM } from '../constants'
 
 import PipelineList from './pipeline/PipelineList.vue'
@@ -327,6 +336,7 @@ watch(pipelineNodes, () => {
 // --- Canvas composable ---
 const { isDragging, onPaletteDragStart, onNodeReorderStart, onDragEnd, findClosestInsertIndex, reorderNode } = usePipelineCanvas(pipelineNodes)
 const { trialLoading: trialMissingLoading, trialResult: trialMissingResult, runTrial: runMissingTrial } = useMissingValueTrial()
+const pipelineStream = usePipelineStream()
 
 // --- Node helper functions ---
 function nodeTitle(type) {
@@ -666,30 +676,85 @@ async function runPipeline() {
   lastRunResult.value = null
 
   try {
-    let backendDone = false
-    const executePromise = executeMiningPipeline(editingPipeline.value.id)
-      .then(r => { backendDone = true; return r })
-      .catch(e => { backendDone = true; throw e })
+    // Try SSE streaming first
+    let usedSSE = true
+    try {
+      pipelineStream.reset()
+      pipelineStream.startStream(editingPipeline.value.id)
 
-    const nodeCount = pipelineNodes.value.length
-    const animDelay = Math.max(400, Math.min(1200, 6000 / nodeCount))
-    for (let i = 0; i < nodeCount; i++) {
-      if (backendDone) {
-        for (let j = i; j < nodeCount; j++) doneNodeIds.value.add(pipelineNodes.value[j].id)
-        runningNodeId.value = null
-        break
+      // Wait for SSE events to drive progress
+      const nodeProgress = pipelineStream.nodeProgress
+      const typeOrder = ['data_source', 'preprocessing', 'fill_missing', 'feature_engineering', 'training', 'evaluation', 'output']
+
+      const checkInterval = setInterval(() => {
+        // Update runningNodeId based on latest progress
+        const completedTypes = Object.keys(nodeProgress.value)
+        for (const nt of typeOrder) {
+          const node = pipelineNodes.value.find(n => n.type === nt)
+          if (!node) continue
+          if (!completedTypes.includes(nt)) {
+            if (!doneNodeIds.value.has(node.id)) {
+              runningNodeId.value = node.id
+            }
+            break
+          } else {
+            doneNodeIds.value.add(node.id)
+          }
+        }
+      }, 200)
+
+      // Wait for streaming to complete
+      await new Promise((resolve) => {
+        const unwatch = watch(() => pipelineStream.isStreaming.value, (v) => {
+          if (!v) {
+            clearInterval(checkInterval)
+            unwatch()
+            resolve()
+          }
+        }, { immediate: true })
+      })
+
+      // Mark all nodes as done
+      for (const n of pipelineNodes.value) doneNodeIds.value.add(n.id)
+      runningNodeId.value = null
+
+      if (pipelineStream.streamError.value) {
+        throw new Error(pipelineStream.streamError.value)
       }
-      runningNodeId.value = pipelineNodes.value[i].id
-      await Promise.race([
-        new Promise(r => setTimeout(r, animDelay)),
-        executePromise.then(() => {}).catch(() => {})
-      ])
-      doneNodeIds.value.add(pipelineNodes.value[i].id)
-    }
-    runningNodeId.value = null
 
-    const result = await executePromise
-    lastRunResult.value = result
+      if (pipelineStream.pipelineResult.value) {
+        lastRunResult.value = pipelineStream.pipelineResult.value
+      }
+    } catch (sseError) {
+      // Fallback to synchronous execution
+      usedSSE = false
+      pipelineStream.stopStream()
+
+      let backendDone = false
+      const executePromise = executeMiningPipeline(editingPipeline.value.id)
+        .then(r => { backendDone = true; return r })
+        .catch(e => { backendDone = true; throw e })
+
+      const nodeCount = pipelineNodes.value.length
+      const animDelay = Math.max(400, Math.min(1200, 6000 / nodeCount))
+      for (let i = 0; i < nodeCount; i++) {
+        if (backendDone) {
+          for (let j = i; j < nodeCount; j++) doneNodeIds.value.add(pipelineNodes.value[j].id)
+          runningNodeId.value = null
+          break
+        }
+        runningNodeId.value = pipelineNodes.value[i].id
+        await Promise.race([
+          new Promise(r => setTimeout(r, animDelay)),
+          executePromise.then(() => {}).catch(() => {})
+        ])
+        doneNodeIds.value.add(pipelineNodes.value[i].id)
+      }
+      runningNodeId.value = null
+
+      const result = await executePromise
+      lastRunResult.value = result
+    }
 
     await loadPipelines()
     miningStore.loadModels()
@@ -697,6 +762,7 @@ async function runPipeline() {
     fetchModelByPipeline(editingPipeline.value.id).then(m => { linkedModel.value = m }).catch(() => {})
     fetchPipelineSyncStatus(editingPipeline.value.id).then(s => { syncStatus.value = s }).catch(() => {})
 
+    const result = lastRunResult.value
     const metrics = parseMetrics(result.metrics)
     const primaryKey = result.modelType === 'regression' ? 'test_r2' : 'test_accuracy'
     const primary = metrics[primaryKey] ?? metrics[primaryKey.replace('test_', '')]
@@ -710,6 +776,7 @@ async function runPipeline() {
   } finally {
     running.value = false
     runningNodeId.value = null
+    pipelineStream.stopStream()
   }
 }
 

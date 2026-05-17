@@ -230,6 +230,165 @@ public class PipelineService {
         return result;
     }
 
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> executePipelineStreamed(Long pipelineId, java.util.function.BiConsumer<String, Map<String, Object>> eventConsumer) {
+        MiningPipeline pipeline = miningPipelineMapper.selectById(pipelineId);
+        if (pipeline == null || Integer.valueOf(1).equals(pipeline.getDeleted())) {
+            throw new IllegalArgumentException("流水线不存在: " + pipelineId);
+        }
+        List<Map<String, Object>> nodes;
+        try {
+            nodes = objectMapper.readValue(pipeline.getNodes(), List.class);
+        } catch (Exception e) {
+            throw new RuntimeException("流水线节点解析失败: " + e.getMessage());
+        }
+        if (nodes == null || nodes.isEmpty()) {
+            throw new IllegalStateException("流水线没有节点");
+        }
+
+        List<String> typeOrder = List.of("data_source", "preprocessing", "fill_missing", "feature_engineering", "training", "evaluation", "output");
+        nodes.sort((a, b) -> {
+            int ia = typeOrder.indexOf(a.get("type"));
+            int ib = typeOrder.indexOf(b.get("type"));
+            return Integer.compare(ia < 0 ? 99 : ia, ib < 0 ? 99 : ib);
+        });
+
+        PipelineConfig cfg = extractConfig(nodes);
+        validateConfig(cfg);
+
+        Map<String, Object> validationResult = validatePipelineStructure(nodes, pipeline.getDataSourceId());
+        if (!(boolean) validationResult.get("valid")) {
+            List<String> errs = (List<String>) validationResult.get("errors");
+            throw new IllegalStateException("Pipeline验证失败: " + String.join("; ", errs));
+        }
+
+        DataSource ds = dataSourceMapper.selectById(pipeline.getDataSourceId());
+        if (ds == null) throw new IllegalStateException("数据源不存在");
+
+        com.smartquery.common.IdentifierValidator.validateTableName(cfg.sourceTable);
+        try {
+            JdbcTemplate jdbc = dataSourceManager.getJdbcTemplate(ds.getId());
+            jdbc.queryForObject("SELECT 1 FROM `" + cfg.sourceTable + "` LIMIT 1", Integer.class);
+        } catch (Exception e) {
+            throw new IllegalStateException("源表 '" + cfg.sourceTable + "' 不存在或无法访问: " + e.getMessage());
+        }
+
+        String dbUrl = buildSqlalchemyUrl(ds);
+        String algoBlock = buildAlgorithmBlock(cfg.algorithm);
+        String modelFilename = "pipeline_" + pipelineId + "_v" + cfg.algorithm + ".pkl";
+        String modelPath = modelWorkspace + "/" + modelFilename;
+        String script = buildPipelineScript(dbUrl, cfg, algoBlock, modelPath);
+
+        int updated = miningPipelineMapper.update(null,
+            new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<MiningPipeline>()
+                .eq(MiningPipeline::getId, pipelineId)
+                .ne(MiningPipeline::getStatus, com.smartquery.common.ModelStatus.EXEC_RUNNING)
+                .set(MiningPipeline::getStatus, com.smartquery.common.ModelStatus.EXEC_RUNNING)
+                .set(MiningPipeline::getExecutionLog, null));
+        if (updated == 0) {
+            throw new IllegalStateException("流水线正在执行中，请等待完成");
+        }
+
+        long pipelineStartMs = System.currentTimeMillis();
+        try {
+            PythonResult pr = DiagnosticsTimer.timedSupply("pipeline.execute", () -> pythonExecutor.execute(script, pipeline.getDataSourceId(), executionTimeoutMs));
+
+            // Parse NODE_PROGRESS markers from stdout and send them
+            String stdout = pr.stdout();
+            for (String line : stdout.split("\n")) {
+                if (line.contains("[NODE_PROGRESS]")) {
+                    int idx = line.indexOf("[NODE_PROGRESS]");
+                    String jsonPart = line.substring(idx + "[NODE_PROGRESS]".length()).trim();
+                    try {
+                        Map<String, Object> progressData = objectMapper.readValue(jsonPart, Map.class);
+                        eventConsumer.accept("node_progress", progressData);
+                    } catch (Exception ignored) {}
+                }
+            }
+
+            if (pr.exitCode() != 0) {
+                String err = pr.stderr().isBlank() ? pr.stdout() : pr.stderr();
+                Map<String, Object> errorData = new LinkedHashMap<>();
+                errorData.put("error", truncateLog(err, errorTruncation));
+                eventConsumer.accept("pipeline_error", errorData);
+
+                miningPipelineMapper.update(null,
+                    new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<MiningPipeline>()
+                        .eq(MiningPipeline::getId, pipelineId)
+                        .set(MiningPipeline::getStatus, com.smartquery.common.ModelStatus.FAILED)
+                        .set(MiningPipeline::getExecutionLog, truncateLog(err, logTruncation))
+                        .set(MiningPipeline::getLastExecutedAt, LocalDateTime.now()));
+
+                long failDur = System.currentTimeMillis() - pipelineStartMs;
+                for (Map<String, Object> node : nodes) {
+                    eventLogger.logEvent(pipeline.getConversationId(), null, "pipeline_node_end", Map.of(
+                        "pipelineId", pipelineId,
+                        "nodeId", String.valueOf(node.getOrDefault("id", "unknown")),
+                        "nodeType", String.valueOf(node.getOrDefault("type", "unknown")),
+                        "status", com.smartquery.common.ModelStatus.FAILED, "durationMs", failDur
+                    ));
+                }
+                throw new RuntimeException("Pipeline执行失败: " + truncateLog(err, errorTruncation));
+            }
+
+            Map<String, Object> result = parseResultMarker(pr.stdout(), "[PIPELINE_RESULT]");
+            result.put("modelPath", modelPath);
+            result.put("algorithm", cfg.algorithm);
+            result.put("sourceTable", cfg.sourceTable);
+
+            MiningModel model = createOrUpdatePipelineModel(pipeline, result, cfg, modelPath);
+
+            ModelExecution execution = new ModelExecution();
+            execution.setModelId(model.getId());
+            execution.setTriggerType("manual");
+            execution.setStatus(ModelStatus.EXEC_SUCCESS);
+            execution.setHyperparameters(toJson(cfg.hyperparams));
+            execution.setMetrics(toJson(result.get("metrics")));
+            execution.setExecutionLog(truncateLog(pr.stdout(), executionLogTruncation));
+            execution.setExecutionTimeMs((int)(System.currentTimeMillis() - pipelineStartMs));
+            modelExecutionMapper.insert(execution);
+
+            // Update pipeline status
+            miningPipelineMapper.update(null,
+                new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<MiningPipeline>()
+                    .eq(MiningPipeline::getId, pipelineId)
+                    .set(MiningPipeline::getStatus, ModelStatus.TRAINED)
+                    .set(MiningPipeline::getExecutionLog, truncateLog(pr.stdout(), logTruncation))
+                    .set(MiningPipeline::getLastSyncedAt, LocalDateTime.now())
+                    .set(MiningPipeline::getLastExecutedAt, LocalDateTime.now()));
+
+            long totalDur = System.currentTimeMillis() - pipelineStartMs;
+            int nodeDur = nodes.isEmpty() ? 0 : (int)(totalDur / nodes.size());
+            for (Map<String, Object> node : nodes) {
+                eventLogger.logEvent(pipeline.getConversationId(), null, "pipeline_node_end", Map.of(
+                    "pipelineId", pipelineId,
+                    "nodeId", String.valueOf(node.getOrDefault("id", "unknown")),
+                    "nodeType", String.valueOf(node.getOrDefault("type", "unknown")),
+                    "status", "success", "durationMs", nodeDur
+                ));
+            }
+
+            result.put("modelId", model.getId());
+            result.put("modelName", model.getName());
+            eventConsumer.accept("pipeline_complete", result);
+
+            return result;
+        } catch (Exception e) {
+            if (!(e instanceof RuntimeException && e.getMessage() != null && e.getMessage().startsWith("Pipeline执行失败"))) {
+                miningPipelineMapper.update(null,
+                    new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<MiningPipeline>()
+                        .eq(MiningPipeline::getId, pipelineId)
+                        .set(MiningPipeline::getStatus, com.smartquery.common.ModelStatus.FAILED)
+                        .set(MiningPipeline::getExecutionLog, truncateLog(e.getMessage(), logTruncation))
+                        .set(MiningPipeline::getLastExecutedAt, LocalDateTime.now()));
+                Map<String, Object> errorData = new LinkedHashMap<>();
+                errorData.put("error", truncateLog(e.getMessage(), errorTruncation));
+                eventConsumer.accept("pipeline_error", errorData);
+            }
+            throw e instanceof RuntimeException re ? re : new RuntimeException(e);
+        }
+    }
+
     // ======================== Validation ========================
 
     @SuppressWarnings("unchecked")

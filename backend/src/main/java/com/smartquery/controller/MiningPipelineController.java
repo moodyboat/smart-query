@@ -11,12 +11,16 @@ import com.smartquery.service.PipelineService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 @Slf4j
 @RestController
@@ -29,6 +33,11 @@ public class MiningPipelineController {
     private final PipelineService pipelineService;
     private final MiningService miningService;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+    private final ExecutorService sseExecutor = Executors.newFixedThreadPool(5, r -> {
+        Thread t = new Thread(r, "pipeline-sse");
+        t.setDaemon(true);
+        return t;
+    });
 
     @GetMapping
     public Result<List<MiningPipeline>> list(
@@ -120,6 +129,33 @@ public class MiningPipelineController {
     @PostMapping("/{id}/execute")
     public Result<Map<String, Object>> execute(@PathVariable Long id) {
         return Result.ok(pipelineService.executePipeline(id));
+    }
+
+    @GetMapping(value = "/{id}/execute-stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter executeStream(@PathVariable Long id) {
+        SseEmitter emitter = new SseEmitter(600000L);
+        sseExecutor.submit(() -> {
+            try {
+                Map<String, Object> result = pipelineService.executePipelineStreamed(id, (type, data) -> {
+                    try {
+                        Map<String, Object> event = new LinkedHashMap<>();
+                        event.put("type", type);
+                        event.putAll(data);
+                        emitter.send(SseEmitter.event().data(objectMapper.writeValueAsString(event)));
+                    } catch (Exception ignored) {}
+                });
+            } catch (Exception e) {
+                try {
+                    Map<String, Object> errEvent = new LinkedHashMap<>();
+                    errEvent.put("type", "pipeline_error");
+                    errEvent.put("error", e.getMessage());
+                    emitter.send(SseEmitter.event().data(objectMapper.writeValueAsString(errEvent)));
+                } catch (Exception ignored) {}
+            } finally {
+                emitter.complete();
+            }
+        });
+        return emitter;
     }
 
     @PostMapping("/{id}/validate")
