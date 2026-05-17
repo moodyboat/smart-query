@@ -2,6 +2,8 @@
 
 智能数据分析平台，支持自然语言查询、数据挖掘建模、可视化、报告生成。
 
+**GitHub 仓库**: https://github.com/moodyboat/smart-query
+
 ## 技术栈
 
 - **Backend**: Spring Boot 3.4.1 + Java 17 + MyBatis-Plus + Redis + Flyway
