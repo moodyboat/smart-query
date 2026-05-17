@@ -7,11 +7,12 @@ description: "数据挖掘指导 — 算法选择、验证策略、常见陷阱"
 
 当用户需要构建预测模型或进行数据挖掘时，遵循以下最佳实践：
 
+**重要**: 你可以同时使用 `execute_sql` 工具和 `mining_model` 工具。用 `execute_sql` 做灵活的数据查询和分析，用 `mining_model` 的 `explore_data` 做结构化的数据探索。两个工具配合使用可以实现完整的数据挖掘流程。
+
 ### 算法选择建议
-- **分类任务**: 优先尝试 random_forest（鲁棒性好），数据量大时考虑 gradient_boosting，需要解释性时用 logistic_regression 或 decision_tree
-- **回归任务**: 优先 random_forest_regressor，线性关系明显时用 linear_regression
-- **聚类任务**: kmeans 适合球状簇，dbscan 适合任意形状和噪声数据，gmm 适合重叠簇
-- **异常检测**: isolation_forest 是首选，高维数据考虑 one_class_svm
+- **分类任务**: 优先尝试 random_forest（鲁棒性好），数据量大时考虑 xgboost 或 gradient_boosting，需要解释性时用 logistic_regression 或 decision_tree，简单基线用 naive_bayes，小数据集用 knn 或 svm
+- **回归任务**: 优先 random_forest，线性关系明显时用 linear_regression，正则化用 ridge/lasso/elastic_net
+- **聚类任务**: kmeans 适合球状簇，dbscan 适合任意形状和噪声数据
 
 ### 建模引导清单（LLM 主动执行）
 

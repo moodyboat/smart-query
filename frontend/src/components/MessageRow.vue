@@ -346,7 +346,7 @@ import DOMPurify from 'dompurify'
 import EChartsRenderer from './EChartsRenderer.vue'
 import DashboardRenderer from './DashboardRenderer.vue'
 import DataTable from './DataTable.vue'
-import { rerenderChart } from '../api'
+import { rerenderChart, METRIC_NAMES } from '../api'
 
 const props = defineProps({
   msg: { type: Object, required: true },
@@ -535,8 +535,7 @@ function formatMetricVal(key, val) {
 }
 
 function formatMetricName(key) {
-  const names = { accuracy: '准确率', precision: '精确率', recall: '召回率', f1: 'F1', mse: 'MSE', rmse: 'RMSE', r2: 'R²', inertia: '惯性', n_clusters: '聚类数' }
-  return names[key] || key
+  return METRIC_NAMES[key] || key
 }
 
 function metricQualityClass(val, key) {

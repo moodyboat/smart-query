@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
@@ -36,6 +37,9 @@ public class ReActEngine {
     private final List<LifecycleHook> lifecycleHooks;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
+    @org.springframework.beans.factory.annotation.Qualifier("llmExecutor")
+    private final Executor llmExecutor;
+
     @Value("${llm.timeout-seconds:120}")
     private int llmTimeoutSeconds;
 
@@ -58,7 +62,8 @@ public class ReActEngine {
             QueryContextAssembler contextAssembler,
             ContextCompactor contextCompactor,
             com.smartquery.logging.ConversationStatsService statsService,
-            List<LifecycleHook> lifecycleHooks
+            List<LifecycleHook> lifecycleHooks,
+            @org.springframework.beans.factory.annotation.Qualifier("llmExecutor") Executor llmExecutor
     ) {
         this.llmService = llmService;
         this.toolRegistry = toolRegistry;
@@ -67,6 +72,7 @@ public class ReActEngine {
         this.contextCompactor = contextCompactor;
         this.statsService = statsService;
         this.lifecycleHooks = lifecycleHooks;
+        this.llmExecutor = llmExecutor;
     }
 
 
@@ -195,45 +201,51 @@ public class ReActEngine {
             final List<Map<String, Object>> currentToolDefs = toolDefs;
             final Consumer<String> tokenConsumer = token -> eventConsumer.accept(new ReActEvent.ThinkingDelta(token));
 
-            long llmStartMs = System.currentTimeMillis();
+            final long[] llmTiming = {0};
             List<LlmChunk> chunks;
             try {
-                chunks = CompletableFuture.supplyAsync(() ->
-                    llmService.chatWithToolsStreaming(model, currentMessages, currentToolDefs, tokenConsumer)
+                chunks = CompletableFuture.supplyAsync(() -> {
+                    llmTiming[0] = System.currentTimeMillis();
+                    return llmService.chatWithToolsStreaming(model, currentMessages, currentToolDefs, tokenConsumer);
+                }, llmExecutor
                 ).get(llmTimeoutSeconds, TimeUnit.SECONDS);
             } catch (java.util.concurrent.TimeoutException e) {
                 String msg = "LLM API call timed out after " + llmTimeoutSeconds + " seconds";
                 log.error("[REACT] {}", msg);
                 eventConsumer.accept(new ReActEvent.Error("LLM 调用超时", msg));
+                eventConsumer.accept(new ReActEvent.Done(state.turnCount(), state.totalTokens(), state.totalCost()));
                 break;
             } catch (java.util.concurrent.ExecutionException e) {
                 Throwable cause = e.getCause() != null ? e.getCause() : e;
                 log.error("[REACT] LLM call failed: {}", cause.getMessage());
                 eventConsumer.accept(new ReActEvent.Error("LLM 调用失败", cause.getMessage()));
+                eventConsumer.accept(new ReActEvent.Done(state.turnCount(), state.totalTokens(), state.totalCost()));
                 break;
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 log.error("[REACT] LLM call interrupted");
                 eventConsumer.accept(new ReActEvent.Error("LLM 调用被中断", e.getMessage()));
+                eventConsumer.accept(new ReActEvent.Done(state.turnCount(), state.totalTokens(), state.totalCost()));
                 break;
             } catch (Exception e) {
                 log.error("[REACT] LLM call failed: {}", e.getMessage());
                 eventConsumer.accept(new ReActEvent.Error("LLM 调用失败", e.getMessage()));
+                eventConsumer.accept(new ReActEvent.Done(state.turnCount(), state.totalTokens(), state.totalCost()));
                 break;
             }
-            long llmDurationMs = System.currentTimeMillis() - llmStartMs;
+            long llmDurationMs = System.currentTimeMillis() - llmTiming[0];
 
             // LLM 调用遥测
             statsService.recordLlmCall(model, llmDurationMs, state.turnCount());
 
             // 解析响应
-            String assistantText = "";
+            StringBuilder assistantText = new StringBuilder();
             List<ToolOrchestrator.ToolCall> toolCalls = new ArrayList<>();
             int inputTokens = 0, outputTokens = 0;
 
             for (LlmChunk chunk : chunks) {
                 if (chunk.isText() && chunk.text() != null) {
-                    assistantText += chunk.text();
+                    assistantText.append(chunk.text());
                 }
                 if (chunk.isToolCall()) {
                     try {
@@ -243,6 +255,8 @@ public class ReActEngine {
                             chunk.toolCallId(), chunk.toolName(), input));
                     } catch (Exception e) {
                         log.warn("[REACT] failed to parse tool input: {}", e.getMessage());
+                        toolCalls.add(new ToolOrchestrator.ToolCall(
+                            chunk.toolCallId(), chunk.toolName(), Map.of()));
                     }
                 }
                 if (chunk.isDone()) {
@@ -255,7 +269,7 @@ public class ReActEngine {
             List<Map<String, Object>> newMessages = new ArrayList<>(state.messages());
             Map<String, Object> assistantMsg = new LinkedHashMap<>();
             assistantMsg.put("role", "assistant");
-            assistantMsg.put("content", assistantText.isEmpty() ? null : assistantText);
+            assistantMsg.put("content", assistantText.isEmpty() ? null : assistantText.toString());
             if (!toolCalls.isEmpty()) {
                 List<Map<String, Object>> serializedToolCalls = new ArrayList<>();
                 for (ToolOrchestrator.ToolCall tc : toolCalls) {
@@ -272,13 +286,13 @@ public class ReActEngine {
             }
             newMessages.add(assistantMsg);
 
-            state = state.withMessages(newMessages)
+            state = state.withMessages(new ArrayList<>(newMessages))
                 .withTurnIncremented()
                 .withTokenUsage(inputTokens, outputTokens, 0.0);
 
             // 实时发送 thinking 事件
             if (!assistantText.isEmpty()) {
-                eventConsumer.accept(new ReActEvent.Thinking(assistantText));
+                eventConsumer.accept(new ReActEvent.Thinking(assistantText.toString()));
             }
 
             // 无 tool_use → 终止
@@ -328,6 +342,20 @@ public class ReActEngine {
 
                 state = state.addStep(new ReActState.StepRecord(
                     state.turnCount(), "tool_call", tc.toolName(), tr.durationMs(), tr.success()));
+            }
+
+            // Fill missing tool results to avoid tool_call/tool_result mismatch
+            for (int i = toolResults.size(); i < toolCalls.size(); i++) {
+                ToolOrchestrator.ToolCall tc = toolCalls.get(i);
+                Map<String, Object> toolResultMsg = new LinkedHashMap<>();
+                toolResultMsg.put("role", "tool");
+                toolResultMsg.put("tool_call_id", tc.toolCallId());
+                toolResultMsg.put("content", "Error: tool execution result missing");
+                newMessages.add(toolResultMsg);
+                emitToolEvent(eventConsumer, tc.toolName(),
+                    ToolResult.error(tc.toolName(), ToolError.nonRecoverable(
+                        ToolError.ErrorCode.TOOL_ERROR, "result missing"), 0));
+                log.warn("[REACT] filled missing tool_result for tool_call_id={}", tc.toolCallId());
             }
 
             state = state.withMessages(newMessages);

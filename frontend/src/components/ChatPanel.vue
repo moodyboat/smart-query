@@ -113,6 +113,7 @@ import MessageRow from './MessageRow.vue'
 import TracePanel from './TracePanel.vue'
 import AdminStatsPanel from './AdminStatsPanel.vue'
 import { buildChatUrl, fetchReport } from '../api'
+import { SSE_SAFETY_TIMEOUT_MS } from '../constants'
 import { useMiningStore } from '../stores/mining'
 import { useUIStore } from '../stores/ui'
 
@@ -232,7 +233,7 @@ async function sendMessage() {
         connectionState.value = 'error'
         controller.abort()
       }
-    }, 300000)
+    }, SSE_SAFETY_TIMEOUT_MS)
   }
   resetSafety()
 

@@ -4,6 +4,7 @@ import com.smartquery.entity.DataDict;
 import com.smartquery.mapper.DataDictMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
@@ -17,8 +18,13 @@ public class SchemaContextBuilder {
 
     private final DataDictMapper dataDictMapper;
 
-    private static final int CHARS_PER_TOKEN = 4;
-    private static final long CACHE_TTL_MS = 5 * 60 * 1000;
+    @Value("${schema-context.sample-values-truncation:200}")
+    private int sampleValuesTruncation;
+
+    @Value("${schema-context.cache-ttl-ms:300000}")
+    private long cacheTtlMs;
+
+    private static final int CHARS_PER_TOKEN = com.smartquery.common.TokenConstants.CHARS_PER_TOKEN;
 
     private record CachedEntry(String content, long cachedAt) {}
 
@@ -43,7 +49,7 @@ public class SchemaContextBuilder {
 
         String cacheKey = dataSourceId + ":" + maxTokens;
         CachedEntry cached = schemaCache.get(cacheKey);
-        if (cached != null && System.currentTimeMillis() - cached.cachedAt < CACHE_TTL_MS) {
+        if (cached != null && System.currentTimeMillis() - cached.cachedAt < cacheTtlMs) {
             log.debug("[SCHEMA-CTX] cache hit for dataSourceId={}", dataSourceId);
             return cached.content;
         }
@@ -89,13 +95,13 @@ public class SchemaContextBuilder {
 
     public void evictStaleEntries() {
         long now = System.currentTimeMillis();
-        schemaCache.entrySet().removeIf(e -> now - e.getValue().cachedAt > CACHE_TTL_MS);
+        schemaCache.entrySet().removeIf(e -> now - e.getValue().cachedAt > cacheTtlMs);
     }
 
     public Map<String, Object> getCacheStats() {
         return Map.of(
             "size", schemaCache.size(),
-            "ttlMs", CACHE_TTL_MS
+            "ttlMs", cacheTtlMs
         );
     }
 
@@ -127,8 +133,8 @@ public class SchemaContextBuilder {
             // 添加采样值（如果有）
             String sampleValues = columns.get(0).getSampleValues();
             if (sampleValues != null && !sampleValues.isEmpty()) {
-                sb.append("\n样例数据: ").append(sampleValues.substring(0, Math.min(sampleValues.length(), 200)));
-                if (sampleValues.length() > 200) sb.append("...");
+                sb.append("\n样例数据: ").append(sampleValues.substring(0, Math.min(sampleValues.length(), sampleValuesTruncation)));
+                if (sampleValues.length() > sampleValuesTruncation) sb.append("...");
                 sb.append("\n");
             }
 

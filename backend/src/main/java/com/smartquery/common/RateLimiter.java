@@ -1,6 +1,7 @@
 package com.smartquery.common;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
@@ -11,13 +12,22 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Component
 public class RateLimiter {
 
+    @Value("${rate-limiter.cleanup-interval-ms:120000}")
+    private long cleanupIntervalMs;
+
+    @Value("${rate-limiter.bucket-expiry-ms:120000}")
+    private long bucketExpiryMs;
+
+    @Value("${rate-limiter.window-ms:60000}")
+    private long windowMs;
+
     private final Map<String, Bucket> buckets = new ConcurrentHashMap<>();
 
-    @org.springframework.scheduling.annotation.Scheduled(fixedRate = 120_000)
+    @org.springframework.scheduling.annotation.Scheduled(fixedRateString = "${rate-limiter.cleanup-interval-ms:120000}")
     public void cleanup() {
         long now = System.currentTimeMillis();
         int before = buckets.size();
-        buckets.entrySet().removeIf(e -> now - e.getValue().windowStart > 120_000);
+        buckets.entrySet().removeIf(e -> now - e.getValue().windowStart > bucketExpiryMs);
         int removed = before - buckets.size();
         if (removed > 0) {
             log.debug("[RATE] Cleaned up {} expired rate limiter buckets", removed);
@@ -36,6 +46,7 @@ public class RateLimiter {
         if (userId != null && !userId.isBlank()) {
             userResult = tryAcquireWithInfo("user:" + userId, userLimit);
             if (!userResult.allowed()) {
+                rollbackAcquire("global");
                 log.warn("[RATE] User {} limit reached: remaining={}/{}", userId, userResult.remaining(), userLimit);
                 return userResult;
             }
@@ -44,6 +55,8 @@ public class RateLimiter {
         if (operation != null && !operation.isBlank()) {
             opResult = tryAcquireWithInfo("op:" + userId + ":" + operation, operationLimit);
             if (!opResult.allowed()) {
+                rollbackAcquire("global");
+                if (userResult != null) rollbackAcquire("user:" + userId);
                 log.warn("[RATE] Operation {} for user {}: remaining={}/{}", operation, userId, opResult.remaining(), operationLimit);
                 return opResult;
             }
@@ -55,29 +68,36 @@ public class RateLimiter {
     }
 
     public AcquireResult tryAcquireWithInfo(String key, int maxPerMinute) {
-        Bucket bucket = buckets.computeIfAbsent(key, k -> new Bucket(maxPerMinute));
+        Bucket bucket = buckets.computeIfAbsent(key, k -> new Bucket(maxPerMinute, windowMs));
         return bucket.tryAcquireWithInfo();
     }
 
     public boolean tryAcquire(String key, int maxPerMinute) {
-        Bucket bucket = buckets.computeIfAbsent(key, k -> new Bucket(maxPerMinute));
+        Bucket bucket = buckets.computeIfAbsent(key, k -> new Bucket(maxPerMinute, windowMs));
         return bucket.tryAcquire();
+    }
+
+    private void rollbackAcquire(String key) {
+        Bucket bucket = buckets.get(key);
+        if (bucket != null) bucket.rollback();
     }
 
     private static class Bucket {
         final int maxPerMinute;
+        final long windowMs;
         volatile long windowStart;
         final AtomicInteger count;
 
-        Bucket(int maxPerMinute) {
+        Bucket(int maxPerMinute, long windowMs) {
             this.maxPerMinute = maxPerMinute;
+            this.windowMs = windowMs;
             this.windowStart = System.currentTimeMillis();
             this.count = new AtomicInteger(0);
         }
 
         synchronized boolean tryAcquire() {
             long now = System.currentTimeMillis();
-            if (now - windowStart > 60_000) {
+            if (now - windowStart > windowMs) {
                 windowStart = now;
                 count.set(0);
             }
@@ -86,13 +106,17 @@ public class RateLimiter {
 
         synchronized AcquireResult tryAcquireWithInfo() {
             long now = System.currentTimeMillis();
-            if (now - windowStart > 60_000) {
+            if (now - windowStart > windowMs) {
                 windowStart = now;
                 count.set(0);
             }
             int current = count.incrementAndGet();
             boolean allowed = current <= maxPerMinute;
             return new AcquireResult(allowed, Math.max(0, maxPerMinute - current), maxPerMinute);
+        }
+
+        synchronized void rollback() {
+            if (count.get() > 0) count.decrementAndGet();
         }
     }
 }

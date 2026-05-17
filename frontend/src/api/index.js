@@ -1,9 +1,25 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
+import { DEFAULT_TIMEOUT_MS, PREDICTION_RECORD_LIMIT, PREVIEW_ROW_LIMIT } from '../constants.js'
+
+export const METRIC_NAMES = {
+  accuracy: '准确率', precision: '精确率', recall: '召回率', f1: 'F1',
+  mse: 'MSE', rmse: 'RMSE', r2: 'R²', mae: 'MAE',
+  inertia: '惯性', n_clusters: '聚类数', silhouette: '轮廓系数', silhouette_score: '轮廓系数',
+  cluster_sizes: '聚类大小',
+  train_accuracy: '训练准确率', test_accuracy: '测试准确率',
+  train_f1: '训练F1', test_f1: '测试F1',
+  train_precision: '训练精确率', test_precision: '测试精确率',
+  train_recall: '训练召回率', test_recall: '测试召回率',
+  train_r2: '训练R²', test_r2: '测试R²',
+  overfitting_gap: '过拟合差距', cv_mean: '交叉验证均值', cv_std: '交叉验证标准差'
+}
+
+export const API_BASE = '/api/v1'
 
 const api = axios.create({
-  baseURL: '/api/v1',
-  timeout: 180000
+  baseURL: API_BASE,
+  timeout: DEFAULT_TIMEOUT_MS
 })
 
 api.interceptors.response.use(
@@ -100,6 +116,11 @@ export async function fetchTableColumns(dataSourceId, tableName) {
   return data.data
 }
 
+export async function fetchTablePreview(dataSourceId, tableName, limit = PREVIEW_ROW_LIMIT) {
+  const { data } = await api.get(`/datasource/${dataSourceId}/tables/${encodeURIComponent(tableName)}/preview?limit=${limit}`)
+  return data.data
+}
+
 export async function rerenderChart(chartId, filterValues) {
   const { data } = await api.post(`/chart/${chartId}/rerender`, filterValues)
   return data.data
@@ -111,7 +132,7 @@ export async function fetchDashboardWithCharts(dashboardId) {
 }
 
 export function buildChatUrl(conversationId, dataSourceId) {
-  return `/api/v1/chat?conversationId=${conversationId}&dataSourceId=${dataSourceId}`
+  return `${API_BASE}/chat?conversationId=${conversationId}&dataSourceId=${dataSourceId}`
 }
 
 // Mining Model APIs
@@ -189,8 +210,13 @@ export async function predictMiningModel(id, input, saveTable) {
   return data.data
 }
 
-export async function batchPredictMiningModel(id) {
-  const { data } = await api.post(`/mining/model/${id}/batch-predict`)
+export async function batchPredictMiningModel(id, overrides = {}) {
+  const { data } = await api.post(`/mining/model/${id}/batch-predict`, overrides)
+  return data.data
+}
+
+export async function updateModelPredictConfig(id, config) {
+  const { data } = await api.put(`/mining/model/${id}/predict-config`, config)
   return data.data
 }
 
@@ -199,12 +225,12 @@ export async function validateMiningModel(id) {
   return data.data
 }
 
-export async function fetchModelPredictions(id, limit = 100) {
+export async function fetchModelPredictions(id, limit = PREDICTION_RECORD_LIMIT) {
   const { data } = await api.get(`/mining/model/${id}/predictions?limit=${limit}`)
   return data.data
 }
 
-export async function previewResultTable(modelId, tableName, limit = 10) {
+export async function previewResultTable(modelId, tableName, limit = PREVIEW_ROW_LIMIT) {
   const { data } = await api.get(`/mining/model/${modelId}/preview-result-table?tableName=${encodeURIComponent(tableName)}&limit=${limit}`)
   return data.data
 }
@@ -247,6 +273,11 @@ export async function validateMiningPipeline(id) {
 
 export async function previewStepPipeline(id, nodeId) {
   const { data } = await api.post(`/mining/pipeline/${id}/preview-step`, { nodeId })
+  return data.data
+}
+
+export async function getStepScript(id, nodeId) {
+  const { data } = await api.get(`/mining/pipeline/${id}/step-script`, { params: { nodeId } })
   return data.data
 }
 

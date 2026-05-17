@@ -29,6 +29,12 @@ public class MiningPredictionService {
     @org.springframework.beans.factory.annotation.Value("${smart-query.mining.predict-timeout-ms:120000}")
     private int predictTimeoutMs;
 
+    @org.springframework.beans.factory.annotation.Value("${mining.batch-predict-timeout-ms:300000}")
+    private int batchPredictTimeoutMs;
+
+    @org.springframework.beans.factory.annotation.Value("${mining.predict-error-truncation:2000}")
+    private int predictErrorTruncation;
+
     private final MiningModelMapper miningModelMapper;
     private final DataSourceMapper dataSourceMapper;
     private final PredictionResultMapper predictionResultMapper;
@@ -81,6 +87,9 @@ public class MiningPredictionService {
             ? model.getPredictInputTable() : model.getSourceTable();
         String resultTable = overrideResultTable != null && !overrideResultTable.isBlank()
             ? overrideResultTable : model.getPredictResultTable();
+        if (resultTable == null || resultTable.isBlank()) {
+            resultTable = model.getSourceTable() + "_predict";
+        }
         if (inputTable == null || inputTable.isBlank()) {
             throw new IllegalStateException("未配置预测输入表且模型无源表，请在模型设置中指定");
         }
@@ -99,12 +108,12 @@ public class MiningPredictionService {
         logPredictionEvent(model, "mining_prediction_start", Map.of("inputTable", inputTable, "mode", "batch", "batchId", batchId));
 
         String pythonCode = buildBatchPredictionScript(model, inputTable, resultTable);
-        PythonResult result = pythonExecutor.execute(pythonCode, model.getDataSourceId(), 300000);
+        PythonResult result = pythonExecutor.execute(pythonCode, model.getDataSourceId(), batchPredictTimeoutMs);
 
         if (result.exitCode() != 0) {
             String err = result.stderr().isBlank() ? result.stdout() : result.stderr();
             logPredictionEvent(model, "mining_prediction_complete", Map.of("status", "failed", "batchId", batchId, "error", truncateLog(err, 300)));
-            throw new RuntimeException("批量预测失败: " + truncateLog(err, 500));
+            throw new RuntimeException("批量预测失败: " + truncateLog(err, predictErrorTruncation));
         }
 
         Map<String, Object> parsed = parseResultMarker(result.stdout(), "[BATCH_PREDICT_RESULT]");
@@ -126,6 +135,63 @@ public class MiningPredictionService {
             "status", "success", "batchId", batchId, "savedRows", savedRows,
             "resultTable", resultTable, "durationMs", result.executionTimeMs()
         ));
+        return parsed;
+    }
+
+    public Map<String, Object> batchPredictWithConfig(Long modelId, String overrideInputTable, String overrideResultTable, String overrideFilter) {
+        MiningModel model = miningModelMapper.selectById(modelId);
+        validateForPrediction(model);
+
+        String inputTable = (overrideInputTable != null && !overrideInputTable.isBlank())
+            ? overrideInputTable
+            : (model.getPredictInputTable() != null && !model.getPredictInputTable().isBlank()
+                ? model.getPredictInputTable() : model.getSourceTable());
+        String resultTable = (overrideResultTable != null && !overrideResultTable.isBlank())
+            ? overrideResultTable : model.getPredictResultTable();
+        if (resultTable == null || resultTable.isBlank()) {
+            resultTable = model.getSourceTable() + "_predict";
+        }
+        String filter = (overrideFilter != null && !overrideFilter.isBlank())
+            ? overrideFilter : model.getPredictInputFilter();
+
+        if (inputTable == null || inputTable.isBlank()) {
+            throw new IllegalStateException("未配置预测输入表且模型无源表");
+        }
+        com.smartquery.common.IdentifierValidator.validateTableName(inputTable);
+        com.smartquery.common.IdentifierValidator.validateTableName(resultTable);
+        if (filter != null && !filter.isBlank()) {
+            com.smartquery.common.IdentifierValidator.validateFilter(filter);
+        }
+
+        String batchId = "batch_" + System.currentTimeMillis();
+        log.info("[PREDICT] Batch predict with overrides: model='{}', input='{}', result='{}', batch={}",
+            model.getName(), inputTable, resultTable, batchId);
+
+        logPredictionEvent(model, "mining_prediction_start", Map.of("inputTable", inputTable, "mode", "batch_override", "batchId", batchId));
+
+        String pythonCode = buildBatchPredictionScript(model, inputTable, resultTable, filter);
+        PythonResult result = pythonExecutor.execute(pythonCode, model.getDataSourceId(), batchPredictTimeoutMs);
+
+        if (result.exitCode() != 0) {
+            String err = result.stderr().isBlank() ? result.stdout() : result.stderr();
+            logPredictionEvent(model, "mining_prediction_complete", Map.of("status", "failed", "batchId", batchId, "error", truncateLog(err, 300)));
+            throw new RuntimeException("批量预测失败: " + truncateLog(err, predictErrorTruncation));
+        }
+
+        Map<String, Object> parsed = parseResultMarker(result.stdout(), "[BATCH_PREDICT_RESULT]");
+        int savedRows = parsed.containsKey("saved_rows") ? ((Number) parsed.get("saved_rows")).intValue() : 0;
+
+        PredictionResult summary = new PredictionResult();
+        summary.setModelId(modelId);
+        summary.setModelName(model.getName());
+        summary.setBatchId(batchId);
+        summary.setInputData("{\"source\":\"" + inputTable + "\",\"total_rows\":" + savedRows + "}");
+        summary.setPrediction("batch_summary");
+        summary.setResultTable(resultTable);
+        summary.setPredictedAt(LocalDateTime.now());
+        predictionResultMapper.insert(summary);
+
+        log.info("[PREDICT] Batch predict with overrides completed: {} rows to '{}'", savedRows, resultTable);
         return parsed;
     }
 
@@ -177,11 +243,17 @@ public class MiningPredictionService {
         java.time.format.DateTimeFormatter fmt = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd");
         java.time.LocalDate today = java.time.LocalDate.now();
         String todayStr = "'" + today.format(fmt) + "'";
+        String yesterdayStr = "'" + today.minusDays(1).format(fmt) + "'";
         String resolved = filter;
+        // Handle quoted variable patterns first: '${etl_date}' -> '2026-05-16' (not ''2026-05-16'')
+        resolved = resolved.replace("'${etl_date}'", todayStr);
+        resolved = resolved.replace("'${today}'", todayStr);
+        resolved = resolved.replace("'${yesterday}'", yesterdayStr);
+        // Then handle unquoted variable patterns
         resolved = resolved.replace("${etl_date}", todayStr);
         resolved = resolved.replace("${today}", todayStr);
-        resolved = resolved.replace("${yesterday}", "'" + today.minusDays(1).format(fmt) + "'");
-        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\$\\{today-(\\d+)\\}").matcher(resolved);
+        resolved = resolved.replace("${yesterday}", yesterdayStr);
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("'?\\$\\{today-(\\d+)\\}'?").matcher(resolved);
         while (m.find()) {
             int daysAgo = Integer.parseInt(m.group(1));
             resolved = resolved.replace(m.group(0), "'" + today.minusDays(daysAgo).format(fmt) + "'");
@@ -205,7 +277,7 @@ public class MiningPredictionService {
 
         sb.append("_preproc_path = os.path.join(os.path.dirname(model_path), 'model_").append(model.getId()).append("_preprocessors.pkl')\n");
         sb.append("_preproc = joblib.load(_preproc_path) if os.path.exists(_preproc_path) else None\n");
-        sb.append("preprocessing = ").append(model.getPreprocessing() != null ? model.getPreprocessing() : "{}").append("\n");
+        sb.append("preprocessing = ").append(safeJsonEmbed(model.getPreprocessing())).append("\n");
         appendPreprocessingBlock(sb, "df");
 
         sb.append("predictions = clf.predict(df)\nresult = {'predictions': predictions.tolist()}\n\n");
@@ -226,6 +298,10 @@ public class MiningPredictionService {
 
     @SuppressWarnings("unchecked")
     private String buildBatchPredictionScript(MiningModel model, String inputTable, String resultTable) {
+        return buildBatchPredictionScript(model, inputTable, resultTable, model.getPredictInputFilter());
+    }
+
+    private String buildBatchPredictionScript(MiningModel model, String inputTable, String resultTable, String filterOverride) {
         DataSource ds = dataSourceMapper.selectById(model.getDataSourceId());
         String dbUrl = ds != null ? buildSqlalchemyUrl(ds) : "";
 
@@ -237,7 +313,7 @@ public class MiningPredictionService {
         sb.append("    print('[BATCH_PREDICT_RESULT] ' + json.dumps({'error': '模型文件不存在'}))\n    exit(1)\n");
         sb.append("clf = joblib.load(model_path)\n\nengine = create_engine('").append(dbUrl).append("')\n");
 
-        String filter = resolveFilterVariables(model.getPredictInputFilter());
+        String filter = resolveFilterVariables(filterOverride);
         if (filter != null && !filter.isBlank()) {
             sb.append("_filter = \"").append(filter.replace("\\", "\\\\").replace("\"", "\\\"")).append("\"\n");
             sb.append("_query = 'SELECT * FROM `").append(inputTable).append("` WHERE ' + _filter\n");
@@ -261,14 +337,25 @@ public class MiningPredictionService {
 
         sb.append("_preproc_path = os.path.join(os.path.dirname(model_path), 'model_").append(model.getId()).append("_preprocessors.pkl')\n");
         sb.append("_preproc = joblib.load(_preproc_path) if os.path.exists(_preproc_path) else None\n");
-        sb.append("preprocessing = ").append(model.getPreprocessing() != null ? model.getPreprocessing() : "{}").append("\n");
+        sb.append("preprocessing = ").append(safeJsonEmbed(model.getPreprocessing())).append("\n");
         appendPreprocessingBlock(sb, "X");
 
         sb.append("predictions = clf.predict(X)\nresult_df = df.copy()\nresult_df['prediction'] = predictions\n\n");
         sb.append("if hasattr(clf, 'predict_proba'):\n    try:\n");
         sb.append("        proba = clf.predict_proba(X)\n        result_df['prediction_proba'] = [max(p) for p in proba]\n    except: pass\n\n");
         sb.append("result_df['predicted_at'] = pd.Timestamp.now()\n");
-        sb.append("result_df.to_sql('").append(tableName).append("', engine, if_exists='replace', index=False)\n");
+        sb.append("for c in result_df.columns:\n");
+        sb.append("    if result_df[c].dtype == 'object': result_df[c] = result_df[c].astype(str)\n");
+        sb.append("    elif str(result_df[c].dtype).startswith('datetime'): result_df[c] = result_df[c].astype(str)\n");
+        // Auto-create output table if it doesn't exist
+        sb.append("_check_sql = \"SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :tname\"\n");
+        sb.append("with engine.connect() as _conn:\n");
+        sb.append("    _exists = _conn.execute(text(_check_sql), {'tname': '").append(tableName).append("'}).fetchone()[0]\n");
+        sb.append("    if _exists == 0:\n");
+        sb.append("        result_df.head(0).to_sql('").append(tableName).append("', engine, if_exists='fail', index=False)\n");
+        sb.append("        print(f'[INFO] Auto-created table ").append(tableName).append("')\n");
+        sb.append("    _conn.commit()\n");
+        sb.append("result_df.to_sql('").append(tableName).append("', engine, if_exists='append', index=False)\n");
         sb.append("print(f'[INFO] Saved {len(result_df)} rows to ").append(tableName).append("')\n\n");
         sb.append("result = {\n    'saved_to': '").append(tableName).append("',\n    'saved_rows': len(result_df),\n    'columns': list(result_df.columns)\n}\n");
         sb.append("print('[BATCH_PREDICT_RESULT] ' + json.dumps(result))\n");
@@ -306,7 +393,12 @@ public class MiningPredictionService {
     private String buildSqlalchemyUrl(DataSource ds) {
         String user = URLEncoder.encode(ds.getUsername(), StandardCharsets.UTF_8);
         String pass = URLEncoder.encode(ds.getPassword(), StandardCharsets.UTF_8);
-        return "mysql+pymysql://%s:%s@%s:%d/%s".formatted(user, pass, ds.getHost(), ds.getPort(), ds.getDatabaseName());
+        String type = ds.getType() != null ? ds.getType().toLowerCase() : "mysql";
+        String driver = switch (type) {
+            case "postgresql" -> "postgresql+psycopg2";
+            default -> "mysql+pymysql";
+        };
+        return "%s://%s:%s@%s:%d/%s".formatted(driver, user, pass, ds.getHost(), ds.getPort(), ds.getDatabaseName());
     }
 
     private Map<String, Object> parseResultMarker(String stdout, String marker) {
@@ -324,6 +416,16 @@ public class MiningPredictionService {
             }
         }
         return result;
+    }
+
+    private String safeJsonEmbed(String json) {
+        if (json == null || json.isBlank() || "null".equals(json)) return "{}";
+        try {
+            return objectMapper.readTree(json).toString();
+        } catch (Exception e) {
+            log.warn("[PREDICT] Invalid JSON rejected for Python embedding: {}", e.getMessage());
+            return "{}";
+        }
     }
 
     private String toJson(Object obj) {

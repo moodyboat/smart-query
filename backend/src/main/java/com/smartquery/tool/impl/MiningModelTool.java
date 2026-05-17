@@ -12,6 +12,7 @@ import com.smartquery.service.MiningService;
 import com.smartquery.tool.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -28,6 +29,18 @@ public class MiningModelTool implements LlmTool {
     private final MiningService miningService;
     private final AlgorithmService algorithmService;
     private final ObjectMapper objectMapper;
+
+    @Value("${mining-tool.timeout-ms:300000}")
+    private long miningToolTimeoutMs;
+
+    @Value("${mining.compare.max-algorithms:5}")
+    private int compareMaxAlgorithms;
+
+    @Value("${mining.tune.max-combinations:12}")
+    private int tuneMaxCombinations;
+
+    @Value("${mining.history-limit:20}")
+    private int historyLimit;
 
     @Override
     public String getName() { return "mining_model"; }
@@ -121,7 +134,7 @@ public class MiningModelTool implements LlmTool {
             first.put("__action", action);
             List<Map<String, Object>> newData = new ArrayList<>();
             newData.add(first);
-            for (int i = 1; i < data.size(); i++) newData.add(data.get(i));
+            for (int i = 1; i < data.size(); i++) newData.add(new LinkedHashMap<>(data.get(i)));
             data = newData;
         }
         return new ToolResult(result.toolName(), result.success(), result.output(), result.error(), result.durationMs(), data, result.toolError());
@@ -186,6 +199,7 @@ public class MiningModelTool implements LlmTool {
         model.setTargetColumn(getString(input, "target_column", null));
         model.setDataSourceId(context.dataSourceId());
         model.setConversationId(context.conversationId());
+        model.setSource("chat");
 
         Object features = input.get("feature_columns");
         if (features != null) {
@@ -299,7 +313,7 @@ public class MiningModelTool implements LlmTool {
 
         MiningModel result = miningService.trainModel(id, "chat");
         StringBuilder msg = new StringBuilder();
-        if (result.getStatus().equals("trained")) {
+        if (result.getStatus().equals(com.smartquery.common.ModelStatus.TRAINED)) {
             msg.append("模型「").append(result.getName()).append("」训练完成！\n");
             msg.append("指标: ").append(result.getMetrics()).append("\n");
             if (result.getValidationMetrics() != null && !result.getValidationMetrics().isBlank()) {
@@ -308,7 +322,7 @@ public class MiningModelTool implements LlmTool {
             if (result.getFeatureImportance() != null && !result.getFeatureImportance().isBlank()) {
                 msg.append("特征重要性: ").append(result.getFeatureImportance());
             }
-        } else if (result.getStatus().equals("training")) {
+        } else if (result.getStatus().equals(com.smartquery.common.ModelStatus.TRAINING)) {
             msg.append("模型「").append(result.getName()).append("」正在训练中...");
         } else {
             msg.append("模型「").append(result.getName()).append("」训练失败。");
@@ -330,8 +344,9 @@ public class MiningModelTool implements LlmTool {
 
         MiningModel model = miningService.publishModel(id, config.isEmpty() ? null : config);
         StringBuilder msg = new StringBuilder("模型「").append(model.getName()).append("」已发布");
-        if (model.getScheduleEnabled()) {
-            msg.append("，定时调度已启用 (").append(model.getScheduleMode()).append(", 间隔").append(model.getScheduleCron()).append("分钟)");
+        if (Boolean.TRUE.equals(model.getScheduleEnabled())) {
+            String mode = model.getScheduleMode() != null ? model.getScheduleMode() : "predict";
+            msg.append("，定时调度已启用 (").append(mode).append(", cron: ").append(model.getScheduleCron()).append(")");
         }
         return ToolResult.ok(getName(), msg.toString(),
             System.currentTimeMillis() - start);
@@ -399,14 +414,15 @@ public class MiningModelTool implements LlmTool {
         Long id = toLong(input.get("model_id"));
         if (id == null) return ToolResult.error(getName(), "需要 model_id", System.currentTimeMillis() - start);
 
+        String inputTable = input.get("input_table") instanceof String s && !s.isBlank() ? s : null;
         String resultTable = input.get("result_table") instanceof String s && !s.isBlank() ? s : null;
+        String inputFilter = input.get("input_filter") instanceof String s && !s.isBlank() ? s : null;
 
         try {
-            Map<String, Object> result = resultTable != null
-                ? miningService.batchPredict(id, resultTable)
-                : miningService.batchPredict(id);
+            Map<String, Object> result = miningService.batchPredictWithOverrides(id, inputTable, resultTable, inputFilter);
             StringBuilder sb = new StringBuilder("批量预测完成!\n");
-            sb.append("- 输入表: ").append(result.get("sourceTable")).append("\n");
+            String usedInputTable = inputTable != null ? inputTable : String.valueOf(result.getOrDefault("sourceTable", "未知"));
+            sb.append("- 输入表: ").append(usedInputTable).append("\n");
             sb.append("- 结果写入: ").append(result.get("saved_to")).append("\n");
             sb.append("- 预测行数: ").append(result.get("saved_rows")).append("\n");
             sb.append("- 结果列: ").append(result.get("columns")).append("\n");
@@ -466,9 +482,7 @@ public class MiningModelTool implements LlmTool {
     private ToolResult handleExploreData(Map<String, Object> input, ToolExecutionContext context, long start) {
         String tableName = getString(input, "table_name", null);
         if (tableName == null) return ToolResult.error(getName(), "需要 table_name", System.currentTimeMillis() - start);
-        if (!tableName.matches("^[a-zA-Z_][a-zA-Z0-9_]*$")) {
-            return ToolResult.error(getName(), "无效的表名: " + tableName, System.currentTimeMillis() - start);
-        }
+        com.smartquery.common.IdentifierValidator.validateTableName(tableName);
 
         try {
             DataSource ds = miningService.getDataSource(context.dataSourceId());
@@ -480,7 +494,7 @@ public class MiningModelTool implements LlmTool {
             StringBuilder sb = new StringBuilder("数据表 `").append(tableName).append("` 探索结果:\n\n");
 
             // Row count
-            Integer rowCount = jdbc.queryForObject("SELECT COUNT(*) FROM `" + tableName + "` LIMIT 1000000", Integer.class);
+            Integer rowCount = jdbc.queryForObject("SELECT COUNT(*) FROM `" + tableName + "`", Integer.class);
             sb.append("**总行数**: ").append(rowCount).append("\n\n");
 
             // Column info
@@ -502,6 +516,7 @@ public class MiningModelTool implements LlmTool {
             sb.append("\n**数值列统计**:\n");
             for (Map<String, Object> col : columns) {
                 String colName = (String) col.get("COLUMN_NAME");
+                com.smartquery.common.IdentifierValidator.validateColumnName(colName);
                 String dataType = (String) col.get("DATA_TYPE");
                 if (dataType.matches("int|bigint|decimal|double|float|tinyint|smallint|mediumint|numeric")) {
                     try {
@@ -534,6 +549,7 @@ public class MiningModelTool implements LlmTool {
                 String colName = (String) col.get("COLUMN_NAME");
                 String dataType = (String) col.get("DATA_TYPE");
                 if (!candidateTargets.contains(colName) && !dataType.matches("int|bigint|decimal|double|float|tinyint|smallint|mediumint|numeric")) {
+                    com.smartquery.common.IdentifierValidator.validateColumnName(colName);
                     try {
                         Integer uniqueCount = jdbc.queryForObject(
                             "SELECT COUNT(DISTINCT `" + colName + "`) FROM `" + tableName + "`", Integer.class);
@@ -544,6 +560,7 @@ public class MiningModelTool implements LlmTool {
                 }
             }
             for (String colName : candidateTargets) {
+                com.smartquery.common.IdentifierValidator.validateColumnName(colName);
                 try {
                     List<Map<String, Object>> dist = jdbc.queryForList(
                         "SELECT `" + colName + "`, COUNT(*) as cnt FROM `" + tableName + "` GROUP BY `" + colName + "` ORDER BY cnt DESC LIMIT 10");
@@ -602,7 +619,7 @@ public class MiningModelTool implements LlmTool {
         var wrapper = new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ModelExecution>()
                 .eq(ModelExecution::getModelId, modelId)
                 .orderByDesc(ModelExecution::getCreatedAt)
-                .last("LIMIT 20");
+                .last("LIMIT " + historyLimit);
         List<ModelExecution> executions = modelExecutionMapper.selectList(wrapper);
 
         if (executions.isEmpty()) {
@@ -624,7 +641,7 @@ public class MiningModelTool implements LlmTool {
         if (executions.size() >= 2) {
             ModelExecution latest = executions.get(0);
             ModelExecution prev = executions.get(1);
-            if ("success".equals(latest.getStatus()) && "success".equals(prev.getStatus())
+            if (com.smartquery.common.ModelStatus.EXEC_SUCCESS.equals(latest.getStatus()) && com.smartquery.common.ModelStatus.EXEC_SUCCESS.equals(prev.getStatus())
                     && latest.getMetrics() != null && prev.getMetrics() != null) {
                 sb.append("**最近两次对比:**\n");
                 try {
@@ -698,7 +715,7 @@ public class MiningModelTool implements LlmTool {
     public boolean requireDatabase() { return false; }
 
     @Override
-    public long getTimeoutMs() { return 300000; }
+    public long getTimeoutMs() { return miningToolTimeoutMs; }
 
     @SuppressWarnings("unchecked")
     private ToolResult handleCompare(Map<String, Object> input, ToolExecutionContext context, long start) {
@@ -714,8 +731,8 @@ public class MiningModelTool implements LlmTool {
             return ToolResult.error(getName(), "algorithms 必须是数组格式", System.currentTimeMillis() - start);
         }
 
-        if (algorithms.size() < 2 || algorithms.size() > 5) {
-            return ToolResult.error(getName(), "compare 支持 2~5 个算法对比", System.currentTimeMillis() - start);
+        if (algorithms.size() < 2 || algorithms.size() > compareMaxAlgorithms) {
+            return ToolResult.error(getName(), "compare 支持 2~" + compareMaxAlgorithms + " 个算法对比", System.currentTimeMillis() - start);
         }
 
         if (context.dataSourceId() == null) {
@@ -725,6 +742,12 @@ public class MiningModelTool implements LlmTool {
         String modelType = getString(input, "model_type", "classification");
         String sourceTable = getString(input, "source_table", null);
         String targetColumn = getString(input, "target_column", null);
+        if (sourceTable == null || sourceTable.isBlank()) {
+            return ToolResult.error(getName(), "compare 需要指定 source_table", System.currentTimeMillis() - start);
+        }
+        if (targetColumn == null || targetColumn.isBlank()) {
+            return ToolResult.error(getName(), "compare 需要指定 target_column", System.currentTimeMillis() - start);
+        }
         Object features = input.get("feature_columns");
         String featureColumnsJson = null;
         if (features != null) {
@@ -774,16 +797,20 @@ public class MiningModelTool implements LlmTool {
                     Map<String, Object> row = new LinkedHashMap<>();
                     row.put("algorithm", m.getAlgorithm());
                     row.put("modelId", m.getId());
-                    row.put("status", "failed");
-                    row.put("error", e.getMessage());
+                    row.put("status", com.smartquery.common.ModelStatus.FAILED);                    row.put("error", e.getMessage());
                     return row;
                 }
             }, miningExecutor))
             .toList();
 
-        List<Map<String, Object>> results = futures.stream()
-            .map(CompletableFuture::join)
-            .toList();
+        List<Map<String, Object>> results;
+        try {
+            results = futures.stream()
+                .map(CompletableFuture::join)
+                .toList();
+        } catch (java.util.concurrent.CompletionException e) {
+            return ToolResult.error(getName(), "训练队列已满，请稍后重试: " + e.getCause().getMessage(), System.currentTimeMillis() - start);
+        }
 
         StringBuilder sb = new StringBuilder();
         sb.append("## 模型对比结果\n\n");
@@ -848,6 +875,12 @@ public class MiningModelTool implements LlmTool {
         if (before == null) return ToolResult.error(getName(), "模型不存在: " + id, System.currentTimeMillis() - start);
         String beforeMetrics = before.getMetrics();
         int beforeVersion = before.getVersion();
+
+        // Auto-offline published model before retraining
+        if (com.smartquery.common.ModelStatus.PUBLISHED.equals(before.getStatus())) {
+            miningService.offlineModel(id);
+            log.info("[MINING-TOOL] Auto-offlined model {} for retrain", id);
+        }
 
         MiningModel updates = new MiningModel();
         boolean hasUpdates = false;
@@ -931,19 +964,29 @@ public class MiningModelTool implements LlmTool {
 
         Map<String, List<Object>> paramGrid;
         try {
-            paramGrid = (Map<String, List<Object>>) gridObj;
+            if (!(gridObj instanceof Map<?, ?> gridMap)) {
+                return ToolResult.error(getName(), "param_grid 必须是 JSON 对象", System.currentTimeMillis() - start);
+            }
+            paramGrid = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : gridMap.entrySet()) {
+                if (!(entry.getValue() instanceof List<?> listVal)) {
+                    return ToolResult.error(getName(), "param_grid 键 '" + entry.getKey() + "' 的值必须是数组, 实际: " + (entry.getValue() != null ? entry.getValue().getClass().getSimpleName() : "null"), System.currentTimeMillis() - start);
+                }
+                paramGrid.put(String.valueOf(entry.getKey()), new ArrayList<>(listVal));
+            }
         } catch (ClassCastException e) {
             return ToolResult.error(getName(), "param_grid 格式错误, 键为参数名, 值为候选值数组", System.currentTimeMillis() - start);
         }
 
         List<Map<String, Object>> combinations = generateCombinations(paramGrid);
         if (combinations.isEmpty()) return ToolResult.error(getName(), "param_grid 为空或无法生成组合", System.currentTimeMillis() - start);
-        if (combinations.size() > 12) combinations = combinations.subList(0, 12);
+        if (combinations.size() > tuneMaxCombinations) combinations = new ArrayList<>(combinations.subList(0, tuneMaxCombinations));
 
         java.util.concurrent.Executor miningExecutor = miningService.getMiningExecutor();
 
         List<CompletableFuture<Map<String, Object>>> futures = combinations.stream()
             .map(params -> CompletableFuture.supplyAsync(() -> {
+                MiningModel created = null;
                 try {
                     MiningModel variant = new MiningModel();
                     variant.setName(baseModel.getName() + " [tune]");
@@ -963,7 +1006,7 @@ public class MiningModelTool implements LlmTool {
                     mergedParams.putAll(params);
                     variant.setHyperparameters(objectMapper.writeValueAsString(mergedParams));
 
-                    MiningModel created = miningService.createModel(variant);
+                    created = miningService.createModel(variant);
                     MiningModel trained = miningService.trainModel(created.getId(), "tune");
 
                     Map<String, Object> row = new LinkedHashMap<>();
@@ -977,14 +1020,20 @@ public class MiningModelTool implements LlmTool {
                 } catch (Exception e) {
                     Map<String, Object> row = new LinkedHashMap<>();
                     row.put("params", params);
-                    row.put("status", "failed");
+                    if (created != null) row.put("modelId", created.getId());
+                    row.put("status", com.smartquery.common.ModelStatus.FAILED);
                     row.put("error", e.getMessage());
                     return row;
                 }
             }, miningExecutor))
             .toList();
 
-        List<Map<String, Object>> results = futures.stream().map(CompletableFuture::join).toList();
+        List<Map<String, Object>> results;
+        try {
+            results = futures.stream().map(CompletableFuture::join).toList();
+        } catch (java.util.concurrent.CompletionException e) {
+            return ToolResult.error(getName(), "训练队列已满，请稍后重试: " + e.getCause().getMessage(), System.currentTimeMillis() - start);
+        }
 
         StringBuilder sb = new StringBuilder("## 参数调优结果\n\n");
         sb.append("基于模型「").append(baseModel.getName()).append("」(ID: ").append(id).append(") 探索了 ").append(combinations.size()).append(" 种参数组合\n\n");
@@ -1079,6 +1128,7 @@ public class MiningModelTool implements LlmTool {
         for (int i = 0; i < sizes.length; i++) if (sizes[i] == 0) return result;
 
         while (true) {
+            if (result.size() >= tuneMaxCombinations) break;
             Map<String, Object> combo = new LinkedHashMap<>();
             for (int i = 0; i < keys.size(); i++) {
                 combo.put(keys.get(i), paramGrid.get(keys.get(i)).get(indices[i]));

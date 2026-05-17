@@ -142,7 +142,7 @@ public class ConversationEventLogger {
         if (!Files.exists(file)) return;
 
         try {
-            if (Files.size(file) > MAX_FILE_SIZE_BYTES) {
+            if (Files.size(file) > maxFileSizeBytes) {
                 // Close existing writer so buffers are flushed before rename
                 String cacheKey = dateKey + "/" + conversationId;
                 PrintWriter oldWriter = writerCache.remove(cacheKey);
@@ -405,9 +405,14 @@ public class ConversationEventLogger {
         performLogMaintenance();
     }
 
-    private static final long MAX_FILE_SIZE_BYTES = 50L * 1024 * 1024; // 50MB
-    private static final int COMPRESS_AFTER_DAYS = 30;
-    private static final int DELETE_AFTER_DAYS = 90;
+    @org.springframework.beans.factory.annotation.Value("${logging.max-file-size-bytes:52428800}")
+    private long maxFileSizeBytes;
+
+    @org.springframework.beans.factory.annotation.Value("${logging.compress-after-days:30}")
+    private int compressAfterDays;
+
+    @org.springframework.beans.factory.annotation.Value("${logging.delete-after-days:90}")
+    private int deleteAfterDays;
 
     /**
      * 日志维护: 滚动大文件 + 压缩旧日志 + 清理过期日志
@@ -424,8 +429,8 @@ public class ConversationEventLogger {
                 .filter(Files::isDirectory)
                 .toList();
 
-            LocalDate compressThreshold = LocalDate.now().minusDays(COMPRESS_AFTER_DAYS);
-            LocalDate deleteThreshold = LocalDate.now().minusDays(DELETE_AFTER_DAYS);
+            LocalDate compressThreshold = LocalDate.now().minusDays(compressAfterDays);
+            LocalDate deleteThreshold = LocalDate.now().minusDays(deleteAfterDays);
 
             for (Path dateDir : dateDirs) {
                 String dirName = dateDir.getFileName().toString();
@@ -460,7 +465,7 @@ public class ConversationEventLogger {
 
                 // 滚动大文件
                 for (Path f : Files.list(dateDir).toList()) {
-                    if (f.toString().endsWith(".jsonl") && Files.size(f) > MAX_FILE_SIZE_BYTES) {
+                    if (f.toString().endsWith(".jsonl") && Files.size(f) > maxFileSizeBytes) {
                         Path rotatedPath = Path.of(f.toString().replace(".jsonl",
                             "-" + System.currentTimeMillis() + ".jsonl"));
                         Files.move(f, rotatedPath);

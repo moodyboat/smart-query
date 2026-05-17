@@ -43,7 +43,7 @@ public class ChatController {
     private final Executor asyncExecutor;
 
     private final ConcurrentHashMap<Long, AtomicBoolean> activeConversations = new ConcurrentHashMap<>();
-    private final ConversationContextHolder.SessionManager sessionManager = new ConversationContextHolder.SessionManager();
+    private final ConversationContextHolder.SessionManager sessionManager;
     private final RateLimiter rateLimiter;
     private final ToolPromptLoader toolPromptLoader;
     private final SchemaContextBuilder schemaContextBuilder;
@@ -94,6 +94,17 @@ public class ChatController {
     ) {
         // Per-conversation lock: reject concurrent requests to the same conversation
         String resolvedModel = model.isBlank() ? defaultModel : model;
+        // Resolve dataSourceId from conversation when not provided
+        Long dsId = dataSourceId;
+        if (dsId == null) {
+            try {
+                var conv = conversationMapper.selectById(conversationId);
+                if (conv != null) dsId = conv.getDataSourceId();
+            } catch (Exception e) {
+                log.debug("[CHAT] failed to resolve dataSourceId from conversation: {}", e.getMessage());
+            }
+        }
+        final Long finalDataSourceId = dsId;
         AtomicBoolean active = activeConversations.computeIfAbsent(conversationId, k -> new AtomicBoolean(false));
         if (!active.compareAndSet(false, true)) {
             SseEmitter reject = new SseEmitter();
@@ -110,9 +121,10 @@ public class ChatController {
         AtomicBoolean aborted = new AtomicBoolean(false);
 
         Runnable releaseLock = () -> {
-            aborted.set(true);
-            active.set(false);
-            activeConversations.remove(conversationId, active);
+            if (aborted.compareAndSet(false, true)) {
+                active.set(false);
+                activeConversations.remove(conversationId, active);
+            }
         };
 
         emitter.onCompletion(releaseLock);
@@ -127,12 +139,12 @@ public class ChatController {
 
         CompletableFuture.runAsync(() -> {
             ConversationContextHolder.setConversationId(conversationId);
-            ConversationContextHolder.setDataSourceId(dataSourceId);
+            ConversationContextHolder.setDataSourceId(finalDataSourceId);
             ConversationContextHolder.setTraceId(UUID.randomUUID().toString().substring(0, 8));
-            sessionManager.register(conversationId, dataSourceId, null);
+            sessionManager.register(conversationId, finalDataSourceId, null);
             try {
                 queryEngine.submitMessageStreaming(
-                    conversationId, message, dataSourceId, resolvedModel,
+                    conversationId, message, finalDataSourceId, resolvedModel,
                     aborted::get,
                     event -> {
                         if (aborted.get()) return;

@@ -97,7 +97,7 @@ onMounted(async () => {
     conversations.value = convs || []
     dataSources.value = dss || []
     if (dss?.length > 0) {
-      const business = dss.find(ds => ds.databaseName !== 'smart_query') || dss[0]
+      const business = dss.find(ds => !ds.system) || dss[0]
       selectedDsId.value = business.id
       emit('dataSourceChanged', business.id)
     }

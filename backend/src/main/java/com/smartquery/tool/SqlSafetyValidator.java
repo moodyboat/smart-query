@@ -33,8 +33,8 @@ public class SqlSafetyValidator {
             Set.of("DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "CREATE",
                    "TRUNCATE", "GRANT", "REVOKE", "REPLACE", "RENAME",
                    "CALL", "EXEC", "EXECUTE", "LOAD DATA", "INTO OUTFILE", "INTO DUMPFILE"),
-            1000,
-            30
+            Integer.getInteger("sql-safety.max-rows", 1000),
+            Integer.getInteger("sql-safety.query-timeout-seconds", 30)
         );
     }
 

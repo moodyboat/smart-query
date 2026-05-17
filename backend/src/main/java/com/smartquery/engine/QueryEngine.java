@@ -13,6 +13,7 @@ import com.smartquery.prompt.QueryContextAssembler;
 import com.smartquery.tool.ToolRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
@@ -37,6 +38,42 @@ public class QueryEngine {
     private final com.smartquery.logging.ConversationEventLogger eventLogger;
     private final com.smartquery.logging.ConversationStatsService statsService;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+
+    @Value("${smart-query.query.metadata-max-chars:262144}")
+    private int metadataMaxChars;
+
+    @Value("${smart-query.query.history-token-budget:20000}")
+    private int historyTokenBudget;
+
+    @Value("${smart-query.query.history-keep-recent:10}")
+    private int historyKeepRecent;
+
+    @Value("${smart-query.query.metadata-max-display-rows:50}")
+    private int metadataMaxDisplayRows;
+
+    @Value("${smart-query.query.metadata-max-section-length:2000}")
+    private int metadataMaxSectionLength;
+
+    @Value("${smart-query.query.metadata-max-python-stdout:3000}")
+    private int metadataMaxPythonStdout;
+
+    @Value("${smart-query.event-log.truncation-short:500}")
+    private int eventLogTruncShort;
+
+    @Value("${smart-query.event-log.truncation-medium:1000}")
+    private int eventLogTruncMedium;
+
+    @Value("${smart-query.event-log.truncation-long:2000}")
+    private int eventLogTruncLong;
+
+    @Value("${smart-query.event-log.user-message-max:1000}")
+    private int eventLogUserMessageMax;
+
+    @Value("${smart-query.auto-title.max-length:20}")
+    private int autoTitleMaxLength;
+
+    @Value("${smart-query.query.history-trim-chars:100}")
+    private int historyTrimChars;
 
     /**
      * 向后兼容: 收集所有事件后返回
@@ -92,7 +129,7 @@ public class QueryEngine {
         // JSONL: 记录用户消息
         Map<String, Object> userPayload = new LinkedHashMap<>();
         userPayload.put("messageId", userMsg.getId());
-        userPayload.put("content", userMessage.substring(0, Math.min(userMessage.length(), 1000)));
+        userPayload.put("content", userMessage.substring(0, Math.min(userMessage.length(), eventLogUserMessageMax)));
         eventLogger.logEvent(conversationId, traceId, "user_message", userPayload);
 
         // 自动更新会话标题
@@ -141,22 +178,22 @@ public class QueryEngine {
                 try {
                     List<Map<String, Object>> blocks = List.copyOf(toolBlocks);
                     String json = objectMapper.writeValueAsString(blocks);
-                    if (json.length() > 262144) {
+                    if (json.length() > metadataMaxChars) {
                         // Step 1: Trim large SQL data rows
                         List<Map<String, Object>> trimmed = trimMetadataBlocks(blocks);
                         json = objectMapper.writeValueAsString(trimmed);
                     }
-                    if (json != null && json.length() > 262144) {
+                    if (json != null && json.length() > metadataMaxChars) {
                         // Step 2: Trim report section content and Python stdout
                         List<Map<String, Object>> trimmed = trimLargeTextFields(blocks);
                         json = objectMapper.writeValueAsString(trimmed);
                     }
-                    if (json != null && json.length() > 262144) {
+                    if (json != null && json.length() > metadataMaxChars) {
                         // Step 3: Strip ECharts options, keep only IDs and titles
                         List<Map<String, Object>> trimmed = stripEchartsOptions(blocks);
                         json = objectMapper.writeValueAsString(trimmed);
                     }
-                    if (json != null && json.length() > 262144) {
+                    if (json != null && json.length() > metadataMaxChars) {
                         log.warn("[QUERY] metadata still too large after trimming ({} chars), skipping", json.length());
                         json = null;
                     }
@@ -233,13 +270,13 @@ public class QueryEngine {
             block.put("name", "execute_sql");
             block.put("_id", "sql-" + System.nanoTime());
             block.put("input", Map.of("sql", e.sql()));
-            block.put("status", "running");
+            block.put("status", com.smartquery.common.ModelStatus.EXEC_RUNNING);
         } else if (event instanceof ReActEvent.PythonExecuting e) {
             block.put("type", "tool_use");
             block.put("name", "execute_python");
             block.put("_id", "py-" + System.nanoTime());
             block.put("input", Map.of("code", e.code()));
-            block.put("status", "running");
+            block.put("status", com.smartquery.common.ModelStatus.EXEC_RUNNING);
         } else if (event instanceof ReActEvent.ChartGenerated e) {
             block.put("type", "tool_use");
             block.put("name", "generate_chart");
@@ -304,7 +341,7 @@ public class QueryEngine {
         List<Map<String, Object>> copy = List.copyOf(toolBlocks);
         for (int i = copy.size() - 1; i >= 0; i--) {
             Map<String, Object> b = copy.get(i);
-            if (toolName.equals(b.get("name")) && "running".equals(b.get("status"))) {
+            if (toolName.equals(b.get("name")) && com.smartquery.common.ModelStatus.EXEC_RUNNING.equals(b.get("status"))) {
                 updater.accept(b);
                 return;
             }
@@ -330,13 +367,13 @@ public class QueryEngine {
             Map<String, Object> payload = new LinkedHashMap<>();
 
             if (event instanceof ReActEvent.Thinking t) {
-                payload.put("content", truncate(t.content(), 500));
+                payload.put("content", truncate(t.content(), eventLogTruncShort));
                 eventLogger.logEvent(conversationId, traceId, "thinking", payload);
             } else if (event instanceof ReActEvent.ThinkingDelta) {
                 // Skip delta events to keep JSONL concise
             } else if (event instanceof ReActEvent.SqlGenerated e) {
-                payload.put("sql", truncate(e.sql(), 2000));
-                if (e.explanation() != null) payload.put("explanation", truncate(e.explanation(), 500));
+                payload.put("sql", truncate(e.sql(), eventLogTruncLong));
+                if (e.explanation() != null) payload.put("explanation", truncate(e.explanation(), eventLogTruncShort));
                 eventLogger.logEvent(conversationId, traceId, "sql_generated", payload);
             } else if (event instanceof ReActEvent.SqlExecuting e) {
                 payload.put("sql", e.sql());
@@ -345,21 +382,21 @@ public class QueryEngine {
                 payload.put("success", e.error() == null);
                 payload.put("totalRows", e.totalRows());
                 if (e.error() != null) payload.put("error", e.error());
-                if (e.summary() != null) payload.put("summary", truncate(e.summary(), 500));
+                if (e.summary() != null) payload.put("summary", truncate(e.summary(), eventLogTruncShort));
                 eventLogger.logEvent(conversationId, traceId, "sql_result", payload);
             } else if (event instanceof ReActEvent.PythonGenerating e) {
-                payload.put("code", truncate(e.code(), 2000));
+                payload.put("code", truncate(e.code(), eventLogTruncLong));
                 eventLogger.logEvent(conversationId, traceId, "python_generating", payload);
             } else if (event instanceof ReActEvent.PythonExecuting e) {
-                payload.put("code", truncate(e.code(), 2000));
+                payload.put("code", truncate(e.code(), eventLogTruncLong));
                 eventLogger.logEvent(conversationId, traceId, "python_executing", payload);
             } else if (event instanceof ReActEvent.PythonProgress e) {
-                payload.put("output", truncate(e.output(), 500));
+                payload.put("output", truncate(e.output(), eventLogTruncShort));
                 eventLogger.logEvent(conversationId, traceId, "python_progress", payload);
             } else if (event instanceof ReActEvent.PythonResultEvent e) {
                 payload.put("exitCode", e.exitCode());
-                payload.put("stdout", truncate(e.stdout(), 2000));
-                if (e.stderr() != null && !e.stderr().isEmpty()) payload.put("stderr", truncate(e.stderr(), 500));
+                payload.put("stdout", truncate(e.stdout(), eventLogTruncLong));
+                if (e.stderr() != null && !e.stderr().isEmpty()) payload.put("stderr", truncate(e.stderr(), eventLogTruncShort));
                 eventLogger.logEvent(conversationId, traceId, "python_result", payload);
             } else if (event instanceof ReActEvent.ChartGenerated e) {
                 payload.put("chartId", e.chartId());
@@ -374,7 +411,7 @@ public class QueryEngine {
             } else if (event instanceof ReActEvent.SectionGenerated e) {
                 payload.put("sectionIndex", e.sectionIndex());
                 payload.put("title", e.title());
-                payload.put("content", truncate(e.content(), 500));
+                payload.put("content", truncate(e.content(), eventLogTruncShort));
                 eventLogger.logEvent(conversationId, traceId, "section_generated", payload);
             } else if (event instanceof ReActEvent.ReportGenerated e) {
                 payload.put("reportId", e.reportId());
@@ -382,7 +419,7 @@ public class QueryEngine {
                 payload.put("sectionCount", e.sectionCount());
                 eventLogger.logEvent(conversationId, traceId, "report_generated", payload);
             } else if (event instanceof ReActEvent.FilterWidgetsGenerated e) {
-                payload.put("widgetsJson", truncate(e.widgetsJson(), 1000));
+                payload.put("widgetsJson", truncate(e.widgetsJson(), eventLogTruncMedium));
                 eventLogger.logEvent(conversationId, traceId, "filter_widgets", payload);
             } else if (event instanceof ReActEvent.MiningModelEvent e) {
                 payload.put("action", e.action());
@@ -390,7 +427,7 @@ public class QueryEngine {
                 if (e.modelName() != null) payload.put("modelName", e.modelName());
                 if (e.algorithm() != null) payload.put("algorithm", e.algorithm());
                 payload.put("success", e.success());
-                payload.put("message", truncate(e.message(), 500));
+                payload.put("message", truncate(e.message(), eventLogTruncShort));
                 eventLogger.logEvent(conversationId, traceId, "mining_model", payload);
             } else if (event instanceof ReActEvent.Done d) {
                 payload.put("totalSteps", d.totalSteps());
@@ -476,8 +513,8 @@ public class QueryEngine {
         int nl = t.indexOf('\n');
         if (nl > 0) t = t.substring(0, nl);
         // Cap at 20 chars
-        if (t.length() > 20) t = t.substring(0, 20) + "...";
-        return t.isBlank() ? message.substring(0, Math.min(message.length(), 20)) : t;
+        if (t.length() > autoTitleMaxLength) t = t.substring(0, autoTitleMaxLength) + "...";
+        return t.isBlank() ? message.substring(0, Math.min(message.length(), autoTitleMaxLength)) : t;
     }
 
     private List<Map<String, Object>> loadHistory(Long conversationId, Long excludeAfterId) {
@@ -589,12 +626,12 @@ public class QueryEngine {
 
         // Token 预算控制替代硬编码条数截断
         // 历史预算 20000 token (~80000 chars), 超出时保留最近10条 + 截断更早消息
-        result = applyTokenBudget(result, 20000, 10);
+        result = applyTokenBudget(result, historyTokenBudget, historyKeepRecent);
 
         return result;
     }
 
-    private static final int CHARS_PER_TOKEN = 4;
+    private static final int CHARS_PER_TOKEN = com.smartquery.common.TokenConstants.CHARS_PER_TOKEN;
 
     /**
      * Token 预算控制: 估算总 token 数，超预算时保留最近 N 条完整消息，
@@ -623,9 +660,9 @@ public class QueryEngine {
         for (int i = 0; i < recentStart; i++) {
             Map<String, Object> m = messages.get(i);
             String content = m.get("content") != null ? m.get("content").toString() : "";
-            if (content.length() > 100) {
+            if (content.length() > historyTrimChars) {
                 Map<String, Object> trimmed = new LinkedHashMap<>(m);
-                trimmed.put("content", content.substring(0, 100) + "...(已截断)");
+                trimmed.put("content", content.substring(0, historyTrimChars) + "...(已截断)");
                 result.add(trimmed);
             } else {
                 result.add(m);
@@ -639,9 +676,9 @@ public class QueryEngine {
         return blocks.stream().map(block -> {
             Map<String, Object> copy = new java.util.LinkedHashMap<>(block);
             Map<String, Object> result = (Map<String, Object>) copy.get("result");
-            if (result != null && result.get("rows") instanceof List rows && rows.size() > 50) {
+            if (result != null && result.get("rows") instanceof List rows && rows.size() > metadataMaxDisplayRows) {
                 Map<String, Object> trimmedResult = new java.util.LinkedHashMap<>(result);
-                trimmedResult.put("rows", rows.subList(0, 50));
+                trimmedResult.put("rows", rows.subList(0, metadataMaxDisplayRows));
                 trimmedResult.put("rowsTruncated", true);
                 copy.put("result", trimmedResult);
             }
@@ -664,8 +701,8 @@ public class QueryEngine {
                 Map trimmedSec = new java.util.LinkedHashMap<>(sec);
                 for (String key : java.util.List.of("section_content", "content")) {
                     Object val = trimmedSec.get(key);
-                    if (val instanceof String text && text.length() > 2000) {
-                        trimmedSec.put(key, text.substring(0, 2000) + "\n...(已截断)");
+                    if (val instanceof String text && text.length() > metadataMaxSectionLength) {
+                        trimmedSec.put(key, text.substring(0, metadataMaxSectionLength) + "\n...(已截断)");
                     }
                 }
                 trimmedSections.add(trimmedSec);
@@ -680,9 +717,9 @@ public class QueryEngine {
             Map<String, Object> result = (Map<String, Object>) copy.get("result");
             if (result == null) return copy;
             Object stdout = result.get("stdout");
-            if (stdout instanceof String text && text.length() > 3000) {
+            if (stdout instanceof String text && text.length() > metadataMaxPythonStdout) {
                 Map<String, Object> trimmedResult = new java.util.LinkedHashMap<>(result);
-                trimmedResult.put("stdout", text.substring(0, 3000) + "\n...(已截断)");
+                trimmedResult.put("stdout", text.substring(0, metadataMaxPythonStdout) + "\n...(已截断)");
                 copy.put("result", trimmedResult);
             }
             return copy;

@@ -17,6 +17,19 @@ public class DataSourceController {
     private final DataSourceMapper dataSourceMapper;
     private final DataSourceManager dataSourceManager;
 
+    @org.springframework.beans.factory.annotation.Value("${spring.datasource.url}")
+    private String systemDatasourceUrl;
+
+    private String extractSystemDbName() {
+        String url = systemDatasourceUrl;
+        // Find the path segment between the last ":" port and "?" query params
+        // e.g. jdbc:mysql://localhost:3306/smart_query?useUnicode=...
+        int queryStart = url.indexOf('?');
+        String pathPart = queryStart > 0 ? url.substring(0, queryStart) : url;
+        int lastSlash = pathPart.lastIndexOf('/');
+        return lastSlash >= 0 ? pathPart.substring(lastSlash + 1) : url;
+    }
+
     @PostMapping
     public Result<DataSource> create(@RequestBody DataSource ds) {
         dataSourceMapper.insert(ds);
@@ -25,9 +38,12 @@ public class DataSourceController {
 
     @GetMapping
     public Result<List<DataSource>> list() {
-        return Result.ok(dataSourceMapper.selectList(
+        String systemDb = extractSystemDbName();
+        List<DataSource> list = dataSourceMapper.selectList(
             new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<DataSource>()
-                .eq(DataSource::getDeleted, 0)));
+                .eq(DataSource::getDeleted, 0));
+        list.forEach(ds -> ds.setSystem(systemDb.equals(ds.getDatabaseName())));
+        return Result.ok(list);
     }
 
     @GetMapping("/{id}")
@@ -92,5 +108,86 @@ public class DataSourceController {
             "FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION",
             table);
         return Result.ok(columns);
+    }
+
+    @GetMapping("/{id}/tables/{table}/preview")
+    public Result<java.util.Map<String, Object>> previewTable(
+            @PathVariable Long id, @PathVariable String table,
+            @RequestParam(defaultValue = "20") int limit) {
+        var jdbc = dataSourceManager.getJdbcTemplate(id);
+        com.smartquery.common.IdentifierValidator.validateTableName(table);
+        var validated = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
+            Integer.class, table);
+        if (validated == null || validated == 0) {
+            return Result.error("表不存在: " + table);
+        }
+        limit = Math.max(1, Math.min(limit, 100));
+        var columns = jdbc.queryForList(
+            "SELECT COLUMN_NAME AS name, COLUMN_TYPE AS type " +
+            "FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION",
+            table);
+        var columnNames = columns.stream()
+            .map(c -> (String) c.get("name"))
+            .toList();
+        var rows = jdbc.queryForList(
+            "SELECT * FROM " + com.smartquery.util.SqlUtil.sanitizeIdentifier(table) + " LIMIT ?",
+            limit);
+
+        var totalCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM " + com.smartquery.util.SqlUtil.sanitizeIdentifier(table), Integer.class);
+
+        java.util.List<java.util.Map<String, Object>> columnStats = new java.util.ArrayList<>();
+        for (var col : columns) {
+            var colName = (String) col.get("name");
+            var colType = (String) col.get("type");
+            var stat = new java.util.LinkedHashMap<String, Object>();
+            stat.put("name", colName);
+            stat.put("type", colType);
+
+            try {
+                var nullCount = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM " + com.smartquery.util.SqlUtil.sanitizeIdentifier(table) + " WHERE `" + colName + "` IS NULL",
+                    Integer.class);
+                stat.put("nulls", nullCount);
+                stat.put("nullPct", totalCount != null && totalCount > 0 && nullCount != null
+                    ? Math.round(nullCount * 10000.0 / totalCount) / 100.0 : 0);
+            } catch (Exception e) {
+                stat.put("nulls", 0);
+                stat.put("nullPct", 0);
+            }
+
+            boolean isNumeric = colType != null && colType.matches("(?i).*(int|decimal|float|double|numeric|number).*");
+            if (isNumeric) {
+                try {
+                    var numStats = jdbc.queryForMap(
+                        "SELECT MIN(`" + colName + "`) AS min_val, MAX(`" + colName + "`) AS max_val, " +
+                        "ROUND(AVG(`" + colName + "`), 2) AS avg_val " +
+                        "FROM " + com.smartquery.util.SqlUtil.sanitizeIdentifier(table) + " WHERE `" + colName + "` IS NOT NULL");
+                    stat.put("min", numStats.get("min_val"));
+                    stat.put("max", numStats.get("max_val"));
+                    stat.put("avg", numStats.get("avg_val"));
+                } catch (Exception ignored) {}
+            } else {
+                try {
+                    var uniqueCount = jdbc.queryForObject(
+                        "SELECT COUNT(DISTINCT `" + colName + "`) FROM " + com.smartquery.util.SqlUtil.sanitizeIdentifier(table),
+                        Integer.class);
+                    stat.put("unique", uniqueCount);
+                    var topValues = jdbc.queryForList(
+                        "SELECT `" + colName + "` AS val, COUNT(*) AS cnt FROM " + com.smartquery.util.SqlUtil.sanitizeIdentifier(table) +
+                        " WHERE `" + colName + "` IS NOT NULL GROUP BY `" + colName + "` ORDER BY cnt DESC LIMIT 3");
+                    stat.put("topValues", topValues);
+                } catch (Exception ignored) {}
+            }
+            columnStats.add(stat);
+        }
+
+        return Result.ok(java.util.Map.of(
+            "columns", columnNames,
+            "rows", rows,
+            "totalCount", totalCount != null ? totalCount : 0,
+            "columnStats", columnStats
+        ));
     }
 }

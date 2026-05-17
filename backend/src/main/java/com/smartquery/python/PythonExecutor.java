@@ -50,8 +50,6 @@ public class PythonExecutor {
     @Value("${smart-query.python.command:python3}")
     private String pythonCmd;
 
-    private static final String PYTHON_CMD_DEFAULT = "python3";
-
     @Value("${smart-query.python.max-memory-mb:512}")
     private int maxMemoryMb;
 
@@ -64,6 +62,15 @@ public class PythonExecutor {
     @Value("${smart-query.python.stream-drain-timeout-seconds:5}")
     private int streamDrainTimeoutSeconds;
 
+    @Value("${smart-query.python.mem-monitor-initial-delay-seconds:2}")
+    private int memMonitorInitialDelaySec;
+
+    @Value("${smart-query.python.mem-monitor-period-seconds:5}")
+    private int memMonitorPeriodSec;
+
+    @Value("${smart-query.python.progress-report-interval:5}")
+    private int progressReportInterval;
+
     public PythonExecutor(DataSourceMapper dataSourceMapper, PythonCircuitBreaker circuitBreaker) {
         this.dataSourceMapper = dataSourceMapper;
         this.circuitBreaker = circuitBreaker;
@@ -74,7 +81,11 @@ public class PythonExecutor {
         try {
             Files.createDirectories(Path.of(artifactDir));
             Files.createDirectories(Path.of(workspaceBase));
-        } catch (IOException ignored) {}
+        } catch (IOException e) {
+            log.error("[PYTHON] Failed to create directories: artifactDir={}, workspaceBase={}: {}",
+                artifactDir, workspaceBase, e.getMessage());
+            throw new RuntimeException("Python执行器目录创建失败: " + e.getMessage(), e);
+        }
     }
 
     public PythonResult execute(String code, Long dataSourceId, int timeoutMs) {
@@ -95,17 +106,19 @@ public class PythonExecutor {
                 circuitBreaker.getConsecutiveFailures() + " 次），请稍后重试", -10, elapsed);
         }
 
+        ScheduledExecutorService memoryMonitor = null;
+        Path tempFile = null;
         try {
             // 安全校验 — 阻止危险操作
             PythonSandbox.validate(code);
 
-            Path tempFile = Files.createTempFile("smartquery_", ".py");
+            tempFile = Files.createTempFile("smartquery_", ".py");
             // Restrict temp file to owner-only to prevent credential leakage
             Files.setPosixFilePermissions(tempFile, java.util.Set.of(
                 java.nio.file.attribute.PosixFilePermission.OWNER_READ,
                 java.nio.file.attribute.PosixFilePermission.OWNER_WRITE));
-            String wrappedCode = wrapCode(code, dataSourceId, conversationId);
-            Files.writeString(tempFile, wrappedCode);
+            String[] wrapped = wrapCode(code, dataSourceId, conversationId);
+            Files.writeString(tempFile, wrapped[0]);
 
             ProcessBuilder pb;
             if ("docker".equals(executionMode)) {
@@ -115,11 +128,13 @@ public class PythonExecutor {
             }
             pb.redirectErrorStream(false);
             pb.environment().put("PYTHONIOENCODING", "utf-8");
+            if (wrapped[1] != null) {
+                pb.environment().put("_SMARTQUERY_DB_URL", wrapped[1]);
+            }
 
             Process process = pb.start();
 
             // Memory monitoring thread for process mode
-            ScheduledExecutorService memoryMonitor = null;
             if (!"docker".equals(executionMode) && maxMemoryMb > 0) {
                 memoryMonitor = startMemoryMonitor(process, maxMemoryMb);
             }
@@ -134,7 +149,7 @@ public class PythonExecutor {
                     while ((line = reader.readLine()) != null) {
                         stdoutBuilder.append(line).append('\n');
                         lineCount++;
-                        if (progressCallback != null && lineCount % 5 == 0) {
+                        if (progressCallback != null && lineCount % progressReportInterval == 0) {
                             int elapsed = (int) (System.currentTimeMillis() - start);
                             progressCallback.accept(stdoutBuilder.toString(), elapsed);
                         }
@@ -148,6 +163,7 @@ public class PythonExecutor {
 
             if (!completed) {
                 process.destroyForcibly();
+                process.waitFor(5, TimeUnit.SECONDS);
                 stdoutReadFuture.cancel(true);
                 stderrFuture.cancel(true);
                 if (memoryMonitor != null) memoryMonitor.shutdownNow();
@@ -180,19 +196,24 @@ public class PythonExecutor {
         } catch (SecurityException e) {
             int elapsed = (int) (System.currentTimeMillis() - start);
             circuitBreaker.recordFailure();
+            if (memoryMonitor != null) memoryMonitor.shutdownNow();
             return PythonResult.error("安全检查未通过: " + e.getMessage(), -3, elapsed);
         } catch (Exception e) {
             int elapsed = (int) (System.currentTimeMillis() - start);
             circuitBreaker.recordFailure();
+            if (memoryMonitor != null) memoryMonitor.shutdownNow();
+            try { Files.deleteIfExists(tempFile); } catch (Exception ignored) {}
             return PythonResult.error("执行异常: " + e.getMessage(), -2, elapsed);
         }
     }
 
     /**
      * 包装用户代码: 注入 DB 连接 + 安全限制
+     * @return [wrappedCode, dbUrl or null]
      */
-    private String wrapCode(String userCode, Long dataSourceId, Long conversationId) {
+    private String[] wrapCode(String userCode, Long dataSourceId, Long conversationId) {
         String executionId = UUID.randomUUID().toString().substring(0, 8);
+        String[] dbUrlHolder = new String[1];
         StringBuilder sb = new StringBuilder();
 
         sb.append("# Auto-generated imports\n");
@@ -251,9 +272,14 @@ public class PythonExecutor {
             DataSource ds = dataSourceMapper.selectById(dataSourceId);
             if (ds != null) {
                 String sqlalchemyUrl = buildSqlalchemyUrl(ds);
-                sb.append("from sqlalchemy import create_engine\n");
-                sb.append("engine = create_engine('").append(sqlalchemyUrl).append("')\n");
+                // Pass DB URL via environment variable instead of embedding in script
+                sb.append("import os\n");
+                sb.append("_db_url = os.environ.get('_SMARTQUERY_DB_URL', '')\n");
+                sb.append("if _db_url:\n");
+                sb.append("    from sqlalchemy import create_engine\n");
+                sb.append("    engine = create_engine(_db_url)\n");
                 sb.append("\n");
+                dbUrlHolder[0] = sqlalchemyUrl;
             }
         }
 
@@ -261,7 +287,7 @@ public class PythonExecutor {
         sb.append(userCode);
         sb.append("\n# === User Code End ===\n");
 
-        return sb.toString();
+        return new String[] { sb.toString(), dbUrlHolder[0] };
     }
 
     private String buildSqlalchemyUrl(DataSource ds) {
@@ -297,11 +323,17 @@ public class PythonExecutor {
     private List<String> extractArtifacts(String stdout) {
         List<String> artifacts = new ArrayList<>();
         if (stdout == null) return artifacts;
+        Path artifactRoot = Path.of(artifactDir).toAbsolutePath();
         for (String line : stdout.split("\n")) {
             if (line.contains("[ARTIFACT]")) {
                 String path = line.substring(line.indexOf("[ARTIFACT]") + 10).trim();
                 if (Files.exists(Path.of(path))) {
-                    artifacts.add(path);
+                    Path resolved = Path.of(path).toAbsolutePath();
+                    if (resolved.startsWith(artifactRoot)) {
+                        artifacts.add(path);
+                    } else {
+                        log.warn("[PYTHON] Artifact path traversal blocked: {}", path);
+                    }
                 }
             }
         }
@@ -332,24 +364,41 @@ public class PythonExecutor {
             try {
                 if (!process.isAlive()) return;
                 long pid = process.pid();
-                Path statusFile = Path.of("/proc/" + pid + "/status");
-                if (Files.exists(statusFile)) {
-                    String status = Files.readString(statusFile);
-                    for (String line : status.split("\n")) {
-                        if (line.startsWith("VmRSS:")) {
-                            long rssKb = Long.parseLong(line.replaceAll("\\D", "").trim());
-                            long rssMb = rssKb / 1024;
-                            if (rssMb > maxMb) {
-                                log.warn("[PYTHON] Process {} exceeded memory limit: {}MB > {}MB, killing",
-                                    pid, rssMb, maxMb);
-                                process.destroyForcibly();
-                            }
-                            break;
-                        }
+                long rssMb = getProcessRssMb(pid);
+                if (rssMb > 0 && rssMb > maxMb) {
+                    log.warn("[PYTHON] Process {} exceeded memory limit: {}MB > {}MB, killing",
+                        pid, rssMb, maxMb);
+                    process.destroyForcibly();
+                }
+            } catch (Exception e) {
+                    log.debug("[PYTHON] Memory monitor check failed: {}", e.getMessage());
+                }
+        }, memMonitorInitialDelaySec, memMonitorPeriodSec, TimeUnit.SECONDS);
+        return monitor;
+    }
+
+    private long getProcessRssMb(long pid) {
+        try {
+            Path statusFile = Path.of("/proc/" + pid + "/status");
+            if (Files.exists(statusFile)) {
+                String status = Files.readString(statusFile);
+                for (String line : status.split("\n")) {
+                    if (line.startsWith("VmRSS:")) {
+                        long rssKb = Long.parseLong(line.replaceAll("\\D", "").trim());
+                        return rssKb / 1024;
                     }
                 }
-            } catch (Exception ignored) {}
-        }, 2, 5, TimeUnit.SECONDS);
-        return monitor;
+            }
+            // macOS fallback: use ps command
+            Process psProc = new ProcessBuilder("ps", "-o", "rss=", "-p", String.valueOf(pid))
+                .redirectErrorStream(true).start();
+            String output = new String(psProc.getInputStream().readAllBytes()).trim();
+            psProc.waitFor(5, TimeUnit.SECONDS);
+            if (!output.isEmpty()) {
+                long rssKb = Long.parseLong(output.split("\\s+")[0]);
+                return rssKb / 1024;
+            }
+        } catch (Exception ignored) {}
+        return 0;
     }
 }

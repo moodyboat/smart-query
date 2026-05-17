@@ -11,6 +11,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -19,6 +20,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Service
 @RequiredArgsConstructor
 public class ModelScheduleService {
+
+    @org.springframework.beans.factory.annotation.Value("${mining.schedule.fallback-minutes:1440}")
+    private int fallbackMinutes;
 
     private final MiningModelMapper miningModelMapper;
     private final MiningService miningService;
@@ -44,7 +48,10 @@ public class ModelScheduleService {
                 continue;
             }
             try {
-                if (!shouldRun(model, now)) continue;
+                if (!shouldRun(model, now)) {
+                    log.debug("[SCHEDULE] Model {} not due yet (nextRun={})", modelId, model.getNextRunAt());
+                    continue;
+                }
                 String mode = model.getScheduleMode();
                 boolean success = true;
                 String errorMsg = null;
@@ -68,7 +75,7 @@ public class ModelScheduleService {
                     }
                     log.info("[SCHEDULE] Running scheduled TRAIN for model: {} (id={})", model.getName(), model.getId());
                     try {
-                        miningService.trainModel(model.getId(), "schedule");
+                        miningService.trainModel(model.getId(), "schedule", model.getPredictInputFilter());
                     } catch (Exception e) {
                         success = false;
                         errorMsg = e.getMessage();
@@ -77,7 +84,13 @@ public class ModelScheduleService {
 
                 model.setLastRunAt(now);
                 model.setNextRunAt(estimateNextRun(model.getScheduleCron(), now));
-                miningModelMapper.updateById(model);
+                // Re-read to get latest version for optimistic lock
+                MiningModel fresh = miningModelMapper.selectById(modelId);
+                if (fresh != null) {
+                    fresh.setLastRunAt(now);
+                    fresh.setNextRunAt(model.getNextRunAt());
+                    miningModelMapper.updateById(fresh);
+                }
 
                 // 记录调度执行事件
                 Map<String, Object> payload = new LinkedHashMap<>();
@@ -110,49 +123,83 @@ public class ModelScheduleService {
     }
 
     private LocalDateTime estimateNextRun(String cron, LocalDateTime from) {
-        long minutes = parseCronToMinutes(cron);
-        return from.plusMinutes(minutes);
-    }
-
-    // Supports: simple minutes "60", "*/60", or standard 5-field cron "0 */2 * * *"
-    private long parseCronToMinutes(String cron) {
-        if (cron == null || cron.isBlank()) return 1440;
+        if (cron == null || cron.isBlank()) return from.plusMinutes(fallbackMinutes);
         String[] parts = cron.trim().split("\\s+");
 
-        // 简单格式: 单个数字或 */N
+        // Simple format: single number or */N
         if (parts.length == 1) {
             try {
                 if (parts[0].startsWith("*/")) {
-                    return Long.parseLong(parts[0].substring(2));
+                    return from.plusMinutes(Long.parseLong(parts[0].substring(2)));
                 }
-                return Long.parseLong(parts[0]);
+                return from.plusMinutes(Long.parseLong(parts[0]));
             } catch (NumberFormatException e) {
-                log.warn("[SCHEDULE] Invalid simple cron '{}', defaulting to 1440 minutes", cron);
-                return 1440;
+                return from.plusMinutes(fallbackMinutes);
             }
         }
 
-        // 标准 5 位 cron: 分 时 日 月 周
+        // Standard 5-field cron: min hour day month dow
         if (parts.length == 5) {
-            try {
-                long minutePart = parseCronField(parts[0], 60);
-                long hourPart = parseCronField(parts[1], 24);
-                if (minutePart > 0 && hourPart == 0) return minutePart;
-                if (hourPart > 0 && minutePart == 0) return hourPart * 60;
-                if (hourPart > 0) return hourPart * 60 + minutePart;
-            } catch (Exception e) {
-                log.warn("[SCHEDULE] Invalid standard cron '{}': {}", cron, e.getMessage());
-            }
+            return calculateNextOccurrence(parts, from);
         }
 
-        return 1440;
+        return from.plusMinutes(fallbackMinutes);
     }
 
-    private long parseCronField(String field, int max) {
-        if ("*".equals(field)) return 0;
-        if (field.startsWith("*/")) {
-            return Long.parseLong(field.substring(2));
+    // Calculate next actual occurrence for standard 5-field cron.
+    // Handles fixed time (0 6 * * *), intervals (* slash N * * * *), specific days.
+    private LocalDateTime calculateNextOccurrence(String[] fields, LocalDateTime from) {
+        try {
+            int targetMinute = resolveCronValue(fields[0], 0, 59);
+            int targetHour = resolveCronValue(fields[1], 0, 23);
+            String dayField = fields[2];
+            String dowField = fields[4];
+
+            // Interval-based: */N in minute field → repeat every N minutes from now
+            if (fields[0].startsWith("*/")) {
+                long interval = Long.parseLong(fields[0].substring(2));
+                return from.plusMinutes(interval);
+            }
+
+            // Interval-based: */N in hour field, minute is 0 → repeat every N hours
+            if (fields[1].startsWith("*/") && targetMinute == 0) {
+                long interval = Long.parseLong(fields[1].substring(2));
+                return from.plusHours(interval);
+            }
+
+            // Fixed time pattern: specific hour and minute
+            if (targetMinute >= 0 && targetMinute <= 59 && targetHour >= 0 && targetHour <= 23) {
+                LocalDateTime next = from.toLocalDate().atTime(targetHour, targetMinute);
+                // If today's time has passed, schedule for tomorrow
+                if (!next.isAfter(from)) {
+                    next = next.plusDays(1);
+                }
+                // Handle specific day-of-month or day-of-week
+                if (!"*".equals(dayField) && !dayField.startsWith("*/")) {
+                    int targetDay = Integer.parseInt(dayField);
+                    while (next.getDayOfMonth() != targetDay) {
+                        next = next.plusDays(1);
+                    }
+                } else if (!"*".equals(dowField)) {
+                    int targetDow = Integer.parseInt(dowField);
+                    // Java DayOfWeek: Monday=1..Sunday=7, cron: Sunday=0, Monday=1..Saturday=6
+                    int javaDow = targetDow == 0 ? 7 : targetDow;
+                    while (next.getDayOfWeek().getValue() != javaDow) {
+                        next = next.plusDays(1);
+                    }
+                }
+                return next;
+            }
+        } catch (Exception e) {
+            log.warn("[SCHEDULE] Failed to calculate next occurrence for cron '{}': {}", String.join(" ", fields), e.getMessage());
         }
-        return Long.parseLong(field);
+        return from.plusMinutes(fallbackMinutes);
+    }
+
+    private int resolveCronValue(String field, int min, int max) {
+        if ("*".equals(field)) return -1;
+        if (field.startsWith("*/")) return -1;
+        int val = Integer.parseInt(field);
+        return (val >= min && val <= max) ? val : -1;
     }
 }

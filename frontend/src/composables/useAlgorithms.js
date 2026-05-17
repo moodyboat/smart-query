@@ -61,7 +61,17 @@ export function useAlgorithms() {
   function getAlgorithmParams(algorithmId) {
     const def = getAlgorithmDef(algorithmId)
     if (!def) return []
-    return parseJson(def.paramsSchema, [])
+    const parsed = parseJson(def.paramsSchema, [])
+    // Handle both flat array format [{key, defaultValue, ...}] and JSON Schema object format
+    if (Array.isArray(parsed)) return parsed
+    if (parsed && typeof parsed === 'object' && parsed.properties) {
+      return Object.entries(parsed.properties).map(([key, schema]) => ({
+        key,
+        type: schema.type === 'integer' ? 'int' : schema.type === 'number' ? 'float' : schema.type,
+        defaultValue: schema.default !== undefined ? schema.default : undefined
+      }))
+    }
+    return []
   }
 
   function getDefaultHyperparams(algorithmId) {

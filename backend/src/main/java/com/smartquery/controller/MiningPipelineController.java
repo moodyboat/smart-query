@@ -28,6 +28,7 @@ public class MiningPipelineController {
     private final MiningModelMapper miningModelMapper;
     private final PipelineService pipelineService;
     private final MiningService miningService;
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
     @GetMapping
     public Result<List<MiningPipeline>> list(
@@ -49,24 +50,44 @@ public class MiningPipelineController {
     }
 
     @PostMapping
-    public Result<MiningPipeline> create(@RequestBody MiningPipeline pipeline) {
-        pipeline.setStatus("draft");
+    public Result<MiningPipeline> create(@RequestBody Map<String, Object> body) {
+        MiningPipeline pipeline = new MiningPipeline();
+        pipeline.setName((String) body.getOrDefault("name", "新流程"));
+        pipeline.setDescription((String) body.get("description"));
+        if (body.get("dataSourceId") != null) {
+            pipeline.setDataSourceId(((Number) body.get("dataSourceId")).longValue());
+        } else {
+            pipeline.setDataSourceId(0L);
+        }
+        try {
+            pipeline.setNodes(objectMapper.writeValueAsString(body.getOrDefault("nodes", List.of())));
+            pipeline.setEdges(objectMapper.writeValueAsString(body.getOrDefault("edges", List.of())));
+        } catch (Exception e) {
+            throw new BusinessException("节点/边数据格式错误: " + e.getMessage());
+        }
+        if (body.get("sourceType") != null) pipeline.setSourceType((String) body.get("sourceType"));
+        pipeline.setStatus(com.smartquery.common.ModelStatus.DRAFT);
         pipeline.setDeleted(0);
         miningPipelineMapper.insert(pipeline);
         return Result.ok(pipeline);
     }
 
     @PutMapping("/{id}")
-    public Result<MiningPipeline> update(@PathVariable Long id, @RequestBody MiningPipeline updates) {
+    public Result<MiningPipeline> update(@PathVariable Long id, @RequestBody Map<String, Object> body) {
         MiningPipeline existing = miningPipelineMapper.selectById(id);
         if (existing == null || Integer.valueOf(1).equals(existing.getDeleted())) {
             throw new BusinessException("流水线不存在: " + id);
         }
-        if (updates.getName() != null) existing.setName(updates.getName());
-        if (updates.getDescription() != null) existing.setDescription(updates.getDescription());
-        if (updates.getNodes() != null) existing.setNodes(updates.getNodes());
-        if (updates.getEdges() != null) existing.setEdges(updates.getEdges());
-        if (updates.getStatus() != null) existing.setStatus(updates.getStatus());
+        if (body.get("name") != null) existing.setName((String) body.get("name"));
+        if (body.get("description") != null) existing.setDescription((String) body.get("description"));
+        if (body.get("status") != null) existing.setStatus((String) body.get("status"));
+        if (body.get("dataSourceId") != null) existing.setDataSourceId(((Number) body.get("dataSourceId")).longValue());
+        try {
+            if (body.get("nodes") != null) existing.setNodes(objectMapper.writeValueAsString(body.get("nodes")));
+            if (body.get("edges") != null) existing.setEdges(objectMapper.writeValueAsString(body.get("edges")));
+        } catch (Exception e) {
+            throw new BusinessException("节点/边数据格式错误: " + e.getMessage());
+        }
         miningPipelineMapper.updateById(existing);
 
         if (existing.getNodes() != null) {
@@ -86,7 +107,7 @@ public class MiningPipelineController {
         if (pipeline == null || Integer.valueOf(1).equals(pipeline.getDeleted())) {
             throw new BusinessException("流水线不存在: " + id);
         }
-        if ("running".equals(pipeline.getStatus())) {
+        if (com.smartquery.common.ModelStatus.EXEC_RUNNING.equals(pipeline.getStatus())) {
             throw new BusinessException("流水线正在运行中，无法删除");
         }
         miningPipelineMapper.update(null,
@@ -115,6 +136,21 @@ public class MiningPipelineController {
             throw new BusinessException("nodeId 不能为空");
         }
         return Result.ok(pipelineService.previewStep(id, nodeId));
+    }
+
+    @GetMapping("/{id}/step-script")
+    public Result<Map<String, Object>> getStepScript(
+            @PathVariable Long id,
+            @RequestParam String nodeId) {
+        if (nodeId == null || nodeId.isBlank()) {
+            throw new BusinessException("nodeId 不能为空");
+        }
+        String script = pipelineService.getStepScript(id, nodeId);
+        script = script.replaceAll("mysql\\+pymysql://([^:]+):[^@]+@", "mysql+pymysql://$1:***@");
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("nodeId", nodeId);
+        result.put("script", script);
+        return Result.ok(result);
     }
 
     @GetMapping("/{id}/sync-status")

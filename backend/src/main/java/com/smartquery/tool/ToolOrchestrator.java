@@ -283,8 +283,9 @@ public class ToolOrchestrator {
     private ToolResult handleExecutionException(ToolCall tc, Throwable ex) {
         Throwable cause = ex instanceof java.util.concurrent.CompletionException ? ex.getCause() : ex;
         String errorType = cause instanceof TimeoutException ? "timeout" : "execution_error";
+        String errorMsg = cause.getMessage() != null ? cause.getMessage() : cause.getClass().getSimpleName();
         eventLogger.logEvent(null, null, "tool_error",
-            Map.of("tool", tc.toolName(), "error", cause.getMessage(), "category", errorType));
+            Map.of("tool", tc.toolName(), "error", errorMsg, "category", errorType));
         if (cause instanceof TimeoutException) {
             return ToolResult.error(tc.toolName(),
                 ToolError.recoverable(ToolError.ErrorCode.TOOL_TIMEOUT,
@@ -292,7 +293,7 @@ public class ToolOrchestrator {
         }
         return ToolResult.error(tc.toolName(),
             ToolError.nonRecoverable(ToolError.ErrorCode.TOOL_ERROR,
-                tc.toolName() + " 执行异常: " + cause.getMessage()), 0);
+                tc.toolName() + " 执行异常: " + errorMsg), 0);
     }
 
     // --- Value types ---

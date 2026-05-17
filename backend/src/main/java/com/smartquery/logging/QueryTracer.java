@@ -1,6 +1,7 @@
 package com.smartquery.logging;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
@@ -17,6 +18,9 @@ public class QueryTracer {
 
     private final ConversationEventLogger eventLogger;
     private final Map<String, TraceContext> traces = new ConcurrentHashMap<>();
+
+    @Value("${tracer.question-truncation:500}")
+    private int questionTruncation;
 
     public QueryTracer(ConversationEventLogger eventLogger) {
         this.eventLogger = eventLogger;
@@ -47,7 +51,7 @@ public class QueryTracer {
 
         // JSONL: 记录 trace 开始
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("question", question.substring(0, Math.min(question.length(), 500)));
+        payload.put("question", question.substring(0, Math.min(question.length(), questionTruncation)));
         eventLogger.logEvent(conversationId, traceId, "trace_start", payload);
 
         return traceId;

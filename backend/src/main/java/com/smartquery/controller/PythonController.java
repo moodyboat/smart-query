@@ -53,25 +53,27 @@ public class PythonController {
         PythonResult result = pythonExecutor.execute(code, dataSourceId, timeoutMs, conversationId);
 
         // 持久化
-        PythonExecution execution = new PythonExecution();
-        execution.setConversationId(conversationId);
-        execution.setCode(code);
-        execution.setStdout(result.stdout());
-        execution.setStderr(result.stderr());
-        execution.setExitCode(result.exitCode());
-        execution.setExecutionTimeMs(result.executionTimeMs());
-        execution.setStatus(result.exitCode() == 0 ? "success" : "error");
-        execution.setDataSourceId(dataSourceId);
-        pythonExecutionMapper.insert(execution);
+        try {
+            PythonExecution execution = new PythonExecution();
+            execution.setConversationId(conversationId);
+            execution.setCode(code);
+            execution.setStdout(result.stdout());
+            execution.setStderr(result.stderr());
+            execution.setExitCode(result.exitCode());
+            execution.setExecutionTimeMs(result.executionTimeMs());
+            execution.setStatus(result.exitCode() == 0 ? "success" : "error");
+            execution.setDataSourceId(dataSourceId);
+            pythonExecutionMapper.insert(execution);
+        } catch (Exception e) {
+            log.warn("[PYTHON] Failed to persist execution record: {}", e.getMessage());
+        }
 
         Map<String, Object> response = new LinkedHashMap<>();
-        response.put("executionId", execution.getId());
         response.put("exitCode", result.exitCode());
         response.put("stdout", result.stdout());
         response.put("stderr", result.stderr());
         response.put("executionTimeMs", result.executionTimeMs());
         response.put("artifacts", result.artifacts());
-        response.put("status", execution.getStatus());
 
         return Result.ok(response);
     }
@@ -100,26 +102,28 @@ public class PythonController {
         PythonResult result = pythonExecutor.execute(code, previous.getDataSourceId(), timeoutMs, previous.getConversationId());
 
         // 持久化新执行记录
-        PythonExecution execution = new PythonExecution();
-        execution.setConversationId(previous.getConversationId());
-        execution.setCode(code);
-        execution.setStdout(result.stdout());
-        execution.setStderr(result.stderr());
-        execution.setExitCode(result.exitCode());
-        execution.setExecutionTimeMs(result.executionTimeMs());
-        execution.setStatus(result.exitCode() == 0 ? "success" : "error");
-        execution.setDataSourceId(previous.getDataSourceId());
-        pythonExecutionMapper.insert(execution);
+        try {
+            PythonExecution execution = new PythonExecution();
+            execution.setConversationId(previous.getConversationId());
+            execution.setCode(code);
+            execution.setStdout(result.stdout());
+            execution.setStderr(result.stderr());
+            execution.setExitCode(result.exitCode());
+            execution.setExecutionTimeMs(result.executionTimeMs());
+            execution.setStatus(result.exitCode() == 0 ? "success" : "error");
+            execution.setDataSourceId(previous.getDataSourceId());
+            pythonExecutionMapper.insert(execution);
+        } catch (Exception e) {
+            log.warn("[PYTHON] Failed to persist rerun record: {}", e.getMessage());
+        }
 
         Map<String, Object> response = new LinkedHashMap<>();
-        response.put("executionId", execution.getId());
         response.put("previousExecutionId", id);
         response.put("exitCode", result.exitCode());
         response.put("stdout", result.stdout());
         response.put("stderr", result.stderr());
         response.put("executionTimeMs", result.executionTimeMs());
         response.put("artifacts", result.artifacts());
-        response.put("status", execution.getStatus());
 
         return Result.ok(response);
     }

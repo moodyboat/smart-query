@@ -27,6 +27,9 @@ public class AgentTaskExecutor {
     @Value("${agent-task.timeout-minutes:10}")
     private int timeoutMinutes;
 
+    @Value("${agent-task.shutdown-timeout-seconds:30}")
+    private int shutdownTimeoutSeconds;
+
     public AgentTaskExecutor(ReActEngine reActEngine) {
         this.reActEngine = reActEngine;
     }
@@ -45,7 +48,7 @@ public class AgentTaskExecutor {
     void shutdown() {
         executor.shutdown();
         try {
-            if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {
+            if (!executor.awaitTermination(shutdownTimeoutSeconds, TimeUnit.SECONDS)) {
                 executor.shutdownNow();
             }
         } catch (InterruptedException e) {
@@ -65,16 +68,17 @@ public class AgentTaskExecutor {
      * 执行单个子任务，指定超时
      */
     public AgentResult execute(AgentTask task, int timeoutMinutes) {
+        int queueTimeout = Math.max(1, timeoutMinutes / 2);
         boolean acquired;
         try {
-            acquired = concurrencyLimiter.tryAcquire(timeoutMinutes, TimeUnit.MINUTES);
+            acquired = concurrencyLimiter.tryAcquire(queueTimeout, TimeUnit.MINUTES);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return AgentResult.failure(task.taskId(), "任务等待被中断", 0);
         }
         if (!acquired) {
             return AgentResult.failure(task.taskId(),
-                "子任务排队超时（等待超过 " + timeoutMinutes + " 分钟）", 0);
+                "子任务排队超时（等待超过 " + queueTimeout + " 分钟）", 0);
         }
 
         Future<AgentResult> future = executor.submit(() -> runTask(task));
@@ -101,12 +105,14 @@ public class AgentTaskExecutor {
      * 并行执行多个子任务，通过事件消费者实时上报进度
      */
     public List<AgentResult> executeAll(List<AgentTask> tasks, Consumer<ReActEvent> progressConsumer) {
+        int queueTimeout = Math.max(1, timeoutMinutes / 2);
         List<Future<AgentResult>> futures = new ArrayList<>();
-        for (AgentTask task : tasks) {
+        for (int i = 0; i < tasks.size(); i++) {
+            final AgentTask task = tasks.get(i);
             futures.add(executor.submit(() -> {
                 boolean acquired = false;
                 try {
-                    acquired = concurrencyLimiter.tryAcquire(timeoutMinutes, TimeUnit.MINUTES);
+                    acquired = concurrencyLimiter.tryAcquire(queueTimeout, TimeUnit.MINUTES);
                     if (!acquired) {
                         return AgentResult.failure(task.taskId(), "排队超时", 0);
                     }
@@ -121,11 +127,12 @@ public class AgentTaskExecutor {
         }
 
         List<AgentResult> results = new ArrayList<>();
-        for (Future<AgentResult> f : futures) {
+        for (int i = 0; i < futures.size(); i++) {
             try {
-                results.add(f.get(timeoutMinutes, TimeUnit.MINUTES));
+                results.add(futures.get(i).get(timeoutMinutes, TimeUnit.MINUTES));
             } catch (Exception e) {
-                results.add(AgentResult.failure("unknown", e.getMessage(), 0));
+                String taskId = i < tasks.size() ? tasks.get(i).taskId() : "unknown";
+                results.add(AgentResult.failure(taskId, e.getMessage(), 0));
             }
         }
         return results;
@@ -144,14 +151,16 @@ public class AgentTaskExecutor {
             String model = task.model() != null ? task.model() : "default";
             List<Map<String, Object>> emptyHistory = List.of();
 
-            Consumer<ReActEvent> wrappedConsumer = event -> {
-                if (progressConsumer != null) {
-                    progressConsumer.accept(event);
-                }
-            };
+            // Set context for sub-task thread — ConversationContextHolder + DataSourceContextHolder
+            Object convId = task.context().get("conversationId");
+            if (convId instanceof Long cid) {
+                ConversationContextHolder.setConversationId(cid);
+            }
+            if (task.dataSourceId() != null) {
+                com.smartquery.datasource.DataSourceContextHolder.set(task.dataSourceId());
+            }
 
             List<ReActEvent> events = reActEngine.runReActLoop(
-                task.dataSourceId(),
                 model,
                 task.dataSourceId(),
                 task.prompt(),
@@ -160,7 +169,6 @@ public class AgentTaskExecutor {
             );
 
             StringBuilder output = new StringBuilder();
-            Map<String, Object> artifacts = new HashMap<>();
             int tokens = 0;
 
             for (ReActEvent event : events) {
@@ -178,12 +186,15 @@ public class AgentTaskExecutor {
             task.setStatus(TaskState.COMPLETED);
             log.info("[AGENT-TASK] Task '{}' completed in {}ms, {} tokens", task.taskId(), duration, tokens);
 
-            return AgentResult.success(task.taskId(), output.toString(), artifacts, duration, tokens);
+            return AgentResult.success(task.taskId(), output.toString(), Map.of(), duration, tokens);
         } catch (Exception e) {
             long duration = System.currentTimeMillis() - start;
             task.setStatus(TaskState.FAILED);
             log.error("[AGENT-TASK] Task '{}' failed: {}", task.taskId(), e.getMessage());
             return AgentResult.failure(task.taskId(), e.getMessage(), duration);
+        } finally {
+            ConversationContextHolder.clear();
+            com.smartquery.datasource.DataSourceContextHolder.clear();
         }
     }
 

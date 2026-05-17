@@ -24,7 +24,7 @@ public class AgentTask {
     private final List<String> blockedBy;
     private final List<String> blocks;
 
-    private TaskState status = TaskState.PENDING;
+    private volatile TaskState status = TaskState.PENDING;
 
     public AgentTask(String taskId, String prompt, List<String> toolNames,
                      Map<String, Object> context, Long dataSourceId,
@@ -54,6 +54,13 @@ public class AgentTask {
         return new AgentTask(taskId, prompt, toolNames, Map.of(), dataSourceId, null,
             blockedBy != null ? blockedBy : List.of(),
             blocks != null ? blocks : List.of());
+    }
+
+    public static AgentTask of(String taskId, String prompt, List<String> toolNames, Long dataSourceId,
+                               Long conversationId) {
+        Map<String, Object> ctx = new java.util.HashMap<>();
+        if (conversationId != null) ctx.put("conversationId", conversationId);
+        return new AgentTask(taskId, prompt, toolNames, Map.copyOf(ctx), dataSourceId, null, List.of(), List.of());
     }
 
     // --- Getters ---

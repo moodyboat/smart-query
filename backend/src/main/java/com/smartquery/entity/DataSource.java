@@ -1,5 +1,6 @@
 package com.smartquery.entity;
 
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -18,6 +19,9 @@ public class DataSource extends BaseEntity {
     private String password;
     private String extraConfig;
     private Integer status;
+
+    @TableField(exist = false)
+    private Boolean system;
 
     public String getJdbcUrl() {
         return switch (type) {

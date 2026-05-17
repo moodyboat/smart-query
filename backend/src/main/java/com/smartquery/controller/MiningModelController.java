@@ -1,6 +1,7 @@
 package com.smartquery.controller;
 
 import com.smartquery.common.BusinessException;
+import com.smartquery.common.ModelStatus;
 import com.smartquery.common.RateLimiter;
 import com.smartquery.common.Result;
 import com.smartquery.datasource.DataSourceManager;
@@ -37,6 +38,10 @@ public class MiningModelController {
     private int trainPollIntervalMs;
     @org.springframework.beans.factory.annotation.Value("${smart-query.mining.status-stream-timeout-ms:120000}")
     private long statusStreamTimeoutMs;
+    @org.springframework.beans.factory.annotation.Value("${smart-query.mining.rate-train:5}")
+    private int rateTrain;
+    @org.springframework.beans.factory.annotation.Value("${smart-query.mining.rate-predict:20}")
+    private int ratePredict;
     private final MiningService miningService;
     private final DataSourceManager dataSourceManager;
     private final ConversationEventLogger eventLogger;
@@ -74,6 +79,7 @@ public class MiningModelController {
 
     @PostMapping
     public Result<MiningModel> create(@RequestBody MiningModel model) {
+        if (model.getSource() == null) model.setSource("manual");
         return Result.ok(miningService.createModel(model));
     }
 
@@ -82,13 +88,28 @@ public class MiningModelController {
         return Result.ok(miningService.updateModel(id, updates));
     }
 
+    @PutMapping("/{id}/predict-config")
+    public Result<MiningModel> updatePredictConfig(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        MiningModel model = miningModelMapper.selectById(id);
+        if (model == null || Integer.valueOf(1).equals(model.getDeleted())) {
+            throw new BusinessException("模型不存在: " + id);
+        }
+        miningModelMapper.update(null,
+            new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<MiningModel>()
+                .eq(MiningModel::getId, id)
+                .set(MiningModel::getPredictInputTable, body.get("predictInputTable"))
+                .set(MiningModel::getPredictInputFilter, body.get("predictInputFilter"))
+                .set(MiningModel::getPredictResultTable, body.get("predictResultTable")));
+        return Result.ok(miningModelMapper.selectById(id));
+    }
+
     @DeleteMapping("/{id}")
     public Result<Void> delete(@PathVariable Long id) {
         MiningModel model = miningModelMapper.selectById(id);
         if (model == null || Integer.valueOf(1).equals(model.getDeleted())) {
             throw new BusinessException("模型不存在: " + id);
         }
-        if ("training".equals(model.getStatus())) {
+        if (ModelStatus.TRAINING.equals(model.getStatus())) {
             throw new BusinessException("模型正在训练中，无法删除");
         }
         miningModelMapper.update(null,
@@ -100,7 +121,7 @@ public class MiningModelController {
 
     @PostMapping("/{id}/train")
     public Result<MiningModel> train(@PathVariable Long id) {
-        if (!rateLimiter.tryAcquire("train", 5)) {
+        if (!rateLimiter.tryAcquire("train", rateTrain)) {
             throw new BusinessException(429, "训练请求过于频繁，请稍后重试");
         }
         return Result.ok(miningService.trainModel(id, "manual"));
@@ -169,11 +190,15 @@ public class MiningModelController {
     }
 
     @PostMapping("/{id}/batch-predict")
-    public Result<Map<String, Object>> batchPredict(@PathVariable Long id) {
-        if (!rateLimiter.tryAcquire("predict", 20)) {
+    public Result<Map<String, Object>> batchPredict(@PathVariable Long id,
+            @RequestBody(required = false) Map<String, Object> body) {
+        if (!rateLimiter.tryAcquire("predict", ratePredict)) {
             throw new BusinessException(429, "预测请求过于频繁，请稍后重试");
         }
-        return Result.ok(miningService.batchPredict(id));
+        String overrideTable = body != null ? (String) body.get("inputTable") : null;
+        String overrideResult = body != null ? (String) body.get("resultTable") : null;
+        String overrideFilter = body != null ? (String) body.get("inputFilter") : null;
+        return Result.ok(miningService.batchPredictWithOverrides(id, overrideTable, overrideResult, overrideFilter));
     }
 
     @GetMapping("/{id}/validate")
@@ -241,7 +266,7 @@ public class MiningModelController {
         return Result.ok(eventLogger.getConversationTrace(model.getConversationId()));
     }
 
-    private final ExecutorService sseExecutor = Executors.newCachedThreadPool(r -> {
+    private final ExecutorService sseExecutor = Executors.newFixedThreadPool(20, r -> {
         Thread t = new Thread(r, "model-sse");
         t.setDaemon(true);
         return t;
@@ -265,7 +290,7 @@ public class MiningModelController {
                     String status = model.getStatus();
                     if (lastStatus == null) lastStatus = status;
 
-                    if (!status.equals(lastStatus) || "trained".equals(status) || "failed".equals(status) || "published".equals(status)) {
+                    if (!status.equals(lastStatus) || com.smartquery.common.ModelStatus.TRAINED.equals(status) || com.smartquery.common.ModelStatus.FAILED.equals(status) || com.smartquery.common.ModelStatus.PUBLISHED.equals(status)) {
                         Map<String, Object> data = new java.util.LinkedHashMap<>();
                         data.put("type", "model_status");
                         data.put("modelId", id);
@@ -273,7 +298,7 @@ public class MiningModelController {
                         data.put("metrics", model.getMetrics());
                         emitter.send(SseEmitter.event().data(
                             new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(data)));
-                        if ("trained".equals(status) || "failed".equals(status) || "published".equals(status)) {
+                        if (com.smartquery.common.ModelStatus.TRAINED.equals(status) || com.smartquery.common.ModelStatus.FAILED.equals(status) || com.smartquery.common.ModelStatus.PUBLISHED.equals(status)) {
                             break;
                         }
                     }
@@ -281,7 +306,9 @@ public class MiningModelController {
                     Thread.sleep(trainPollIntervalMs);
                 }
             } catch (Exception e) {
-                // client disconnected or timeout, normal
+                if (!(e instanceof java.io.IOException)) {
+                    log.warn("[SSE] status-stream error for model {}: {}", id, e.getMessage());
+                }
             } finally {
                 emitter.complete();
             }

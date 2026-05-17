@@ -19,6 +19,8 @@ public class MiningModel {
     private Long dataSourceId;
     private Long conversationId;
 
+    private String source;
+
     private String modelType;
     private String algorithm;
 

@@ -9,4 +9,12 @@ public final class ModelStatus {
     public static final String PUBLISHED = "published";
     public static final String FAILED = "failed";
     public static final String OFFLINE = "offline";
+
+    // Execution status
+    public static final String EXEC_RUNNING = "running";
+    public static final String EXEC_SUCCESS = "success";
+
+    // Pipeline status
+    public static final String PIPELINE_READY = "ready";
+    public static final String PIPELINE_COMPLETED = "completed";
 }

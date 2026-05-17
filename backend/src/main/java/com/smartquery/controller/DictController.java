@@ -15,6 +15,8 @@ import java.util.*;
 @RequiredArgsConstructor
 public class DictController {
 
+    private static final String SYSTEM_TABLE_PREFIX = "sq_";
+
     private final DataDictMapper dataDictMapper;
     private final DataSourceManager dataSourceManager;
 
@@ -38,15 +40,14 @@ public class DictController {
         Map<String, String> tableComments = new LinkedHashMap<>();
         jdbc.queryForList(
             "SELECT TABLE_NAME, TABLE_COMMENT FROM information_schema.TABLES " +
-            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME NOT LIKE 'sq_%' " +
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME NOT LIKE '" + SYSTEM_TABLE_PREFIX + "%' " +
             "AND TABLE_NAME NOT LIKE 'flyway_%'")
             .forEach(row -> tableComments.put((String) row.get("TABLE_NAME"), (String) row.get("TABLE_COMMENT")));
 
-        // 查询字段信息
         List<Map<String, Object>> columns = jdbc.queryForList(
             "SELECT TABLE_NAME, COLUMN_NAME, COLUMN_COMMENT, COLUMN_TYPE " +
             "FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() " +
-            "AND TABLE_NAME NOT LIKE 'sq_%' AND TABLE_NAME NOT LIKE 'flyway_%' " +
+            "AND TABLE_NAME NOT LIKE '" + SYSTEM_TABLE_PREFIX + "%' AND TABLE_NAME NOT LIKE 'flyway_%' " +
             "ORDER BY TABLE_NAME, ORDINAL_POSITION");
 
         int count = 0;
@@ -66,7 +67,7 @@ public class DictController {
         // 采样每张表的示例值
         List<String> tables = jdbc.queryForList(
             "SELECT DISTINCT TABLE_NAME FROM information_schema.COLUMNS " +
-            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME NOT LIKE 'sq_%' " +
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME NOT LIKE '" + SYSTEM_TABLE_PREFIX + "%' " +
             "AND TABLE_NAME NOT LIKE 'flyway_%'", String.class);
 
         for (String table : tables) {

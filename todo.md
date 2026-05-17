@@ -710,3 +710,113 @@
 
 **执行顺序**: ARCH-15 ✅ → PROMPT-5 ✅ → LOG-9 ✅ → AGENT-6 ✅ → PARA-9 ✅ → QDM-1 ✅ → QDM-2 ✅ → QDM-3 ✅ → QDM-4 ✅ → FLOW-8 ✅ → FLOW-9 ✅
 **原则**: 彻底完成一个，编译/构建验证通过，再做下一个。每个完成后在对应项打 ✅
+
+---
+
+## 第十一轮 ✅ — 对比 claude-code-sourcemap 差距优化 + 特征工程增强 (2026-05-15)
+
+### 特征工程增强 (用户需求)
+- [x] **FEAT-BIN** 分箱4种策略: 等宽(pd.cut) / 等频(pd.qcut) / 最优(DecisionTree) / 自定义边界
+- [x] **FEAT-POLY** 多项式特征 (PolynomialFeatures, degree 2-4)
+- [x] **FEAT-DATE** 日期特征提取 (年/月/日/星期/季度)
+- [x] **FEAT-TE** 目标编码 (Target Encoding, 高基数分类特征)
+- [x] **FEAT-FREQ** 频率编码 (Frequency Encoding)
+- [x] 前端 PipelineEditor 变换下拉菜单分组 (数值变换/分箱/编码/日期)
+- [x] appendTransformsBlock 抽取独立方法, preview 和执行共用
+- [x] 等频分箱端到端测试通过 (loan表 credit_score+loan_amount, 准确率82.0%)
+
+### 5维差距优化 (对比 claude-code-sourcemap)
+- [x] **ARCH-16** Prompt 缓存系统 — ToolPromptLoader CachedPrompt ConcurrentHashMap, 5分钟TTL
+- [x] **LOG-10** 日志敏感数据过滤 — ConversationEventLogger sanitizePayload, 过滤密码/Token/API Key/连接串
+- [x] **PERF-1** 诊断计时包装器 — DiagnosticsTimer.timedSupply 包装 mining.train + pipeline.execute
+- [x] **PERF-2** /admin/diagnostics 端点 — 返回所有操作的调用次数/总耗时/最大最小/平均
+- [x] **ARCH-17** 会话持久化与崩溃恢复 — SessionManager 文件级存储 ~/.smartquery/sessions/{id}.json, 重启自动恢复
+- [x] **ARCH-18** 分层速率限制 — RateLimiter.tryAcquireTiered(全局+用户+操作 三层检查)
+
+---
+
+## 第十二轮 — 5维深度差距修复 (2026-05-15)
+
+> 审计发现: RateLimiter竞态、LLM无超时、ThreadLocal泄漏、JSONL无限增长、训练阻塞对话线程、会话文件非原子写入
+
+### 1. 模式 (Architecture Patterns)
+- [x] **ARCH-19** RateLimiter竞态修复 — tryAcquireTiered内部多次计数问题，改为单次原子检查
+- [x] **ARCH-20** 会话文件原子写入 — 先写临时文件再rename，防止部分写入损坏
+- [x] **ARCH-21** ThreadLocal保证清理 — try-finally + ReActEngine异常路径补全clear()
+
+### 2. 提示词管理
+- [x] **PROMPT-6** Schema上下文缓存 — SchemaContextBuilder ConcurrentHashMap缓存5分钟TTL
+- [x] **PROMPT-7** Prompt缓存统计 — diagnostics端点暴露promptCache+schemaCache+activeSessions
+
+### 3. 日志管理
+- [x] **LOG-11** JSONL写入时大小检查 — logEvent时检查文件大小，超50MB自动轮转(rename+新建)
+- [x] **LOG-12** 统一TraceID传播 — ConversationContextHolder增加traceId ThreadLocal，ChatController生成UUID
+
+### 4. 多智能体管理
+- [x] **AGENT-7** Coordinator DAG环检测 — Kahn算法拓扑排序，执行前检测循环依赖
+- [x] **AGENT-8** AgentTask状态追踪 — TaskState enum + AgentTask可变status + Executor状态转换
+
+### 5. 多对话并行管理
+- [x] **PARA-10** 训练独立线程池 — MiningThreadPoolConfig(miningExecutor) + MiningService/MiningModelTool共享线程池
+- [x] **PARA-11** LLM调用超时保护 — ReActEngine CompletableFuture.get(timeout) + TimeoutException处理
+- [x] **PARA-12** 会话超时自动清理 — SessionManager定时扫描，超30分钟未活动自动注销
+
+**执行顺序**: ARCH-19 → ARCH-20 → ARCH-21 → PROMPT-6 → PROMPT-7 → LOG-11 → LOG-12 → AGENT-7 → AGENT-8 → PARA-10 → PARA-11 → PARA-12
+**原则**: 逐个完成，每个编译验证+确认代码正确，再做下一个
+
+---
+
+## 第十三轮 — 配置外部化 + Circuit Breaker + 多智能体真实集成 (2026-05-15)
+
+> 审计发现: ReActEngine关键常量硬编码、Coordinator从未被实际调用、Python执行无熔断保护、ContextCompactor模型硬编码、SSE/工具超时硬编码
+
+### 1. 模式 (Architecture Patterns)
+- [x] **ARCH-22** ReActEngine常量外部化 — MAX_TURNS/MAX_TOKEN_BUDGET/MICRO_COMPACT_THRESHOLD/COMPACT_THRESHOLD 移到 application.yml
+- [x] **ARCH-23** Coordinator真实集成 — Coordinator注入MiningService，可用于多智能体协作场景
+- [x] **ARCH-24** DataSourceManager连接池清理 — cleanupStalePools()淘汰空闲/关闭连接池
+
+### 2. 提示词管理
+- [x] **PROMPT-8** ContextCompactor模型可配置 — SUMMARIZATION_MODEL "glm-4" 硬编码改为配置
+- [x] **PROMPT-9** Prompt调试端点 — GET /admin/prompts 返回当前缓存状态
+
+### 3. 日志管理
+- [x] **LOG-13** LLM调用遥测事件 — ReActEngine每次LLM调用记录model/durationMs/turn到statsService
+- [x] **LOG-14** 增强admin/stats实时数据 — 返回JVM内存、线程数、活跃会话数、活跃对话数
+
+### 4. 多智能体管理
+- [x] **AGENT-9** Coordinator注入MiningService — 可通过getCoordinator()在多智能体协作时使用
+- [ ] **AGENT-10** 子任务进度实时上报 — AgentTaskExecutor执行时通过progressConsumer推送中间事件
+
+### 5. 多对话并行管理
+- [x] **PARA-13** Python执行Circuit Breaker — PythonCircuitBreaker: 连续5次失败熔断，60秒恢复
+- [x] **PARA-14** 超时值外部化 — SSE/ToolOrchestrator/AgentTaskExecutor/ReActEngine 全部@Value配置化
+- [x] **PARA-15** ToolOrchestrator工具重试 — 工具执行失败自动重试(最多2次，指数退避)
+
+**执行顺序**: ARCH-22 → PARA-14 → PROMPT-8 → PARA-13 → ARCH-23 → AGENT-9 → AGENT-10 → LOG-13 → LOG-14 → PROMPT-9 → ARCH-24 → PARA-15
+**原则**: 逐个完成，每个编译验证+确认代码正确，再做下一个
+
+---
+
+## 第十四轮 — 硬编码清剿 + 配置统一 + 安全补全 (2026-05-15)
+
+> 审计发现: PipelineService仍有硬编码超时/参数、ExecuteSqlTool超时硬编码、ChatController限流值硬编码、ReActEngine空指针风险
+
+### 1. 模式 (Architecture Patterns)
+- [ ] **ARCH-25** PipelineService超时外部化 — 执行超时600000ms + 预览超时120000ms → @Value
+- [ ] **ARCH-26** PipelineService默认参数外部化 — cv_folds=5, test_size=0.2, bins=5, sample_rows=10 → @Value
+
+### 2. 提示词管理
+- [ ] **PROMPT-10** application.yml配置补全 — 所有新@Value属性写入yml，含注释说明
+
+### 3. 日志管理
+- [ ] **LOG-15** ExecuteSqlTool超时外部化 — setQueryTimeout(30) → @Value("${sql.query-timeout-seconds:30}")
+
+### 4. 多智能体管理
+- [ ] **AGENT-11** ReActEngine空指针防护 — tr.data().get(0) 添加null/empty检查
+
+### 5. 多对话并行管理
+- [ ] **PARA-16** ChatController限流值外部化 — tryAcquireWithInfo("chat:" + id, 30) → @Value
+- [ ] **PARA-17** application.yml重复python配置修复 — 合并两段python配置
+
+**执行顺序**: ARCH-25 → ARCH-26 → LOG-15 → PARA-16 → AGENT-11 → PARA-17 → PROMPT-10
+**原则**: 逐个完成，每个编译验证+确认代码正确，再做下一个

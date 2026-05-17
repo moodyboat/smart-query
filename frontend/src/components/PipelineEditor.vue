@@ -56,7 +56,7 @@
         </div>
         <div v-if="linkedModel" style="display: flex; align-items: center; gap: 4px; margin-left: 8px;">
           <span style="font-size: 12px; color: var(--text-muted);">关联模型:</span>
-          <el-tag size="small" type="success">{{ linkedModel.name }}</el-tag>
+          <el-tag size="small" type="success" style="cursor: pointer" @click="emit('goToModel', linkedModel.id)">{{ linkedModel.name }}</el-tag>
         </div>
         <el-tooltip v-if="syncStatus && !syncStatus.inSync" :content="syncStatus.reason || '模型与流程未同步'" placement="bottom">
           <el-tag type="warning" size="small" effect="plain" style="margin-left: 8px; cursor: pointer">未同步</el-tag>
@@ -161,9 +161,21 @@
                     </el-dropdown>
                   </div>
                   <div class="node-summary">{{ nodeSummary(node) }}</div>
-                  <el-button v-if="previewResult?.nodeId === node.id" size="small" text type="primary" class="node-preview-link" @click.stop="showPreviewPanel(node.id)">
-                    {{ previewResult.status === 'success' ? '查看试运行结果' : '查看错误' }}
-                  </el-button>
+                  <div v-if="isNodeConfigured(node) || previewResult?.nodeId === node.id" class="node-actions-bar">
+                    <el-button v-if="isNodeConfigured(node)" size="small" text type="primary"
+                      :loading="previewingNodeId === node.id"
+                      @click.stop="previewStep(node.id)">
+                      {{ previewingNodeId === node.id ? '运行中...' : '▶ 试运行' }}
+                    </el-button>
+                    <el-button v-if="isNodeConfigured(node)" size="small" text type="info"
+                      :loading="scriptLoading"
+                      @click.stop="viewScript(node.id)">
+                      查看脚本
+                    </el-button>
+                    <el-button v-if="previewResult?.nodeId === node.id && previewingNodeId !== node.id" size="small" text type="success" @click.stop="showPreviewPanel(node.id)">
+                      查看结果
+                    </el-button>
+                  </div>
                 </div>
               </div>
 
@@ -208,12 +220,15 @@
           <span>·</span>
           <span>表: {{ lastRunResult.sourceTable }}</span>
         </div>
+        <div v-if="lastRunResult.output_table" class="results-meta" style="margin-top: 4px; color: var(--el-color-success)">
+          <span>输出: {{ lastRunResult.output_table }} ({{ lastRunResult.output_rows || 0 }} 行)</span>
+        </div>
         <div v-if="topFeatures.length" class="results-features">
           <span class="rf-title">Top 特征:</span>
           <div class="rf-bars">
             <div v-for="(f, i) in topFeatures" :key="i" class="rf-bar-row">
               <span class="rf-name">{{ f.name }}</span>
-              <div class="rf-track"><div class="rf-fill" :style="{ width: (f.value / topFeatures[0].value * 100) + '%' }"></div></div>
+              <div class="rf-track"><div class="rf-fill" :style="{ width: (topFeatures[0].value ? (f.value / topFeatures[0].value * 100) : 0) + '%' }"></div></div>
               <span class="rf-val">{{ (f.value * 100).toFixed(1) }}%</span>
             </div>
           </div>
@@ -271,18 +286,69 @@
           <!-- Preprocessing Preview -->
           <template v-if="(previewResult.nodeType === 'preprocessing' || previewResult.nodeType === 'fill_missing') && previewResult.status === 'success'">
             <div class="preview-stats">
+              <div class="preview-stat"><span class="ps-value">{{ previewResult.beforeRows || '-' }}</span><span class="ps-label">处理前行数</span></div>
               <div class="preview-stat"><span class="ps-value">{{ previewResult.rowCount }}</span><span class="ps-label">处理后行数</span></div>
+              <div class="preview-stat">
+                <span class="ps-value">{{ previewResult.beforeRows && previewResult.rowCount ? (previewResult.beforeRows - previewResult.rowCount) : 0 }}</span>
+                <span class="ps-label">删除行数</span>
+              </div>
               <div class="preview-stat"><span class="ps-value">{{ previewResult.columnCount }}</span><span class="ps-label">列数</span></div>
             </div>
-            <div v-if="previewResult.remainingNulls && Object.keys(previewResult.remainingNulls).length" class="preview-section">
-              <div class="preview-section-title">剩余缺失值</div>
-              <div v-for="(cnt, col) in previewResult.remainingNulls" :key="col" class="preview-null-row">
-                <span>{{ col }}</span><span>{{ cnt }} 个缺失</span>
+
+            <!-- Null summary with before/after -->
+            <div v-if="previewResult.beforeNulls" class="preview-section">
+              <div class="preview-section-title">缺失值概览</div>
+              <div class="preview-null-grid">
+                <template v-for="(cnt, col) in previewResult.beforeNulls" :key="col">
+                  <div v-if="cnt > 0" class="preview-null-row">
+                    <span class="pnr-col">{{ col }}</span>
+                    <span class="pnr-before">{{ cnt }} 个缺失</span>
+                    <span class="pnr-after" :class="{ resolved: !previewResult.remainingNulls?.[col] }">
+                      {{ previewResult.remainingNulls?.[col] ?? 0 }} 个剩余
+                    </span>
+                  </div>
+                </template>
+                <div v-if="!Object.values(previewResult.beforeNulls).some(v => v > 0)" class="preview-null-clean">
+                  所有列均无缺失值
+                </div>
               </div>
             </div>
-            <div v-else class="preview-section">
-              <el-tag type="success" size="small">无缺失值</el-tag>
+            <div v-if="previewResult.nullComparison?.length" class="preview-section">
+              <div class="preview-section-title">缺失值处理效果 (before → after)</div>
+              <div v-for="nc in previewResult.nullComparison" :key="nc.name" class="preview-null-row">
+                <span>{{ nc.name }}</span>
+                <span :style="{ color: nc.after === 0 ? '#67c23a' : '#e6a23c' }">{{ nc.before }} → {{ nc.after }}</span>
+              </div>
             </div>
+
+            <!-- Column strategies applied -->
+            <div v-if="previewResult.columnStrategies && Object.keys(previewResult.columnStrategies).length" class="preview-section">
+              <div class="preview-section-title">逐列策略</div>
+              <div class="preview-tags">
+                <el-tag v-for="(strategy, col) in previewResult.columnStrategies" :key="col" size="small" type="info" class="feat-tag">
+                  {{ col }}: {{ { fill_mean: '均值', fill_median: '中位数', fill_mode: '众数', drop: '删除行', none: '不处理' }[strategy] || strategy }}
+                </el-tag>
+              </div>
+            </div>
+
+            <!-- Column types after processing -->
+            <div v-if="previewResult.columns?.length" class="preview-section">
+              <div class="preview-section-title">处理后列信息</div>
+              <div class="preview-table-wrap" style="max-height: 200px; overflow-y: auto;">
+                <table class="preview-table">
+                  <thead><tr><th>列名</th><th>类型</th><th>缺失</th><th>缺失率</th></tr></thead>
+                  <tbody>
+                    <tr v-for="col in previewResult.columns" :key="col.name">
+                      <td>{{ col.name }}</td>
+                      <td>{{ col.dtype }}</td>
+                      <td>{{ col.nulls }}</td>
+                      <td :style="{ color: col.nullPct > 0 ? '#e6a23c' : 'inherit' }">{{ col.nullPct }}%</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
             <div v-if="previewResult.sampleRows?.length" class="preview-section">
               <div class="preview-section-title">处理后样本 (前10行)</div>
               <div class="preview-table-wrap">
@@ -305,6 +371,38 @@
               <div class="preview-section-title">目标列分布</div>
               <div v-for="(cnt, val) in previewResult.targetDistribution" :key="val" class="preview-null-row">
                 <span>{{ val }}</span><span>{{ cnt }} 条</span>
+              </div>
+            </div>
+            <div v-if="previewResult.correlations && Object.keys(previewResult.correlations).length" class="preview-section">
+              <div class="preview-section-title">与目标列的相关性</div>
+              <div class="preview-tags">
+                <el-tag v-for="col in Object.keys(previewResult.correlations)" :key="col" size="small"
+                  :type="Math.abs(previewResult.correlations[col]) > 0.3 ? 'warning' : 'info'" class="feat-tag">
+                  {{ col }}: {{ previewResult.correlations[col] > 0 ? '+' : '' }}{{ previewResult.correlations[col] }}
+                </el-tag>
+              </div>
+            </div>
+            <div v-if="previewResult.featureStats?.length" class="preview-section">
+              <div class="preview-section-title">特征分析</div>
+              <div class="feat-stats-list">
+                <div v-for="fs in previewResult.featureStats" :key="fs.name" class="feat-stat-row" :class="{ 'has-warning': fs.nullPct > 10 }">
+                  <div class="feat-stat-header">
+                    <span class="feat-stat-name">{{ fs.name }}</span>
+                    <span class="feat-stat-dtype">{{ fs.dtype }}</span>
+                    <span :class="['feat-stat-null', fs.nullPct > 0 ? 'has-nulls' : '']">{{ fs.nullPct }}% 缺失</span>
+                    <span v-if="previewResult.correlations?.[fs.name] != null" class="feat-stat-corr"
+                      :style="{ color: Math.abs(previewResult.correlations[fs.name]) > 0.3 ? '#e6a23c' : '#909399' }">
+                      r={{ previewResult.correlations[fs.name] > 0 ? '+' : '' }}{{ previewResult.correlations[fs.name] }}
+                    </span>
+                  </div>
+                  <div v-if="fs.mean != null" class="feat-stat-detail">
+                    均值: {{ fs.mean }} · 标准差: {{ fs.std }} · 范围: [{{ fs.min }}, {{ fs.max }}]
+                  </div>
+                  <div v-if="fs.topValues" class="feat-stat-detail">
+                    Top: <span v-for="(cnt, val, i) in fs.topValues" :key="val">{{ i > 0 ? ', ' : '' }}{{ val }}({{ cnt }})</span>
+                    <span v-if="fs.unique"> · {{ fs.unique }} 个唯一值</span>
+                  </div>
+                </div>
               </div>
             </div>
             <div class="preview-section">
@@ -376,6 +474,22 @@
         </div>
       </el-drawer>
 
+      <!-- Script Viewer Drawer -->
+      <el-drawer v-model="showScriptDrawer" title="Python 脚本" size="600px" direction="rtl" :modal="false">
+        <div v-if="scriptLoading" style="text-align:center;padding:40px">
+          <p style="color:var(--text-muted)">加载脚本中...</p>
+        </div>
+        <div v-else-if="scriptContent" class="script-viewer">
+          <div class="script-toolbar">
+            <el-button size="small" @click="copyScript">复制代码</el-button>
+          </div>
+          <pre class="script-code"><code>{{ scriptContent }}</code></pre>
+        </div>
+        <div v-else style="text-align:center;padding:40px;color:var(--text-muted)">
+          请先配置该节点以生成脚本
+        </div>
+      </el-drawer>
+
       <!-- Node Config Panel -->
       <el-drawer v-model="showNodeConfig" :title="selectedNodeTitle" size="420px" direction="rtl" :modal="false">
         <div v-if="selectedNode" class="config-panel">
@@ -396,6 +510,39 @@
                 <el-input v-model="selectedNode.config.filter" placeholder="如: status = 1" />
               </el-form-item>
             </el-form>
+            <div v-if="selectedNode.config.table" class="config-preview-section">
+              <el-button size="small" :loading="dsPreviewLoading" @click="loadDsPreview">
+                {{ dsPreviewRows.length ? '刷新预览' : '快速预览数据' }}
+              </el-button>
+              <div v-if="dsPreviewRows.length" class="ds-preview-wrap">
+                <div class="preview-hint">共 {{ dsPreviewTotalRows }} 行 · 前 {{ dsPreviewRows.length }} 行预览</div>
+                <el-table :data="dsPreviewRows" size="small" border stripe max-height="220" style="width: 100%">
+                  <el-table-column v-for="col in dsPreviewColumns" :key="col" :prop="col" :label="col" min-width="90" show-overflow-tooltip />
+                </el-table>
+              </div>
+              <div v-if="dsPreviewColumnStats.length" class="ds-column-stats">
+                <div class="col-strategies-header">列统计</div>
+                <div class="ds-stats-grid">
+                  <div v-for="cs in dsPreviewColumnStats" :key="cs.name" class="ds-stat-card" :class="{ 'has-nulls': (cs.nulls || 0) > 0 }">
+                    <div class="ds-stat-header">
+                      <span class="ds-stat-name">{{ cs.name }}</span>
+                      <span class="ds-stat-type">{{ cs.type }}</span>
+                    </div>
+                    <div v-if="(cs.nulls || 0) > 0" class="ds-stat-null">
+                      <span class="text-danger">{{ cs.nulls }} 缺失 ({{ cs.nullPct }}%)</span>
+                    </div>
+                    <div v-else class="ds-stat-null">无缺失</div>
+                    <div v-if="cs.min != null" class="ds-stat-range">
+                      范围: {{ cs.min }} ~ {{ cs.max }} · 均值: {{ cs.avg }}
+                    </div>
+                    <div v-if="cs.unique != null" class="ds-stat-range">
+                      {{ cs.unique }} 个唯一值
+                      <span v-if="cs.topValues?.length"> · Top: <template v-for="(tv, i) in cs.topValues" :key="i">{{ i > 0 ? ', ' : '' }}{{ tv.val }}({{ tv.cnt }})</template></span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </template>
 
           <!-- Preprocessing Config -->
@@ -427,6 +574,22 @@
                 </el-select>
               </el-form-item>
             </el-form>
+            <div v-if="columnOptions.length" class="config-column-strategies">
+              <div class="col-strategies-header">逐列缺失值策略</div>
+              <div v-for="col in columnOptions" :key="col.name" class="col-strategy-row">
+                <span class="col-strategy-name" :title="col.name">{{ col.name }}</span>
+                <span class="col-strategy-type">{{ col.type }}</span>
+                <el-select size="small" :model-value="getColumnStrategy(col.name)" style="flex: 1" :teleported="false"
+                  @update:model-value="v => updateColumnStrategy(col.name, v)">
+                  <el-option label="继承全局" value="inherit" />
+                  <el-option label="删除缺失行" value="drop" />
+                  <el-option label="填充均值" value="fill_mean" />
+                  <el-option label="填充中位数" value="fill_median" />
+                  <el-option label="填充众数" value="fill_mode" />
+                  <el-option label="不处理" value="none" />
+                </el-select>
+              </div>
+            </div>
           </template>
 
           <!-- Feature Engineering Config -->
@@ -466,6 +629,48 @@
                   </div>
                 </div>
                 <p v-else class="col-hint">请先配置数据接入节点</p>
+              </el-form-item>
+              <el-form-item label="特征分析">
+                <el-button size="small" type="success" :loading="featAnalyzing" @click="analyzeFeatures"
+                  :disabled="!selectedNode.config.targetColumn || selectedFeatCount === 0">
+                  {{ featAnalysis ? '刷新分析' : '分析特征' }}
+                </el-button>
+                <div v-if="featAnalysis" class="feat-analysis-panel" style="margin-top: 8px">
+                  <div class="preview-stats" style="margin-bottom: 8px">
+                    <div class="preview-stat"><span class="ps-value">{{ featAnalysis.featureCount }}</span><span class="ps-label">特征数</span></div>
+                    <div class="preview-stat"><span class="ps-value">{{ featAnalysis.sampleShape?.[0] }} × {{ featAnalysis.sampleShape?.[1] }}</span><span class="ps-label">矩阵形状</span></div>
+                  </div>
+                  <div v-if="featAnalysis.targetDistribution" class="target-dist">
+                    <div class="preview-stat"><span class="ps-label">目标列分布</span></div>
+                    <div v-for="(count, label) in featAnalysis.targetDistribution" :key="label" class="target-dist-item">
+                      <span class="td-label">{{ label }}</span>
+                      <span class="td-count">{{ count }} 条</span>
+                    </div>
+                  </div>
+                  <div v-if="featAnalysis.correlations && Object.keys(featAnalysis.correlations).length" class="target-dist" style="margin-top: 6px">
+                    <div class="preview-stat"><span class="ps-label">与目标相关性</span></div>
+                    <div class="preview-tags" style="margin-top: 4px">
+                      <el-tag v-for="col in Object.keys(featAnalysis.correlations)" :key="col" size="small"
+                        :type="Math.abs(featAnalysis.correlations[col]) > 0.3 ? 'warning' : 'info'" class="feat-tag">
+                        {{ col }}: {{ featAnalysis.correlations[col] > 0 ? '+' : '' }}{{ featAnalysis.correlations[col] }}
+                      </el-tag>
+                    </div>
+                  </div>
+                  <div v-if="featAnalysis.featureStats?.length" class="feature-stats-list">
+                    <div v-for="fs in featAnalysis.featureStats" :key="fs.name" class="feature-stat-row"
+                      :class="{ 'has-missing': fs.nullPct > 0 }">
+                      <span class="fs-name">{{ fs.name }}</span>
+                      <span class="fs-dtype">{{ fs.dtype }}</span>
+                      <span class="fs-null" :class="{ 'text-danger': fs.nullPct > 0 }">{{ fs.nullPct }}% 缺失</span>
+                      <span v-if="featAnalysis.correlations?.[fs.name] != null" class="fs-corr"
+                        :style="{ color: Math.abs(featAnalysis.correlations[fs.name]) > 0.3 ? '#e6a23c' : '#909399', 'font-size': '11px' }">
+                        r={{ featAnalysis.correlations[fs.name] > 0 ? '+' : '' }}{{ featAnalysis.correlations[fs.name] }}
+                      </span>
+                      <span v-if="fs.mean != null" class="fs-stat">均值: {{ fs.mean }} · 标准差: {{ fs.std }} · 范围: [{{ fs.min }}, {{ fs.max }}]</span>
+                      <span v-else-if="fs.topValues" class="fs-stat">Top: <template v-for="(v, i) in Object.entries(fs.topValues).slice(0, 3)" :key="i"><span :class="i > 0 ? '' : ''">{{ i > 0 ? ', ' : '' }}{{ v[0] }}({{ v[1] }})</span></template> · {{ fs.unique }} 个唯一值</span>
+                    </div>
+                  </div>
+                </div>
               </el-form-item>
               <el-form-item label="特征变换">
                 <div class="transform-list">
@@ -585,8 +790,12 @@
             </el-form>
           </template>
 
-          <!-- Fill Missing Config -->
+          <!-- Fill Missing Config (Advanced) -->
           <template v-if="selectedNode.type === 'fill_missing'">
+            <el-alert type="info" :closable="false" style="margin-bottom: 12px">
+              高级缺失值处理：提供比"数据预处理"节点更精细的按列填充控制（支持固定值）。
+              如已在预处理节点配置了缺失值策略，此节点可跳过。
+            </el-alert>
             <el-form label-width="100px" size="small">
               <el-form-item label="节点名称">
                 <el-input v-model="selectedNode.config.title" />
@@ -659,10 +868,11 @@ import { useMiningStore } from '../stores/mining'
 import {
   fetchMiningPipelines, fetchMiningPipeline, createMiningPipeline,
   updateMiningPipeline, deleteMiningPipeline, executeMiningPipeline,
-  validateMiningPipeline, previewStepPipeline, fetchDataSourceTables, fetchTableColumns,
-  fetchModelByPipeline, fetchPipelineSyncStatus
+  validateMiningPipeline, previewStepPipeline, getStepScript, fetchDataSourceTables, fetchTableColumns,
+  fetchTablePreview, fetchModelByPipeline, fetchPipelineSyncStatus, METRIC_NAMES
 } from '../api'
 import { useAlgorithms } from '../composables/useAlgorithms.js'
+import { DEFAULT_MODEL_TYPE, DEFAULT_ALGORITHM } from '../constants'
 
 const props = defineProps({
   dataSources: { type: Array, default: () => [] }
@@ -674,7 +884,7 @@ const {
   getAlgorithmParams, getDefaultHyperparams, getModelTypeLabel, modelTypeNames
 } = useAlgorithms()
 
-const emit = defineEmits(['close'])
+const emit = defineEmits(['close', 'goToModel'])
 const miningStore = useMiningStore()
 
 async function openPipelineById(id) {
@@ -694,6 +904,7 @@ const pipelines = ref([])
 const editingPipeline = ref(null)
 const pipelineNodes = ref([])
 const saving = ref(false)
+const dirty = ref(false)
 const running = ref(false)
 const isDragging = ref(false)
 const runningNodeId = ref(null)
@@ -703,8 +914,25 @@ const lastRunResult = ref(null)
 const previewingNodeId = ref(null)
 const previewResult = ref(null)
 const showPreviewDrawer = ref(false)
+const showScriptDrawer = ref(false)
+const scriptContent = ref('')
+const scriptLoading = ref(false)
 const linkedModel = ref(null)
 const syncStatus = ref(null)
+
+// Quick data preview for data_source node
+const dsPreviewLoading = ref(false)
+const dsPreviewRows = ref([])
+const dsPreviewColumns = ref([])
+const dsPreviewTotalRows = ref(0)
+const dsPreviewColumnStats = ref([])
+
+// Per-column strategies for preprocessing node
+const preprocessingColumns = ref([])
+
+// Feature analysis for feature_engineering node
+const featureStats = ref([])
+const featureStatsLoading = ref(false)
 
 // Node selection
 const selectedNodeId = ref(null)
@@ -722,8 +950,8 @@ const featSelectAll = ref(false)
 // Step types
 const stepTypes = [
   { type: 'data_source', icon: '📥', title: '数据接入', desc: '从数据库读取数据' },
-  { type: 'preprocessing', icon: '🔧', title: '数据预处理', desc: '缺失值处理、编码、缩放' },
-  { type: 'fill_missing', icon: '🩹', title: '填充缺失值', desc: '按列配置缺失值填充策略' },
+  { type: 'preprocessing', icon: '🔧', title: '数据预处理', desc: '缺失值处理(含逐列策略)、编码、缩放' },
+  { type: 'fill_missing', icon: '🩹', title: '高级缺失值处理', desc: '按列精细配置缺失值填充（预处理节点的增强版）' },
   { type: 'feature_engineering', icon: '⚙️', title: '特征工程', desc: '特征选择和目标定义' },
   { type: 'training', icon: '🧠', title: '模型训练', desc: '选择算法并训练模型' },
   { type: 'evaluation', icon: '📊', title: '模型评估', desc: '评估指标和验证策略' },
@@ -741,7 +969,7 @@ const selectedNodeTitle = computed(() => {
 })
 
 const algoOptions = computed(() => {
-  const mt = selectedNode.value?.config?.modelType || 'classification'
+  const mt = selectedNode.value?.config?.modelType || DEFAULT_MODEL_TYPE
   return getAlgorithmsForModelType(mt).map(a => ({ value: a.algorithmId, label: (a.icon ? a.icon + ' ' : '') + a.name }))
 })
 
@@ -756,12 +984,39 @@ const currentAlgoParams = computed(() => {
 
 const selectedFeatCount = computed(() => Object.values(featChecked.value).filter(Boolean).length)
 
+const featAnalyzing = ref(false)
+const featAnalysis = ref(null)
+async function analyzeFeatures() {
+  if (!selectedNode.value || selectedNode.value.type !== 'feature_engineering') return
+  featAnalyzing.value = true
+  featAnalysis.value = null
+  try {
+    await savePipeline(true)
+    const nodeId = selectedNode.value.id
+    const res = await fetch(`/api/v1/mining/pipeline/${editingPipeline.value.id}/preview-step`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nodeId })
+    })
+    const json = await res.json()
+    if (json.data?.status === 'success') {
+      featAnalysis.value = json.data
+    } else {
+      ElMessage.error(json.data?.error || json.message || '分析失败')
+    }
+  } catch (e) {
+    ElMessage.error('特征分析请求失败: ' + e.message)
+  } finally {
+    featAnalyzing.value = false
+  }
+}
+
 const canRun = computed(() => {
   const dsNode = pipelineNodes.value.find(n => n.type === 'data_source')
   const hasTable = dsNode?.config?.table
   const hasTraining = pipelineNodes.value.some(n => n.type === 'training')
   const featNode = pipelineNodes.value.find(n => n.type === 'feature_engineering')
   let hasFeatures = false
+  let hasTarget = false
   if (featNode?.config?.featureColumns) {
     try {
       const fc = featNode.config.featureColumns
@@ -769,7 +1024,8 @@ const canRun = computed(() => {
       hasFeatures = arr.length > 0
     } catch { hasFeatures = false }
   }
-  return pipelineNodes.value.length >= 3 && !!hasTable && hasTraining && hasFeatures
+  hasTarget = !!featNode?.config?.targetColumn || !!pipelineNodes.value.find(n => n.type === 'training')?.config?.modelType?.includes('clustering')
+  return pipelineNodes.value.length >= 3 && !!hasTable && hasTraining && hasFeatures && hasTarget
 })
 
 const filteredPipelines = computed(() => {
@@ -789,6 +1045,12 @@ watch(selectedNodeId, (id) => {
 watch(showNodeConfig, (v) => {
   if (!v) selectedNodeId.value = null
 })
+
+let skipDirtyWatch = false
+
+watch(pipelineNodes, () => {
+  if (editingPipeline.value && !skipDirtyWatch) dirty.value = true
+}, { deep: true })
 
 // Load pipelines
 async function loadPipelines() {
@@ -881,17 +1143,17 @@ function defaultNodeConfig(type) {
     case 'feature_engineering': return { title: '特征工程', featureColumns: '[]', targetColumn: '' }
     case 'training': return { title: '模型训练', modelType: firstModelType(), algorithm: firstAlgorithm(), hyperparams: {} }
     case 'evaluation': return { title: '模型评估', testSize: 20, cvFold: 0, validationMode: 'train_test', temporalColumn: null }
-    case 'output': return { title: '输出写入', table: '', mode: 'append', autoCreate: true }
+    case 'output': return { title: '输出写入', table: '', mode: 'append', autoCreate: false }
     default: return { title: type }
   }
 }
 
 function firstModelType() {
-  return modelTypes.value.length > 0 ? modelTypes.value[0].id : 'classification'
+  return modelTypes.value.length > 0 ? modelTypes.value[0].id : DEFAULT_MODEL_TYPE
 }
 
 function firstAlgorithm() {
-  return algorithms.value.length > 0 ? algorithms.value[0].algorithmId : 'random_forest'
+  return algorithms.value.length > 0 ? algorithms.value[0].algorithmId : DEFAULT_ALGORITHM
 }
 
 function isNodeConfigured(node) {
@@ -915,14 +1177,14 @@ function isNodeConfigured(node) {
 
 // Pipeline CRUD
 async function createPipeline() {
-  const ds = props.dataSources.find(d => d.databaseName !== 'smart_query') || props.dataSources[0]
+  const ds = props.dataSources.find(d => !d.system) || props.dataSources[0]
   if (!ds) { ElMessage.warning('请先配置数据源'); return }
 
   const defaultNodes = [
     { id: 'n1', type: 'data_source', config: { ...defaultNodeConfig('data_source') } },
     { id: 'n2', type: 'preprocessing', config: { ...defaultNodeConfig('preprocessing') } },
     { id: 'n3', type: 'feature_engineering', config: { ...defaultNodeConfig('feature_engineering') } },
-    { id: 'n4', type: 'training', config: defaultNodeConfig('training') },
+    { id: 'n4', type: 'training', config: { ...defaultNodeConfig('training') } },
     { id: 'n5', type: 'evaluation', config: { ...defaultNodeConfig('evaluation') } },
     { id: 'n6', type: 'output', config: { ...defaultNodeConfig('output') } }
   ]
@@ -936,8 +1198,8 @@ async function createPipeline() {
     const p = await createMiningPipeline({
       name: '新数据分析流程',
       dataSourceId: ds.id,
-      nodes: JSON.stringify(defaultNodes),
-      edges: JSON.stringify(defaultEdges)
+      nodes: defaultNodes,
+      edges: defaultEdges
     })
     pipelines.value.unshift(p)
     openPipeline(p)
@@ -1015,6 +1277,7 @@ function autoConfigureFeatures(columns, tableName) {
 }
 
 function openPipeline(p) {
+  skipDirtyWatch = true
   editingPipeline.value = { ...p }
   pipelineNodes.value = normalizeNodes(parsedNodes(p))
   selectedNodeId.value = null
@@ -1023,6 +1286,8 @@ function openPipeline(p) {
   doneNodeIds.value = new Set()
   linkedModel.value = null
   syncStatus.value = null
+  dirty.value = false
+  nextTick(() => { skipDirtyWatch = false })
   fetchModelByPipeline(p.id).then(m => { linkedModel.value = m }).catch(() => {})
   fetchPipelineSyncStatus(p.id).then(s => { syncStatus.value = s }).catch(() => {})
   loadTableAndColumns()
@@ -1064,24 +1329,36 @@ function normalizeNodes(nodes) {
 
 async function runFromCard(p) {
   openPipeline(p)
+  await loadTableAndColumns()
   await nextTick()
   if (canRun.value) runPipeline()
   else ElMessage.warning('流程未配置完整，无法运行')
 }
 
 function closeEditor() {
-  editingPipeline.value = null
-  pipelineNodes.value = []
-  selectedNodeId.value = null
-  showNodeConfig.value = false
+  const doClose = () => {
+    editingPipeline.value = null
+    pipelineNodes.value = []
+    selectedNodeId.value = null
+    showNodeConfig.value = false
+    dirty.value = false
+  }
+  if (dirty.value) {
+    ElMessageBox.confirm('您有未保存的更改，确定要离开吗？', '未保存的更改', {
+      confirmButtonText: '离开', cancelButtonText: '取消', type: 'warning'
+    }).then(doClose).catch(() => {})
+  } else {
+    doClose()
+  }
 }
 
-async function savePipeline() {
+async function savePipeline(silent = false) {
   if (!editingPipeline.value) return
   saving.value = true
   try {
-    // Clean float precision in training node hyperparams & normalize transforms
-    for (const node of pipelineNodes.value) {
+    // Work on a deep copy to avoid mutating reactive state on save failure
+    const nodesToSave = JSON.parse(JSON.stringify(pipelineNodes.value))
+    for (const node of nodesToSave) {
       if (node.type === 'training' && node.config?.hyperparams) {
         const params = algorithmParams(node.config.algorithm)
         for (const p of params) {
@@ -1090,12 +1367,9 @@ async function savePipeline() {
           }
         }
       }
-      // Normalize feature engineering transforms before save
       if (node.type === 'feature_engineering' && node.config?.transforms) {
         for (const tf of node.config.transforms) {
-          if (tf.type === 'date_extract' && tf.partsArr) {
-            tf.parts = tf.partsArr.join(',')
-          }
+          if (tf.type === 'date_extract' && tf.partsArr) tf.parts = tf.partsArr.join(',')
           if (tf.type === 'binning' && tf.strategy === 'custom' && tf.edgesInput) {
             tf.edges = tf.edgesInput.split(',').map(v => parseFloat(v.trim())).filter(v => !isNaN(v))
           }
@@ -1103,13 +1377,13 @@ async function savePipeline() {
       }
     }
     const edges = []
-    for (let i = 0; i < pipelineNodes.value.length - 1; i++) {
-      edges.push({ source: pipelineNodes.value[i].id, target: pipelineNodes.value[i + 1].id })
+    for (let i = 0; i < nodesToSave.length - 1; i++) {
+      edges.push({ source: nodesToSave[i].id, target: nodesToSave[i + 1].id })
     }
     await updateMiningPipeline(editingPipeline.value.id, {
       name: editingPipeline.value.name,
-      nodes: JSON.stringify(pipelineNodes.value),
-      edges: JSON.stringify(edges),
+      nodes: nodesToSave,
+      edges: edges,
       status: canRun.value ? 'ready' : 'draft'
     })
 
@@ -1117,14 +1391,14 @@ async function savePipeline() {
     try {
       const vr = await validateMiningPipeline(editingPipeline.value.id)
       if (!vr.valid) {
-        ElMessage.warning('流水线校验未通过: ' + (vr.errors || []).join('; '))
+        if (!silent) ElMessage.warning('流水线校验未通过: ' + (vr.errors || []).join('; '))
       } else if (vr.warnings && vr.warnings.length > 0) {
-        ElMessage.success('已保存（有警告: ' + vr.warnings.join('; ') + '）')
+        if (!silent) ElMessage.success('已保存（有警告: ' + vr.warnings.join('; ') + '）')
       } else {
-        ElMessage.success('已保存')
+        if (!silent) ElMessage.success('已保存')
       }
     } catch {
-      ElMessage.success('已保存')
+      if (!silent) ElMessage.success('已保存')
     }
     await loadPipelines()
     if (editingPipeline.value?.id) {
@@ -1134,12 +1408,18 @@ async function savePipeline() {
     ElMessage.error('保存失败: ' + (e.message || ''))
   } finally {
     saving.value = false
+    dirty.value = false
   }
 }
 
 async function runPipeline() {
-  if (!editingPipeline.value || !canRun.value) return
-  await savePipeline()
+  if (!editingPipeline.value || !canRun.value || running.value) return
+  try {
+    await savePipeline(true)
+  } catch (e) {
+    ElMessage.error('保存流程失败，无法执行: ' + (e.message || ''))
+    return
+  }
   running.value = true
   runningNodeId.value = null
   doneNodeIds.value = new Set()
@@ -1191,7 +1471,7 @@ async function runPipeline() {
     if (metrics.overfitting_gap != null) parts.push(`过拟合差距 ${(metrics.overfitting_gap * 100).toFixed(1)}%`)
     ElMessage.success(`流程执行完成 — ${parts.join('，')}`)
   } catch (e) {
-    await updateMiningPipeline(editingPipeline.value.id, { status: 'failed' })
+    try { await updateMiningPipeline(editingPipeline.value.id, { status: 'failed' }) } catch {}
     ElMessage.error('执行失败: ' + (e.message || '未知错误'))
   } finally {
     running.value = false
@@ -1215,7 +1495,7 @@ function openAddStep(idx) {
 }
 
 function addStep(idx, type) {
-  const id = 'n' + Date.now()
+  const id = 'n_' + Math.random().toString(36).slice(2, 10)
   const node = { id, type, config: defaultNodeConfig(type) }
   pipelineNodes.value.splice(idx, 0, node)
   showAddStep.value = false
@@ -1266,6 +1546,12 @@ async function loadTableAndColumns() {
 
 async function onTableSelected(tableName) {
   await loadColumns(tableName)
+  const featNode = pipelineNodes.value.find(n => n.type === 'feature_engineering')
+  if (featNode) {
+    featNode.config.featureColumns = '[]'
+    featNode.config.targetColumn = ''
+    featChecked.value = {}
+  }
 }
 
 async function loadColumns(tableName) {
@@ -1280,13 +1566,22 @@ async function loadColumns(tableName) {
       const checked = {}
       columnOptions.value.forEach(c => { checked[c.name] = saved.includes(c.name) })
       featChecked.value = checked
+      syncFeatCols()
     }
   } catch { columnOptions.value = [] }
 }
 
 function onFeatSelectAll(val) {
   const checked = {}
-  columnOptions.value.forEach(c => { checked[c.name] = val })
+  const featNode = pipelineNodes.value.find(n => n.type === 'feature_engineering')
+  const target = featNode?.config?.targetColumn
+  columnOptions.value.forEach(c => {
+    if (val && c.name === target) {
+      checked[c.name] = false
+    } else {
+      checked[c.name] = val
+    }
+  })
   featChecked.value = checked
   syncFeatCols()
 }
@@ -1301,6 +1596,7 @@ function syncFeatCols() {
       .filter(c => c !== target)
     featNode.config.featureColumns = JSON.stringify(cols)
   }
+  autoAnalyzeDebounced()
 }
 
 function onTargetColumnChange(target) {
@@ -1311,6 +1607,25 @@ function onTargetColumnChange(target) {
     featChecked.value[target] = false
   }
   syncFeatCols()
+}
+
+let _autoAnalyzeTimer = null
+function autoAnalyzeDebounced() {
+  if (_autoAnalyzeTimer) clearTimeout(_autoAnalyzeTimer)
+  _autoAnalyzeTimer = setTimeout(() => {
+    const featNode = pipelineNodes.value.find(n => n.type === 'feature_engineering')
+    if (!featNode) return
+    const hasTarget = !!featNode.config.targetColumn
+    let hasFeatures = false
+    try {
+      const fc = featNode.config.featureColumns
+      const arr = Array.isArray(fc) ? fc : JSON.parse(fc)
+      hasFeatures = arr.length > 0
+    } catch { hasFeatures = false }
+    if (hasTarget && hasFeatures && !featAnalyzing.value) {
+      analyzeFeatures()
+    }
+  }, 1500)
 }
 
 function addTransform() {
@@ -1346,6 +1661,50 @@ function removeTransform(idx) {
   selectedNode.value.config.transforms = transforms
 }
 
+// Per-column missing value strategy helpers
+function getColumnStrategy(colName) {
+  return selectedNode.value?.config?.columnStrategies?.[colName] || 'inherit'
+}
+
+function updateColumnStrategy(colName, value) {
+  if (!selectedNode.value) return
+  const config = { ...selectedNode.value.config }
+  const current = { ...(config.columnStrategies || {}) }
+  if (value === 'inherit') {
+    delete current[colName]
+  } else {
+    current[colName] = value
+  }
+  if (Object.keys(current).length) {
+    config.columnStrategies = current
+  } else {
+    delete config.columnStrategies
+  }
+  selectedNode.value.config = config
+}
+
+// Quick data source preview (direct SQL, no Python)
+async function loadDsPreview() {
+  const dsId = editingPipeline.value?.dataSourceId
+  const tableName = selectedNode.value?.config?.table
+  if (!dsId || !tableName) return
+  dsPreviewLoading.value = true
+  try {
+    const result = await fetchTablePreview(dsId, tableName, 20)
+    dsPreviewColumns.value = result.columns || []
+    dsPreviewRows.value = result.rows || []
+    dsPreviewTotalRows.value = result.totalCount || 0
+    dsPreviewColumnStats.value = result.columnStats || []
+  } catch {
+    dsPreviewRows.value = []
+    dsPreviewColumns.value = []
+    dsPreviewTotalRows.value = 0
+    dsPreviewColumnStats.value = []
+  } finally {
+    dsPreviewLoading.value = false
+  }
+}
+
 // Preview step
 async function previewStep(nodeId) {
   if (!editingPipeline.value || previewingNodeId.value) return
@@ -1374,6 +1733,31 @@ function showPreviewPanel(nodeId) {
   showPreviewDrawer.value = true
 }
 
+async function viewScript(nodeId) {
+  if (!editingPipeline.value || scriptLoading.value) return
+  scriptLoading.value = true
+  scriptContent.value = ''
+  try {
+    await savePipeline()
+    const result = await getStepScript(editingPipeline.value.id, nodeId)
+    scriptContent.value = result.script || ''
+    showScriptDrawer.value = true
+  } catch (e) {
+    ElMessage.error('获取脚本失败: ' + (e.message || ''))
+  } finally {
+    scriptLoading.value = false
+  }
+}
+
+function copyScript() {
+  if (!scriptContent.value) return
+  navigator.clipboard.writeText(scriptContent.value).then(() => {
+    ElMessage.success('已复制到剪贴板')
+  }).catch(() => {
+    ElMessage.error('复制失败')
+  })
+}
+
 const topPreviewFeatures = computed(() => {
   if (!previewResult.value?.featureImportance) return []
   const fi = previewResult.value.featureImportance
@@ -1393,8 +1777,8 @@ function onModelTypeChange() {
 }
 
 // Init
-loadAlgorithms()
-loadPipelines()
+loadAlgorithms().catch(() => {})
+loadPipelines().catch(() => {})
 
 // Drag and Drop handlers
 function onPaletteDragStart(event, algo, nodeType) {
@@ -1418,7 +1802,8 @@ function onDragEnd() {
 function onCanvasDrop(event) {
   const raw = event.dataTransfer.getData('application/json')
   if (!raw) return
-  const data = JSON.parse(raw)
+  let data
+  try { data = JSON.parse(raw) } catch { return }
 
   // Find closest insertion index based on drop position
   const insertIdx = findClosestInsertIndex(event.clientX, event.clientY)
@@ -1454,7 +1839,8 @@ function onConnectorDrop(event, insertIdx) {
   event.currentTarget?.classList?.remove('connector-drag-over')
   const raw = event.dataTransfer.getData('application/json')
   if (!raw) return
-  const data = JSON.parse(raw)
+  let data
+  try { data = JSON.parse(raw) } catch { return }
   if (data.type === 'algorithm') {
     addAlgorithmNode(data, insertIdx)
   } else if (data.type === 'node') {
@@ -1473,8 +1859,8 @@ function onConnectorDragLeave(event) {
 }
 
 function addAlgorithmNode(algoData, idx) {
-  const id = 'n' + Date.now()
-  const types = parseJson(algoData.modelTypes, ['classification'])
+  const id = 'n_' + Math.random().toString(36).slice(2, 10)
+  const types = parseJson(algoData.modelTypes, [DEFAULT_MODEL_TYPE])
   const defaults = getDefaultHyperparams(algoData.algorithmId)
   const node = {
     id,
@@ -1520,17 +1906,7 @@ function parseMetrics(json) {
 }
 
 function metricLabel(key) {
-  const names = {
-    accuracy: '准确率', precision: '精确率', recall: '召回率', f1: 'F1',
-    mse: 'MSE', rmse: 'RMSE', r2: 'R²', mae: 'MAE',
-    overfitting_gap: '过拟合差距', cv_mean: 'CV均值', cv_std: 'CV标准差',
-    train_accuracy: '训练准确率', test_accuracy: '测试准确率',
-    train_f1: '训练F1', test_f1: '测试F1',
-    train_mse: '训练MSE', test_mse: '测试MSE',
-    train_r2: '训练R²', test_r2: '测试R²',
-    silhouette_score: '轮廓系数', inertia: '惯性'
-  }
-  return names[key] || key
+  return METRIC_NAMES[key] || key
 }
 
 const PERCENT_METRICS = new Set([
@@ -1888,6 +2264,183 @@ const modelTypeLabel = getModelTypeLabel
   margin-top: var(--space-xs);
   font-size: var(--font-xs);
   padding: 0 !important;
+}
+.node-actions-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+/* Script viewer */
+.script-viewer {
+  padding: 0;
+}
+.script-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+.script-code {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  padding: 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre;
+  margin: 0;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+}
+.script-code code {
+  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+}
+
+/* Config panel sections */
+.config-preview-section {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.ds-preview-wrap {
+  margin-top: 8px;
+}
+.preview-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: right;
+  margin-top: 4px;
+}
+.ds-column-stats {
+  margin-top: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.ds-stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 6px;
+}
+.ds-stat-card {
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--bg-secondary, #f5f7fa);
+  font-size: 12px;
+}
+.ds-stat-card.has-nulls {
+  border-left: 3px solid #e6a23c;
+}
+.ds-stat-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.ds-stat-name {
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 55%;
+}
+.ds-stat-type {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.ds-stat-null {
+  margin-top: 2px;
+}
+.ds-stat-null .text-danger {
+  color: #e6a23c;
+  font-size: 11px;
+}
+.ds-stat-range {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  word-break: break-all;
+}
+.config-column-strategies {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.col-strategies-header {
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+}
+.col-strategy-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.col-strategy-name {
+  flex-shrink: 0;
+  width: 90px;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.col-strategy-type {
+  flex-shrink: 0;
+  width: 70px;
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Feature stats in preview */
+.feat-stats-list {
+  max-height: 300px;
+  overflow-y: auto;
+}
+.feat-stat-row {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.feat-stat-row.has-warning {
+  background: var(--el-color-warning-light-9);
+}
+.feat-stat-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.feat-stat-name {
+  font-weight: 500;
+  flex: 1;
+}
+.feat-stat-dtype {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.feat-stat-null {
+  font-size: 11px;
+  color: var(--el-color-success);
+}
+.feat-stat-null.has-nulls {
+  color: var(--el-color-warning);
+}
+.feat-stat-corr {
+  margin-left: 8px;
+  font-size: 11px;
+  font-weight: 500;
+}
+.feat-stat-detail {
+  color: var(--text-secondary);
+  margin-top: 2px;
+  font-size: 11px;
 }
 
 /* Flow Connector */
@@ -2292,6 +2845,42 @@ const modelTypeLabel = getModelTypeLabel
   padding: var(--space-xs) 0;
   color: var(--text-secondary);
 }
+.preview-null-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.preview-null-grid .preview-null-row {
+  gap: 8px;
+  align-items: center;
+}
+.preview-null-grid .pnr-col {
+  flex: 1;
+  font-weight: 500;
+}
+.preview-null-grid .pnr-before {
+  color: #e6a23c;
+  font-size: 12px;
+}
+.preview-null-grid .pnr-after {
+  font-size: 12px;
+}
+.preview-null-grid .pnr-after.resolved {
+  color: #67c23a;
+}
+.preview-null-clean {
+  font-size: 12px;
+  color: #67c23a;
+  padding: 4px 0;
+}
+.preview-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.feat-tag {
+  font-size: 12px;
+}
 
 .preview-table-wrap {
   overflow-x: auto;
@@ -2397,4 +2986,57 @@ const modelTypeLabel = getModelTypeLabel
   color: var(--text-muted);
   text-align: right;
 }
+
+.feat-analysis-panel {
+  max-height: 400px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-sm);
+}
+
+.target-dist {
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  background: var(--surface);
+  border-radius: var(--radius);
+}
+
+.target-dist-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+  font-size: var(--font-sm);
+}
+
+.td-label { font-weight: 500; }
+.td-count { color: var(--text-muted); }
+
+.feature-stats-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.feature-stat-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: baseline;
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  font-size: var(--font-xs);
+  background: var(--surface);
+}
+
+.feature-stat-row.has-missing {
+  background: #fef0f0;
+  border: 1px solid #fbc4c4;
+}
+
+.fs-name { font-weight: 600; min-width: 80px; }
+.fs-dtype { color: var(--text-muted); font-size: 10px; }
+.fs-null { font-size: 10px; }
+.fs-null.text-danger { color: var(--el-color-danger); font-weight: 600; }
+.fs-stat { color: var(--text-secondary); flex: 1; min-width: 200px; }
 </style>

@@ -41,6 +41,39 @@ public class ContextCompactor {
     @Value("${compactor.max-summary-length:3000}")
     private int maxSummaryLength;
 
+    @Value("${compactor.assistant-content-threshold:1500}")
+    private int assistantContentThreshold;
+
+    @Value("${compactor.assistant-max-lines:30}")
+    private int assistantMaxLines;
+
+    @Value("${compactor.llm-summary-input-limit:6000}")
+    private int llmSummaryInputLimit;
+
+    @Value("${compactor.extract-content-limit:8000}")
+    private int extractContentLimit;
+
+    @Value("${compactor.tool-result-stub-threshold:200}")
+    private int toolResultStubThreshold;
+
+    @Value("${compactor.stub-prefix-length:100}")
+    private int stubPrefixLength;
+
+    @Value("${compactor.stub-summary-length:80}")
+    private int stubSummaryLength;
+
+    @Value("${compactor.extract-user-content-length:300}")
+    private int extractUserContentLength;
+
+    @Value("${compactor.extract-tool-content-length:200}")
+    private int extractToolContentLength;
+
+    @Value("${compactor.truncation-user-length:150}")
+    private int truncationUserLength;
+
+    @Value("${compactor.truncation-tool-length:100}")
+    private int truncationToolLength;
+
     private static final String SUMMARIZATION_PROMPT = """
         你是一个对话摘要助手。请将以下对话历史压缩为结构化摘要，保留以下关键信息：
 
@@ -153,7 +186,7 @@ public class ContextCompactor {
 
             if ("assistant".equals(role)) {
                 String original = String.valueOf(msg.get("content"));
-                if (original != null && original.length() > 1500) {
+                if (original != null && original.length() > assistantContentThreshold) {
                     String trimmed = trimAssistantContent(original);
                     if (trimmed.length() < original.length()) {
                         Map<String, Object> compacted = new LinkedHashMap<>(msg);
@@ -187,7 +220,7 @@ public class ContextCompactor {
     }
 
     private String buildToolResultStub(String content) {
-        if (content == null || "null".equals(content) || content.length() < 200) {
+        if (content == null || "null".equals(content) || content.length() < toolResultStubThreshold) {
             return content;
         }
 
@@ -211,9 +244,9 @@ public class ContextCompactor {
         }
 
         // 保留前100字符作为摘要
-        String prefix = content.substring(0, Math.min(100, content.length()));
+        String prefix = content.substring(0, Math.min(stubPrefixLength, content.length()));
         if (!prefix.isBlank()) {
-            stub.append("摘要: ").append(truncate(prefix, 80));
+            stub.append("摘要: ").append(truncate(prefix, stubSummaryLength));
         }
 
         return stub.toString();
@@ -223,7 +256,6 @@ public class ContextCompactor {
         String[] lines = content.split("\n");
         StringBuilder sb = new StringBuilder();
         int keptLines = 0;
-        int maxLines = 30;
 
         for (String line : lines) {
             if (line.startsWith("[SQL]") || line.startsWith("[Python]")
@@ -233,12 +265,12 @@ public class ContextCompactor {
                 || line.startsWith("[模型]")) {
                 sb.append(line).append("\n");
                 keptLines++;
-            } else if (keptLines < maxLines / 2) {
+            } else if (keptLines < assistantMaxLines / 2) {
                 sb.append(line).append("\n");
                 keptLines++;
             }
 
-            if (keptLines >= maxLines) {
+            if (keptLines >= assistantMaxLines) {
                 sb.append("...(内容已精简)");
                 break;
             }
@@ -272,7 +304,7 @@ public class ContextCompactor {
             return null;
         }
 
-        String userContent = "对话历史:\n" + truncate(rawContent, 6000);
+        String userContent = "对话历史:\n" + truncate(rawContent, llmSummaryInputLimit);
         List<Map<String, String>> messages = List.of(
             Map.of("role", "system", "content", SUMMARIZATION_PROMPT),
             Map.of("role", "user", "content", userContent)
@@ -289,17 +321,17 @@ public class ContextCompactor {
             if (content == null || "null".equals(content)) continue;
 
             switch (role) {
-                case "user" -> sb.append("用户: ").append(truncate(content, 300)).append("\n");
+                case "user" -> sb.append("用户: ").append(truncate(content, extractUserContentLength)).append("\n");
                 case "assistant" -> {
                     String extracted = extractToolContext(content);
                     if (!extracted.isEmpty()) {
                         sb.append("助手: ").append(extracted).append("\n");
                     }
                 }
-                case "tool" -> sb.append("工具结果: ").append(truncate(content, 200)).append("\n");
+                case "tool" -> sb.append("工具结果: ").append(truncate(content, extractToolContentLength)).append("\n");
             }
 
-            if (sb.length() > 8000) break;
+            if (sb.length() > extractContentLimit) break;
         }
         return sb.toString();
     }
@@ -313,7 +345,7 @@ public class ContextCompactor {
 
             switch (role) {
                 case "user" -> {
-                    sb.append("用户: ").append(truncate(content, 150)).append("\n");
+                    sb.append("用户: ").append(truncate(content, truncationUserLength)).append("\n");
                 }
                 case "assistant" -> {
                     String extracted = extractToolContext(content);
@@ -322,7 +354,7 @@ public class ContextCompactor {
                     }
                 }
                 case "tool" -> {
-                    sb.append("工具结果: ").append(truncate(content, 100)).append("\n");
+                    sb.append("工具结果: ").append(truncate(content, truncationToolLength)).append("\n");
                 }
             }
 

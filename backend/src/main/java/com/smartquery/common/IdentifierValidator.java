@@ -36,6 +36,10 @@ public final class IdentifierValidator {
             throw new IllegalArgumentException("Invalid filter contains disallowed characters: " + filter);
         }
         String upper = filter.toUpperCase();
+        if (upper.contains("SELECT") || upper.contains("SUBSTRING") || upper.contains("CONCAT")
+            || upper.contains("EXECUTE") || upper.contains("PREPARE") || upper.contains("CALL")) {
+            throw new IllegalArgumentException("Filter contains forbidden SQL pattern: subqueries and function calls not allowed");
+        }
         for (String kw : SQL_KEYWORDS) {
             if (upper.contains(kw) && !"WHERE".equals(kw) && !"AND".equals(kw) && !"OR".equals(kw)
                 && !"IN".equals(kw) && !"IS".equals(kw) && !"NOT".equals(kw) && !"NULL".equals(kw)

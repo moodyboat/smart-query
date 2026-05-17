@@ -31,7 +31,7 @@ public class SystemPromptBuilder {
 
     @org.springframework.beans.factory.annotation.Value("${smart-query.prompt.system-token-budget:16000}")
     private int systemTokenBudget;
-    private static final int CHARS_PER_TOKEN = 4;
+    private static final int CHARS_PER_TOKEN = com.smartquery.common.TokenConstants.CHARS_PER_TOKEN;
 
     /**
      * 构建系统提示词 (向后兼容)
@@ -46,7 +46,7 @@ public class SystemPromptBuilder {
     public String build(String model, Long dataSourceId, Boolean hasMiningModel) {
         PromptContext ctx = PromptContext.of(
             dataSourceId != null,
-            hasMiningModel != null && hasMiningModel,
+            Boolean.TRUE.equals(hasMiningModel),
             model,
             dataSourceId
         );
@@ -107,6 +107,13 @@ public class SystemPromptBuilder {
         sections.add(PromptSection.conditional(
             PromptPriority.CUSTOM, "mining-guidance",
             promptLoader.loadSystemSection("mining-guidance"),
+            PromptContext::hasMiningModel
+        ));
+
+        // CUSTOM: 建模工作流状态机（与 mining-guidance 配合，条件相同）
+        sections.add(PromptSection.conditional(
+            PromptPriority.CUSTOM, "mining-workflow",
+            promptLoader.loadSystemSection("mining-workflow"),
             PromptContext::hasMiningModel
         ));
 

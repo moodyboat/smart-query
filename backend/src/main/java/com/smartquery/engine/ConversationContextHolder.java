@@ -54,10 +54,14 @@ public class ConversationContextHolder {
         private final File sessionDir;
 
         @org.springframework.beans.factory.annotation.Value("${smart-query.session-timeout-minutes:30}")
-        private long sessionTimeoutMinutes;
+        private volatile long sessionTimeoutMinutes;
 
         public SessionManager() {
             this.sessionDir = new File(System.getProperty("user.home"), ".smartquery/sessions");
+        }
+
+        @jakarta.annotation.PostConstruct
+        void init() {
             recoverSessions();
         }
 
@@ -107,29 +111,33 @@ public class ConversationContextHolder {
         }
 
         private void persistSession(ActiveSession session) {
-            try {
-                sessionDir.mkdirs();
-                File target = new File(sessionDir, session.conversationId() + ".json");
-                File tmp = new File(sessionDir, session.conversationId() + ".json.tmp");
-                Map<String, Object> data = new LinkedHashMap<>();
-                data.put("conversationId", session.conversationId());
-                data.put("dataSourceId", session.dataSourceId());
-                data.put("userId", session.userId());
-                data.put("startTime", session.startTime().toString());
-                data.put("threadName", session.threadName());
-                objectMapper.writeValue(tmp, data);
-                if (!tmp.renameTo(target)) {
-                    java.nio.file.Files.deleteIfExists(tmp.toPath());
-                    objectMapper.writeValue(target, data);
+            synchronized (sessionDir) {
+                try {
+                    sessionDir.mkdirs();
+                    File target = new File(sessionDir, session.conversationId() + ".json");
+                    File tmp = new File(sessionDir, session.conversationId() + ".json.tmp");
+                    Map<String, Object> data = new LinkedHashMap<>();
+                    data.put("conversationId", session.conversationId());
+                    data.put("dataSourceId", session.dataSourceId());
+                    data.put("userId", session.userId());
+                    data.put("startTime", session.startTime().toString());
+                    data.put("threadName", session.threadName());
+                    objectMapper.writeValue(tmp, data);
+                    if (!tmp.renameTo(target)) {
+                        java.nio.file.Files.deleteIfExists(tmp.toPath());
+                        objectMapper.writeValue(target, data);
+                    }
+                } catch (IOException e) {
+                    log.debug("[SESSION] Failed to persist session {}: {}", session.conversationId(), e.getMessage());
                 }
-            } catch (IOException e) {
-                log.debug("[SESSION] Failed to persist session {}: {}", session.conversationId(), e.getMessage());
             }
         }
 
         private void deleteSessionFile(Long conversationId) {
-            File f = new File(sessionDir, conversationId + ".json");
-            if (f.exists()) f.delete();
+            synchronized (sessionDir) {
+                File f = new File(sessionDir, conversationId + ".json");
+                if (f.exists()) f.delete();
+            }
         }
 
         private void recoverSessions() {

@@ -1,6 +1,7 @@
 package com.smartquery.logging;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
@@ -20,8 +21,11 @@ public class ConversationStatsService {
     private final CostTracker costTracker;
     private final Map<String, ToolMetric> toolMetrics = new ConcurrentHashMap<>();
     private final Map<LocalDate, DailySummary> dailySummaries = new ConcurrentHashMap<>();
+
+    @Value("${stats.recent-llm-calls-capacity:100}")
+    private int recentLlmCallsCapacity;
     private final List<Map<String, Object>> recentLlmCalls = Collections.synchronizedList(
-        new ArrayList<>(100));
+        new ArrayList<>());
 
     public ConversationStatsService(CostTracker costTracker) {
         this.costTracker = costTracker;
@@ -94,8 +98,8 @@ public class ConversationStatsService {
         entry.put("turn", turn);
         entry.put("timestamp", System.currentTimeMillis());
         recentLlmCalls.add(entry);
-        if (recentLlmCalls.size() > 100) {
-            recentLlmCalls.subList(0, recentLlmCalls.size() - 100).clear();
+        if (recentLlmCalls.size() > recentLlmCallsCapacity) {
+            recentLlmCalls.subList(0, recentLlmCalls.size() - recentLlmCallsCapacity).clear();
         }
     }
 

@@ -1,6 +1,7 @@
 package com.smartquery.engine;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
@@ -21,6 +22,9 @@ import java.util.stream.Collectors;
 public class Coordinator {
 
     private final AgentTaskExecutor taskExecutor;
+
+    @Value("${coordinator.task-output-limit:500}")
+    private int taskOutputLimit;
 
     public Coordinator(AgentTaskExecutor taskExecutor) {
         this.taskExecutor = taskExecutor;
@@ -93,6 +97,7 @@ public class Coordinator {
 
     private List<AgentResult> executeWithDeps(Plan plan, java.util.function.Consumer<ReActEvent> progressConsumer) {
         Map<String, AgentResult> completed = new ConcurrentHashMap<>();
+        Set<String> failedTaskIds = ConcurrentHashMap.newKeySet();
         List<AgentResult> results = Collections.synchronizedList(new ArrayList<>());
         Map<String, List<String>> deps = plan.dependencies;
 
@@ -108,7 +113,6 @@ public class Coordinator {
             for (AgentTask t : plan.subTasks) {
                 if (!remaining.contains(t.taskId())) continue;
 
-                // 优先使用 Plan-level dependencies，回退到 AgentTask.blockedBy
                 List<String> taskDeps = deps != null
                     ? deps.getOrDefault(t.taskId(), List.of())
                     : List.of();
@@ -118,11 +122,23 @@ public class Coordinator {
                 }
 
                 if (completed.keySet().containsAll(taskDeps)) {
+                    // Check if any dependency failed — if so, skip this task
+                    boolean depsFailed = taskDeps.stream().anyMatch(failedTaskIds::contains);
+                    if (depsFailed) {
+                        AgentResult skipResult = AgentResult.failure(t.taskId(), "依赖任务失败，跳过执行", 0);
+                        results.add(skipResult);
+                        completed.put(t.taskId(), skipResult);
+                        failedTaskIds.add(t.taskId());
+                        remaining.remove(t.taskId());
+                        log.warn("[COORDINATOR] Skipping task '{}' due to failed dependencies", t.taskId());
+                        continue;
+                    }
                     ready.add(t);
                 }
             }
 
             if (ready.isEmpty()) {
+                if (remaining.isEmpty()) break;
                 log.warn("[COORDINATOR] Deadlock detected, executing remaining tasks directly");
                 for (String tid : remaining) {
                     plan.subTasks.stream()
@@ -132,16 +148,17 @@ public class Coordinator {
                             AgentResult r = taskExecutor.execute(t);
                             results.add(r);
                             completed.put(t.taskId(), r);
+                            if (!r.success()) failedTaskIds.add(t.taskId());
                         });
                 }
                 break;
             }
 
-            // 并行执行当前层级的所有就绪任务
             List<AgentResult> batchResults = taskExecutor.executeAll(ready, progressConsumer);
             for (AgentResult r : batchResults) {
                 results.add(r);
                 completed.put(r.taskId(), r);
+                if (!r.success()) failedTaskIds.add(r.taskId());
                 remaining.remove(r.taskId());
             }
         }
@@ -249,7 +266,7 @@ public class Coordinator {
                   .append(r.tokenUsage()).append(" tokens)\n");
                 if (r.output() != null && !r.output().isBlank()) {
                     String out = r.output();
-                    if (out.length() > 500) out = out.substring(0, 500) + "...";
+                    if (out.length() > taskOutputLimit) out = out.substring(0, taskOutputLimit) + "...";
                     sb.append("  ").append(out).append("\n");
                 }
             } else {

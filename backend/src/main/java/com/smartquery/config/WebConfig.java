@@ -13,13 +13,13 @@ import java.util.concurrent.ThreadPoolExecutor;
 @Configuration
 public class WebConfig implements WebMvcConfigurer {
 
-    @Value("${smart-query.thread-pool.core-size:4}")
+    @Value("${smart-query.thread-pool.core-size:8}")
     private int corePoolSize;
 
-    @Value("${smart-query.thread-pool.max-size:8}")
+    @Value("${smart-query.thread-pool.max-size:16}")
     private int maxPoolSize;
 
-    @Value("${smart-query.thread-pool.queue-capacity:100}")
+    @Value("${smart-query.thread-pool.queue-capacity:200}")
     private int queueCapacity;
 
     @Value("${smart-query.python.artifact-dir:/tmp/smartquery-artifacts}")
@@ -43,6 +43,29 @@ public class WebConfig implements WebMvcConfigurer {
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(30);
+        executor.initialize();
+        return executor;
+    }
+
+    @Value("${smart-query.thread-pool.llm.core-size:8}")
+    private int llmCorePoolSize;
+
+    @Value("${smart-query.thread-pool.llm.max-size:16}")
+    private int llmMaxPoolSize;
+
+    @Value("${smart-query.thread-pool.llm.queue-capacity:100}")
+    private int llmQueueCapacity;
+
+    @Bean("llmExecutor")
+    public Executor llmExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(llmCorePoolSize);
+        executor.setMaxPoolSize(llmMaxPoolSize);
+        executor.setQueueCapacity(llmQueueCapacity);
+        executor.setThreadNamePrefix("llm-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(10);
         executor.initialize();
         return executor;
     }

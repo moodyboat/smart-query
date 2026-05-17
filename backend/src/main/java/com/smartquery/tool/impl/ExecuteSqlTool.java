@@ -32,6 +32,12 @@ public class ExecuteSqlTool implements LlmTool {
     @org.springframework.beans.factory.annotation.Value("${smart-query.sql-safety.max-rows:1000}")
     private int maxRows;
 
+    @org.springframework.beans.factory.annotation.Value("${smart-query.sql.query-timeout-seconds:30}")
+    private int queryTimeoutSeconds;
+
+    @org.springframework.beans.factory.annotation.Value("${smart-query.sql.display-max-rows:50}")
+    private int displayMaxRows;
+
     @Override
     public String getName() { return "execute_sql"; }
 
@@ -77,7 +83,7 @@ public class ExecuteSqlTool implements LlmTool {
 
             DataSourceContextHolder.set(dsId);
             JdbcTemplate jdbc = dataSourceManager.getJdbcTemplate(dsId);
-            jdbc.setQueryTimeout(30);
+            jdbc.setQueryTimeout(queryTimeoutSeconds);
 
             List<Map<String, Object>> rows = jdbc.queryForList(sql);
             long duration = System.currentTimeMillis() - start;
@@ -129,7 +135,7 @@ public class ExecuteSqlTool implements LlmTool {
         sb.append("| ").append(String.join(" | ", columns)).append(" |\n");
         sb.append("| ").append(columns.stream().map(c -> "---").collect(java.util.stream.Collectors.joining(" | "))).append(" |\n");
 
-        int maxRows = Math.min(rows.size(), 50);
+        int maxRows = Math.min(rows.size(), displayMaxRows);
         for (int i = 0; i < maxRows; i++) {
             Map<String, Object> row = rows.get(i);
             sb.append("| ");

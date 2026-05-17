@@ -19,6 +19,9 @@ public class SessionContextHook implements LifecycleHook {
     private final DataSourceMapper dataSourceMapper;
     private final DataSourceManager dataSourceManager;
 
+    @org.springframework.beans.factory.annotation.Value("${session-context.table-display-limit:15}")
+    private int tableDisplayLimit;
+
     @Override
     public String name() { return "session-context"; }
 
@@ -43,10 +46,10 @@ public class SessionContextHook implements LifecycleHook {
                 String.class);
             if (!tables.isEmpty()) {
                 sb.append("- 可用表 (").append(tables.size()).append("): ");
-                if (tables.size() <= 15) {
+                if (tables.size() <= tableDisplayLimit) {
                     sb.append(String.join(", ", tables));
                 } else {
-                    sb.append(String.join(", ", tables.subList(0, 15))).append(" ... 等").append(tables.size()).append("张表");
+                    sb.append(String.join(", ", tables.subList(0, tableDisplayLimit))).append(" ... 等").append(tables.size()).append("张表");
                 }
                 sb.append("\n");
             }

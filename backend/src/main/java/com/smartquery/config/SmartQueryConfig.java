@@ -13,8 +13,18 @@ import java.util.Set;
 public class SmartQueryConfig {
 
     @Bean
-    public SqlSafetyValidator sqlSafetyValidator() {
-        return SqlSafetyValidator.defaults();
+    public SqlSafetyValidator sqlSafetyValidator(
+        org.springframework.core.env.Environment env
+    ) {
+        int maxRows = env.getProperty("sql-safety.max-rows", Integer.class, 1000);
+        int queryTimeout = env.getProperty("sql-safety.query-timeout-seconds", Integer.class, 30);
+        return new SqlSafetyValidator(
+            Set.of("SELECT", "SHOW", "DESCRIBE", "EXPLAIN"),
+            Set.of("DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "CREATE",
+                   "TRUNCATE", "GRANT", "REVOKE", "REPLACE", "RENAME",
+                   "CALL", "EXEC", "EXECUTE", "LOAD DATA", "INTO OUTFILE", "INTO DUMPFILE"),
+            maxRows, queryTimeout
+        );
     }
 
     @Bean

@@ -11,10 +11,10 @@ import java.util.concurrent.atomic.AtomicLong;
 @Component
 public class PythonCircuitBreaker {
 
-    @Value("${python.circuit-breaker.failure-threshold:5}")
+    @Value("${smart-query.python.circuit-breaker.failure-threshold:5}")
     private int failureThreshold;
 
-    @Value("${python.circuit-breaker.recovery-timeout-ms:60000}")
+    @Value("${smart-query.python.circuit-breaker.recovery-timeout-ms:60000}")
     private long recoveryTimeoutMs;
 
     private final AtomicInteger consecutiveFailures = new AtomicInteger(0);

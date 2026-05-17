@@ -35,7 +35,8 @@ public class ToolPromptLoader {
     /** Compiled prompt cache — avoids re-rendering unchanged templates */
     private final ConcurrentHashMap<String, CachedPrompt> promptCache = new ConcurrentHashMap<>();
 
-    private static final long CACHE_TTL_MS = 5 * 60 * 1000L; // 5 minutes
+    @org.springframework.beans.factory.annotation.Value("${prompt.cache-ttl-ms:300000}")
+    private long cacheTtlMs;
 
     private static final Pattern FRONTMATTER_PATTERN = Pattern.compile(
         "^---\\s*\\n(.*?)\\n---\\s*\\n", Pattern.DOTALL);
@@ -72,7 +73,7 @@ public class ToolPromptLoader {
         String cacheKey = buildCacheKey(template, context);
 
         CachedPrompt cached = promptCache.get(cacheKey);
-        if (cached != null && !cached.isExpired()) {
+        if (cached != null && !cached.isExpired(cacheTtlMs)) {
             return cached.content();
         }
 
@@ -135,8 +136,8 @@ public class ToolPromptLoader {
 
     /** Cached compiled prompt entry */
     record CachedPrompt(String content, Map<String, String> frontmatter, long cachedAt) {
-        boolean isExpired() {
-            return System.currentTimeMillis() - cachedAt > CACHE_TTL_MS;
+        boolean isExpired(long ttlMs) {
+            return System.currentTimeMillis() - cachedAt > ttlMs;
         }
     }
 

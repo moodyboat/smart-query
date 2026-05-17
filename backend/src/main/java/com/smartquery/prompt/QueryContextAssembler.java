@@ -24,10 +24,11 @@ public class QueryContextAssembler {
     private final SystemPromptBuilder systemPromptBuilder;
     private final ToolPromptLoader promptLoader;
     private final SchemaContextBuilder schemaContextBuilder;
+    private final com.smartquery.tool.ToolRegistry toolRegistry;
 
     @org.springframework.beans.factory.annotation.Value("${smart-query.prompt.system-token-budget:16000}")
     private int systemTokenBudget;
-    private static final int CHARS_PER_TOKEN = 4;
+    private static final int CHARS_PER_TOKEN = com.smartquery.common.TokenConstants.CHARS_PER_TOKEN;
 
     public record PromptParts(
         String systemPrompt,
@@ -39,7 +40,8 @@ public class QueryContextAssembler {
      * 直译 fetchSystemPromptParts()
      */
     public PromptParts fetchPromptParts(String model, Long dataSourceId) {
-        String systemPrompt = systemPromptBuilder.build(model, dataSourceId, null);
+        boolean hasMining = toolRegistry.getTool("mining_model").isPresent();
+        String systemPrompt = systemPromptBuilder.build(model, dataSourceId, hasMining);
 
         Map<String, String> context = new LinkedHashMap<>();
         context.put("currentDate", java.time.LocalDate.now().toString());

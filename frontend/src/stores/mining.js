@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import {
+  API_BASE,
   fetchMiningModels, fetchMiningModel, fetchDataSources,
   trainMiningModel, publishMiningModel, offlineMiningModel
 } from '../api'
@@ -28,7 +29,20 @@ export const useMiningStore = defineStore('mining', () => {
         fetchMiningModels(filterDsId.value || undefined).catch(() => []),
         dataSources.value.length ? Promise.resolve(dataSources.value) : fetchDataSources()
       ])
-      models.value = ms || []
+      const fetched = ms || []
+      if (activeEventSource.value && fetched.length > 0) {
+        const watchedId = models.value.find(m =>
+          ['training', 'queued'].includes(m.status)
+        )?.id
+        if (watchedId) {
+          const watchedModel = models.value.find(m => m.id === watchedId)
+          const idx = fetched.findIndex(m => m.id === watchedId)
+          if (idx >= 0 && watchedModel) {
+            fetched[idx] = { ...fetched[idx], status: watchedModel.status, metrics: watchedModel.metrics }
+          }
+        }
+      }
+      models.value = fetched
       dataSources.value = dss || []
     } catch (e) {
       console.error('Failed to load mining models:', e)
@@ -68,10 +82,12 @@ export const useMiningStore = defineStore('mining', () => {
   }
 
   function watchModelStatus(modelId) {
-    // Close any existing EventSource before opening a new one
-    closeEventSource()
-    const baseUrl = '/api/v1/mining/model'
-    const url = `${baseUrl}/${modelId}/status-stream`
+    if (activeEventSource.value) {
+      const currentUrl = activeEventSource.value.url || ''
+      if (currentUrl.includes(`/${modelId}/status-stream`)) return currentUrl
+      closeEventSource()
+    }
+    const url = `${API_BASE}/mining/model/${modelId}/status-stream`
     const eventSource = new EventSource(url)
     activeEventSource.value = eventSource
     eventSource.onmessage = (event) => {
@@ -91,8 +107,10 @@ export const useMiningStore = defineStore('mining', () => {
       } catch {}
     }
     eventSource.onerror = () => {
+      console.warn('[MiningStore] SSE connection lost for model', modelId)
       eventSource.close()
       activeEventSource.value = null
+      refreshModel(modelId)
     }
     return eventSource
   }

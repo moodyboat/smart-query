@@ -20,6 +20,9 @@ public class PythonExecuteTool implements LlmTool {
     private final PythonExecutor pythonExecutor;
     private final PythonExecutionMapper pythonExecutionMapper;
 
+    @org.springframework.beans.factory.annotation.Value("${python-tool.default-timeout-ms:60000}")
+    private int defaultTimeoutMs;
+
     @Override
     public String getName() { return "execute_python"; }
 
@@ -50,7 +53,7 @@ public class PythonExecuteTool implements LlmTool {
             : context.dataSourceId();
         int timeoutMs = input.get("timeout_ms") != null
             ? ((Number) input.get("timeout_ms")).intValue()
-            : 60000;
+            : defaultTimeoutMs;
 
         if (code == null || code.isBlank()) {
             return ToolResult.error(getName(), "代码不能为空", System.currentTimeMillis() - start);
@@ -111,5 +114,5 @@ public class PythonExecuteTool implements LlmTool {
     public boolean isConcurrencySafe() { return true; }
 
     @Override
-    public long getTimeoutMs() { return 600000; }
+    public long getTimeoutMs() { return defaultTimeoutMs; }
 }
