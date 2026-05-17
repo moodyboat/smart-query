@@ -316,7 +316,8 @@ public class PipelineService {
         double testSize, int cvFold,
         String validationMode, String temporalColumn,
         String outputTable, boolean outputAutoCreate, String outputMode,
-        List<Map<String, Object>> transforms
+        List<Map<String, Object>> transforms,
+        Map<String, Object> targetPreprocessing
     ) {}
 
     @SuppressWarnings("unchecked")
@@ -339,6 +340,7 @@ public class PipelineService {
         Map<String, Object> preprocessing = new HashMap<>(), hyperparams = new HashMap<>();
         List<String> featureColumns = null;
         List<Map<String, Object>> transforms = new ArrayList<>();
+        Map<String, Object> targetPreprocessing = null;
 
         for (Map<String, Object> node : nodes) {
             String type = String.valueOf(node.get("type"));
@@ -378,6 +380,8 @@ public class PipelineService {
                     targetColumn = strVal(config.get("targetColumn"));
                     Object tf = config.get("transforms");
                     if (tf instanceof List) transforms = (List<Map<String, Object>>) tf;
+                    Object tp = config.get("targetPreprocessing");
+                    if (tp instanceof Map) targetPreprocessing = (Map<String, Object>) tp;
                 }
                 case "training" -> {
                     modelType = strVal(config.get("modelType"));
@@ -401,7 +405,7 @@ public class PipelineService {
 
         return new PipelineConfig(sourceTable, filter, preprocessing, featureColumns, targetColumn,
             modelType, algorithm, hyperparams, testSize, cvFold, validationMode, temporalColumn,
-            outputTable, outputAutoCreate, outputMode, transforms);
+            outputTable, outputAutoCreate, outputMode, transforms, targetPreprocessing);
     }
 
     private void validateConfig(PipelineConfig cfg) {
@@ -477,12 +481,27 @@ public class PipelineService {
             sb.append("_query = 'SELECT * FROM `").append(cfg.sourceTable).append("` WHERE ' + _filter\n");
         }
         sb.append("df = pd.read_sql(_query, engine)\nprint(f'[INFO] Loaded {len(df)} rows from ").append(cfg.sourceTable).append("')\n\n");
+        sb.append("print('[NODE_PROGRESS] {\"nodeType\": \"data_source\", \"status\": \"completed\", \"rows\": len(df), \"columns\": len(df.columns)}')\n\n");
+        sb.append("# === NODE_START: data_source ===\n");
+        sb.append("# === NODE_END: data_source ===\n\n");
 
+        sb.append("# === NODE_START: preprocessing ===\n");
         appendPreprocessing(sb, cfg);
+        sb.append("# === NODE_END: preprocessing ===\n\n");
+
+        sb.append("# === NODE_START: feature_engineering ===\n");
         appendFeatureEngineering(sb, cfg);
+        sb.append("# === NODE_END: feature_engineering ===\n\n");
+
         appendEncodingScaling(sb, cfg);
+
+        sb.append("# === NODE_START: training ===\n");
         appendTrainEval(sb, cfg, algoBlock, modelPath);
+        sb.append("# === NODE_END: training ===\n\n");
+
+        sb.append("# === NODE_START: output ===\n");
         appendOutput(sb, cfg);
+        sb.append("# === NODE_END: output ===\n\n");
 
         sb.append("print('[PIPELINE_RESULT] ' + json.dumps(result))\n");
         return sb.toString();
@@ -558,6 +577,7 @@ public class PipelineService {
                 sb.append("        else: df[c] = df[c].fillna(df[c].mode().iloc[0] if len(df[c].mode()) > 0 else 'unknown')\n");
             }
         }
+        sb.append("print('[NODE_PROGRESS] {\"nodeType\": \"preprocessing\", \"status\": \"completed\", \"rows\": len(df)}')\n");
     }
 
     @SuppressWarnings("unchecked")
@@ -575,6 +595,61 @@ public class PipelineService {
         }
 
         sb.append("X = df[feature_cols].copy()\ny = df[target_col].copy() if target_col in df.columns else None\n\n");
+
+        // Feature type auto-detection
+        sb.append("# Feature type detection\n");
+        sb.append("_feat_types = {}\n");
+        sb.append("for c in feature_cols:\n");
+        sb.append("    if c not in X.columns: continue\n");
+        sb.append("    _dtype = str(X[c].dtype)\n");
+        sb.append("    _nunique = X[c].nunique()\n");
+        sb.append("    if 'datetime' in _dtype or 'date' in _dtype: _feat_types[c] = 'datetime'\n");
+        sb.append("    elif _dtype in ['float64','int64','int32']:\n");
+        sb.append("        _feat_types[c] = 'numeric_continuous' if _nunique > 20 else 'numeric_discrete'\n");
+        sb.append("    elif _dtype == 'object' or _dtype == 'category':\n");
+        sb.append("        _feat_types[c] = 'categorical_low' if _nunique <= 10 else 'categorical_high'\n");
+        sb.append("    else: _feat_types[c] = 'other'\n\n");
+
+        // Target variable preprocessing
+        Map<String, Object> tp = cfg.targetPreprocessing;
+        boolean userSmote = tp != null && Boolean.TRUE.equals(tp.get("smote"));
+        boolean userLogTransform = tp != null && Boolean.TRUE.equals(tp.get("logTransform"));
+
+        sb.append("# Target variable preprocessing\n");
+        sb.append("if y is not None:\n");
+        sb.append("    if y.dtype == 'object': y = LabelEncoder().fit_transform(y.astype(str))\n");
+        if (userLogTransform) {
+            sb.append("    # User-configured log transform for regression target\n");
+            sb.append("    if len(y.unique()) > 20:\n");
+            sb.append("        y = np.log1p(y.clip(lower=0)); print('[INFO] Target log-transformed (user-configured)')\n");
+        } else {
+            sb.append("    # Auto-detect: log transform for skewed regression targets\n");
+            sb.append("    if str(X.dtype) != 'object' and len(y.unique()) > 20:\n");
+            sb.append("        _skew = float(y.skew()) if hasattr(y, 'skew') else 0\n");
+            sb.append("        if _skew > 1.5: y = np.log1p(y.clip(lower=0)); print(f'[INFO] Target log-transformed (skew={_skew:.1f})')\n");
+        }
+        if (userSmote) {
+            sb.append("    # User-configured SMOTE for imbalanced classification\n");
+            sb.append("    if len(y.unique()) <= 20:\n");
+            sb.append("        _vc = y.value_counts()\n");
+            sb.append("        _ratio = _vc.max() / max(_vc.min(), 1)\n");
+            sb.append("        if _ratio > 2:\n");
+            sb.append("            try:\n");
+            sb.append("                from imblearn.over_sampling import SMOTE\n");
+            sb.append("                _smote = SMOTE(random_state=").append(randomState).append(")\n");
+            sb.append("                X_df_smote, y = _smote.fit_resample(X, y)\n");
+            sb.append("                X = pd.DataFrame(X_df_smote, columns=X.columns)\n");
+            sb.append("                print(f'[INFO] SMOTE applied: {len(X)} rows after resampling (ratio was {_ratio:.1f})')\n");
+            sb.append("            except ImportError:\n");
+            sb.append("                print('[WARN] imbalanced-learn not installed, SMOTE skipped. Install: pip install imbalanced-learn')\n");
+        } else {
+            sb.append("    # Auto-detect: class balance check for classification\n");
+            sb.append("    if len(y.unique()) <= 20:\n");
+            sb.append("        _vc = y.value_counts()\n");
+            sb.append("        _ratio = _vc.max() / max(_vc.min(), 1)\n");
+            sb.append("        if _ratio > 5: print(f'[INFO] Imbalanced target (ratio={_ratio:.1f}), consider class_weight=balanced or SMOTE')\n");
+        }
+        sb.append("\n");
     }
 
     @SuppressWarnings("unchecked")
@@ -699,6 +774,7 @@ public class PipelineService {
         sb.append("_scaler = None\n");
         sb.append("if _sc == 'standard' and num_cols:\n    from sklearn.preprocessing import StandardScaler\n    _scaler = StandardScaler()\n    X[num_cols] = _scaler.fit_transform(X[num_cols])\n");
         sb.append("elif _sc == 'minmax' and num_cols:\n    from sklearn.preprocessing import MinMaxScaler\n    _scaler = MinMaxScaler()\n    X[num_cols] = _scaler.fit_transform(X[num_cols])\n\n");
+        sb.append("print('[NODE_PROGRESS] {\"nodeType\": \"feature_engineering\", \"status\": \"completed\", \"features\": len(X.columns)}')\n");
     }
 
     private void appendTrainEval(StringBuilder sb, PipelineConfig cfg, String algoBlock, String modelPath) {
@@ -740,6 +816,8 @@ public class PipelineService {
         sb.append("    _preproc_path = '").append(modelPath.replace(".pkl", "_preprocessors.pkl")).append("'\n");
         sb.append("    joblib.dump({'encoders': _encoders, 'scaler': _scaler, 'target_encoder': _y_le, 'feature_cols': list(X.columns), 'encoding': _enc, 'scaling': _sc}, _preproc_path)\n\n");
         sb.append("    result = {'status': 'success', 'metrics': metrics, 'feature_importance': importance, 'train_size': len(X_train_df), 'test_size': len(X_test_df), 'feature_count': len(X.columns), 'model_type': _model_type, 'algorithm': '").append(cfg.algorithm).append("'}\n");
+        sb.append("    print('[NODE_PROGRESS] {\"nodeType\": \"training\", \"status\": \"completed\", \"model_type\": _model_type}')\n");
+        sb.append("    print('[NODE_PROGRESS] {\"nodeType\": \"evaluation\", \"status\": \"completed\"}')\n");
         sb.append("else:\n");
         sb.append("    params = ").append(cfg.hyperparams.isEmpty() ? "{}" : objectMapper.valueToTree(cfg.hyperparams).toString()).append("\n");
         sb.append("    ").append(algoBlock.replace("\n", "\n    ")).append("\n    clf.fit(X)\n\n");
@@ -751,6 +829,7 @@ public class PipelineService {
         sb.append("    import joblib\n    os.makedirs('").append(modelWorkspace).append("', exist_ok=True)\n");
         sb.append("    joblib.dump(clf, '").append(modelPath).append("')\n\n");
         sb.append("    result = {'status': 'success', 'metrics': metrics, 'feature_count': len(X.columns), 'train_size': len(X), 'test_size': 0, 'model_type': 'clustering', 'algorithm': '").append(cfg.algorithm).append("'}\n");
+        sb.append("    print('[NODE_PROGRESS] {\"nodeType\": \"training\", \"status\": \"completed\", \"model_type\": \"clustering\"}')\n");
     }
 
     private void appendOutput(StringBuilder sb, PipelineConfig cfg) {
@@ -780,6 +859,7 @@ public class PipelineService {
         sb.append("try:\n    if _out_mode == 'replace':\n        with engine.connect() as conn: conn.execute(text(f'TRUNCATE TABLE `{_out_table}`')); conn.commit()\n");
         sb.append("    _out_df.to_sql(_out_table, engine, if_exists='append', index=False)\n    result['output_rows'] = len(_out_df); result['output_table'] = _out_table\n");
         sb.append("except Exception as e: print(f'[WARN] Output write failed: {e}')\n");
+        sb.append("print('[NODE_PROGRESS] {\"nodeType\": \"output\", \"status\": \"completed\"}')\n");
     }
 
     // ===== Pipeline → Model sync =====
@@ -892,6 +972,145 @@ public class PipelineService {
         if (ds == null) throw new IllegalStateException("数据源不存在");
 
         return buildPreviewScript(buildSqlalchemyUrl(ds), cfg, nodeType);
+    }
+
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> previewTrialMissingStrategy(Long pipelineId, Map<String, String> trialStrategies) {
+        MiningPipeline pipeline = miningPipelineMapper.selectById(pipelineId);
+        if (pipeline == null || Integer.valueOf(1).equals(pipeline.getDeleted())) {
+            throw new IllegalArgumentException("流水线不存在: " + pipelineId);
+        }
+        List<Map<String, Object>> nodes;
+        try {
+            nodes = objectMapper.readValue(pipeline.getNodes(), List.class);
+        } catch (Exception e) {
+            throw new RuntimeException("流水线节点解析失败: " + e.getMessage());
+        }
+
+        // Find preprocessing node
+        int prepIdx = -1;
+        for (int i = 0; i < nodes.size(); i++) {
+            if ("preprocessing".equals(nodes.get(i).get("type"))) {
+                prepIdx = i;
+                break;
+            }
+        }
+        if (prepIdx < 0) throw new IllegalArgumentException("流水线没有预处理节点");
+
+        // Clone nodes up to preprocessing and override columnStrategies
+        List<Map<String, Object>> trialNodes = new ArrayList<>(nodes.subList(0, prepIdx + 1));
+        Map<String, Object> prepNode = new LinkedHashMap<>(nodes.get(prepIdx));
+        Map<String, Object> prepConfig = new LinkedHashMap<>((Map<String, Object>) prepNode.getOrDefault("config", Map.of()));
+        prepConfig.put("columnStrategies", trialStrategies);
+        prepNode.put("config", prepConfig);
+        trialNodes.set(prepIdx, prepNode);
+
+        PipelineConfig cfg = extractConfig(trialNodes);
+        DataSource ds = dataSourceMapper.selectById(pipeline.getDataSourceId());
+        if (ds == null) throw new IllegalStateException("数据源不存在");
+
+        String script = buildPreviewScript(buildSqlalchemyUrl(ds), cfg, "preprocessing");
+
+        try {
+            PythonResult pr = pythonExecutor.execute(script, pipeline.getDataSourceId(), previewTimeoutMs);
+            if (pr.exitCode() != 0) {
+                String err = pr.stderr().isBlank() ? pr.stdout() : pr.stderr();
+                return Map.of("status", "error", "error", truncateLog(err, previewErrorTruncation));
+            }
+            Map<String, Object> result = parseResultMarker(pr.stdout(), "[PREVIEW_RESULT]");
+            result.putIfAbsent("status", "success");
+            result.put("columnStrategies", trialStrategies);
+            return result;
+        } catch (Exception e) {
+            return Map.of("status", "error", "error", truncateLog(e.getMessage(), previewErrorTruncation));
+        }
+    }
+
+    public Map<String, Object> getSegmentedScript(Long pipelineId) {
+        MiningPipeline pipeline = miningPipelineMapper.selectById(pipelineId);
+        if (pipeline == null || Integer.valueOf(1).equals(pipeline.getDeleted())) {
+            throw new IllegalArgumentException("流水线不存在: " + pipelineId);
+        }
+        List<Map<String, Object>> nodes;
+        try {
+            nodes = objectMapper.readValue(pipeline.getNodes(), List.class);
+        } catch (Exception e) {
+            throw new RuntimeException("流水线节点解析失败: " + e.getMessage());
+        }
+        PipelineConfig cfg = extractConfig(nodes);
+        validateConfig(cfg);
+        DataSource ds = dataSourceMapper.selectById(pipeline.getDataSourceId());
+        if (ds == null) throw new IllegalStateException("数据源不存在");
+
+        String dbUrl = buildSqlalchemyUrl(ds);
+        String algoBlock = buildAlgorithmBlock(cfg.algorithm);
+        String modelPath = modelWorkspace + "/pipeline_" + pipelineId + ".pkl";
+        String fullScript = buildPipelineScript(dbUrl, cfg, algoBlock, modelPath);
+
+        // Sanitize credentials
+        fullScript = fullScript.replaceAll("mysql\\+pymysql://([^:]+):[^@]+@", "mysql+pymysql://$1:***@");
+
+        // Split by NODE_START/NODE_END markers
+        List<Map<String, Object>> segments = new ArrayList<>();
+        String startMarker = "# === NODE_START: ";
+        String endMarker = "# === NODE_END: ";
+
+        String[] lines = fullScript.split("\n");
+        String currentType = null;
+        StringBuilder currentCode = new StringBuilder();
+        Map<String, String> titleMap = Map.of(
+            "data_source", "数据接入", "preprocessing", "数据预处理",
+            "fill_missing", "填充缺失值", "feature_engineering", "特征工程",
+            "training", "模型训练与评估", "output", "输出写入"
+        );
+
+        for (String line : lines) {
+            if (line.startsWith(startMarker)) {
+                currentType = line.substring(startMarker.length()).replace(" ===", "").trim();
+                currentCode = new StringBuilder();
+            } else if (line.startsWith(endMarker) && currentType != null) {
+                String code = currentCode.toString().trim();
+                if (!code.isEmpty()) {
+                    Map<String, Object> seg = new LinkedHashMap<>();
+                    seg.put("nodeType", currentType);
+                    seg.put("title", titleMap.getOrDefault(currentType, currentType));
+                    seg.put("code", code);
+                    segments.add(seg);
+                }
+                currentType = null;
+            } else if (currentType != null) {
+                currentCode.append(line).append("\n");
+            }
+        }
+
+        // Add preamble (lines before first NODE_START) as a segment
+        // Actually, collect lines not in any segment
+        StringBuilder preamble = new StringBuilder();
+        boolean inNode = false;
+        currentType = null;
+        for (String line : lines) {
+            if (line.startsWith(startMarker)) {
+                inNode = true;
+                currentType = line.substring(startMarker.length()).replace(" ===", "").trim();
+            } else if (line.startsWith(endMarker)) {
+                inNode = false;
+                currentType = null;
+            } else if (!inNode && currentType == null) {
+                preamble.append(line).append("\n");
+            }
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("segments", segments);
+        result.put("fullScript", fullScript);
+        if (!preamble.toString().trim().isEmpty()) {
+            Map<String, Object> preSeg = new LinkedHashMap<>();
+            preSeg.put("nodeType", "preamble");
+            preSeg.put("title", "导入与环境");
+            preSeg.put("code", preamble.toString().trim());
+            segments.add(0, preSeg);
+        }
+        return result;
     }
 
     private String buildPreviewScript(String dbUrl, PipelineConfig cfg, String nodeType) {
@@ -1015,7 +1234,23 @@ public class PipelineService {
         sb.append("         'min': round(float(df[c].min()), 2), 'max': round(float(df[c].max()), 2)}\n");
         sb.append("        if df[c].dtype in ['float64','int64','int32'] else\n");
         sb.append("        {'topValues': {str(k): int(v) for k, v in df[c].value_counts().head(3).items()}})}\n");
-        sb.append("    for c in feature_cols\n  ]\n");
+        sb.append("    for c in feature_cols\n  ],\n");
+
+        // Histogram bins for numeric features
+        sb.append("  'histograms': {c: {'bins': [round(float(b), 2) for b in bin_edges], 'counts': [int(c) for c in counts]}\n");
+        sb.append("    for c, (counts, bin_edges) in [(c, np.histogram(X[c].dropna(), bins=10)) for c in X.select_dtypes(include=['number']).columns[:15]]},\n");
+
+        // Correlation matrix (top N features)
+        sb.append("  'correlationMatrix': (lambda m: {k: {kk: round(float(m.loc[k, kk]), 3) for kk in m.columns} for k in m.index})\n");
+        sb.append("    (X.select_dtypes(include=['number']).iloc[:, :15].corr().round(3).to_dict()),\n");
+
+        // Quick feature importance via DecisionTree
+        sb.append("  'quickImportance': (lambda clf2: dict(sorted(zip(X.columns, clf2.feature_importances_), key=lambda x: -x[1])[:15]))\n");
+        sb.append("    (__import__('sklearn.tree', fromlist=['DecisionTreeClassifier','DecisionTreeRegressor'])\n");
+        sb.append("     .DecisionTreeClassifier(max_depth=3, random_state=42).fit(X, y) if y is not None and len(y.unique()) <= 20 else\n");
+        sb.append("     __import__('sklearn.tree', fromlist=['DecisionTreeRegressor'])\n");
+        sb.append("     .DecisionTreeRegressor(max_depth=3, random_state=42).fit(X, y) if y is not None else {}),\n");
+
         sb.append("}\nprint('[PREVIEW_RESULT] ' + json.dumps(result, default=str))\n");
     }
 

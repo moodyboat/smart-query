@@ -134,6 +134,72 @@ base_sql 编写规则:
 }
 ```
 
+### 组合图 (bar + line)
+柱状图 + 折线图组合，适合同时展示数值和趋势:
+```json
+{
+  "tooltip": {"trigger": "axis"},
+  "legend": {"data": ["销售额", "增长率"]},
+  "xAxis": {"type": "category", "data": ["1月", "2月", "3月"]},
+  "yAxis": [
+    {"type": "value", "name": "销售额"},
+    {"type": "value", "name": "增长率", "axisLabel": {"formatter": "{value}%"}}
+  ],
+  "series": [
+    {"name": "销售额", "type": "bar", "data": [150, 200, 180]},
+    {"name": "增长率", "type": "line", "yAxisIndex": 1, "data": [null, 33.3, -10]}
+  ]
+}
+```
+
+### 瀑布图 (Waterfall - 用于归因分析)
+展示各因素对总量变化的正负贡献:
+```json
+{
+  "tooltip": {"trigger": "axis"},
+  "xAxis": {"type": "category", "data": ["基数", "华东", "华南", "华北", "西部", "合计"]},
+  "yAxis": {"type": "value"},
+  "series": [{
+    "type": "bar",
+    "stack": "waterfall",
+    "data": [
+      {"value": 1000, "itemStyle": {"color": "#5470c6"}},
+      {"value": 300, "itemStyle": {"color": "#91cc75"}},
+      {"value": -150, "itemStyle": {"color": "#ee6666"}},
+      {"value": 200, "itemStyle": {"color": "#91cc75"}},
+      {"value": -50, "itemStyle": {"color": "#ee6666"}},
+      {"value": 1300, "itemStyle": {"color": "#5470c6"}}
+    ]
+  }]
+}
+```
+
+### 层级下钻图 (Treemap)
+展示层级维度的占比关系，支持下钻交互:
+```json
+{
+  "tooltip": {"formatter": "{b}: {c}"},
+  "series": [{
+    "type": "treemap",
+    "width": "90%", "height": "80%",
+    "roam": false,
+    "nodeClick": "link",
+    "breadcrumb": {"show": true},
+    "label": {"show": true, "formatter": "{b}\n{c}"},
+    "data": [{"name": "华东", "value": 5000, "children": [{"name": "上海", "value": 2500}, {"name": "浙江", "value": 1500}]}]
+  }]
+}
+```
+
+### 旭日图 (Sunburst)
+展示多层维度的从内到外展开:
+```json
+{
+  "tooltip": {"formatter": "{b}: {c}"},
+  "series": [{"type": "sunburst", "radius": ["15%", "80%"], "label": {"rotate": "radial"}, "data": [{"name": "华东", "value": 5000, "children": [{"name": "上海", "value": 2500}, {"name": "江苏", "value": 1500}]}]}]
+}
+```
+
 ## 输入
 ```json
 {

@@ -87,6 +87,11 @@
   --code-bg: #1e1e1e;
   --code-fg: #d4d4d4;
 
+  /* Ghost-style tags */
+  --primary-ghost-bg: #e6f7ff;
+  --primary-ghost-fg: #1890ff;
+  --danger-border: #fbc4c4;
+
   /* Misc */
   --retry-hover: #66b1ff;
   --success-border: #e1f3d8;

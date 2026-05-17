@@ -35,6 +35,7 @@ public class ReActEngine {
     private final ContextCompactor contextCompactor;
     private final com.smartquery.logging.ConversationStatsService statsService;
     private final List<LifecycleHook> lifecycleHooks;
+    private final com.smartquery.tool.hook.AutoRepairHook autoRepairHook;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
     @org.springframework.beans.factory.annotation.Qualifier("llmExecutor")
@@ -63,6 +64,7 @@ public class ReActEngine {
             ContextCompactor contextCompactor,
             com.smartquery.logging.ConversationStatsService statsService,
             List<LifecycleHook> lifecycleHooks,
+            com.smartquery.tool.hook.AutoRepairHook autoRepairHook,
             @org.springframework.beans.factory.annotation.Qualifier("llmExecutor") Executor llmExecutor
     ) {
         this.llmService = llmService;
@@ -72,6 +74,7 @@ public class ReActEngine {
         this.contextCompactor = contextCompactor;
         this.statsService = statsService;
         this.lifecycleHooks = lifecycleHooks;
+        this.autoRepairHook = autoRepairHook;
         this.llmExecutor = llmExecutor;
     }
 
@@ -332,6 +335,11 @@ public class ReActEngine {
                     String errorContent = "错误: " + tr.error();
                     if (tr.output() != null && !tr.output().isBlank()) {
                         errorContent += "\n\n执行输出(部分):\n" + tr.output();
+                    }
+                    // Auto-repair hint injection
+                    String repairHint = autoRepairHook.buildRepairHint(tc.toolName(), tr.error(), tc.input(), ctx);
+                    if (repairHint != null && !repairHint.isBlank()) {
+                        errorContent += "\n\n[自动修复提示] " + repairHint;
                     }
                     toolResultMsg.put("content", errorContent);
                 }

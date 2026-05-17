@@ -29,5 +29,32 @@ Turn 3: generate_dashboard (串行，需要 chart IDs)
 Turn 4: generate_filter_widgets (串行，需要 dashboard ID)
 ```
 
+## 错误自动修复
+
+当工具执行失败时，系统会自动分析错误原因并提供修复提示。你应当:
+
+1. **仔细阅读错误信息** — 包含错误类型、位置、详细描述
+2. **关注修复提示** — 系统会提示可能的正确列名、表名、或常见原因
+3. **分析根因后修正** — 不要盲目重试，要理解错误原因
+4. **最多重试 3 次** — 如果 3 次修正后仍然失败，向用户说明问题
+
+### SQL 常见错误模式
+| 错误 | 原因 | 修复方法 |
+|------|------|----------|
+| Unknown column | 列名拼写错误或不存在 | 使用提示的正确列名，或调用 schema_explore |
+| Table doesn't exist | 表名错误 | 检查表名拼写，使用 schema_explore 确认 |
+| Syntax error | SQL 语法错误 | 检查逗号、括号、引号匹配 |
+| Timeout | 查询太慢 | 添加 LIMIT、缩小 WHERE 范围、使用索引 |
+| Duplicate column | JOIN 后列名冲突 | 添加表名前缀 t1.col, t2.col |
+
+### Python 常见错误模式
+| 错误 | 原因 | 修复方法 |
+|------|------|----------|
+| NameError | 变量未定义 | 检查拼写、确认已赋值 |
+| KeyError | 列名或键不存在 | 用 df.columns 检查列名 |
+| ImportError | 库不可用 | 使用已预装的库 |
+| TypeError | 类型不匹配 | 用 print(type(x)) 检查 |
+| ValueError | 数据范围问题 | 检查数据范围和空值 |
+
 ## 数据库结构
 如果 system prompt 中已包含数据库表结构信息，直接基于这些信息生成 SQL，无需再调用 schema_explore。仅在表结构信息不完整或缺失时才使用 schema_explore。

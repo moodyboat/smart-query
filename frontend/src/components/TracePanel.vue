@@ -11,7 +11,7 @@
       <p>加载追踪数据...</p>
     </div>
 
-    <div v-else-if="events.length === 0" style="text-align: center; padding: 40px; color: #999;">
+    <div v-else-if="events.length === 0" style="text-align: center; padding: 40px; color: var(--text-muted);">
       <el-icon :size="40"><Document /></el-icon>
       <p>暂无追踪记录</p>
     </div>
@@ -196,7 +196,7 @@ function truncate(str, max) {
 }
 .trace-summary {
   font-size: 13px;
-  color: #999;
+  color: var(--text-muted);
   margin-bottom: 16px;
 }
 .trace-event {

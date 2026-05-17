@@ -138,6 +138,18 @@ public class MiningPipelineController {
         return Result.ok(pipelineService.previewStep(id, nodeId));
     }
 
+    @PostMapping("/{id}/trial-missing-strategy")
+    public Result<Map<String, Object>> trialMissingStrategy(
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> body) {
+        @SuppressWarnings("unchecked")
+        Map<String, String> strategies = (Map<String, String>) body.get("columnStrategies");
+        if (strategies == null || strategies.isEmpty()) {
+            throw new BusinessException("columnStrategies 不能为空");
+        }
+        return Result.ok(pipelineService.previewTrialMissingStrategy(id, strategies));
+    }
+
     @GetMapping("/{id}/step-script")
     public Result<Map<String, Object>> getStepScript(
             @PathVariable Long id,
@@ -151,6 +163,11 @@ public class MiningPipelineController {
         result.put("nodeId", nodeId);
         result.put("script", script);
         return Result.ok(result);
+    }
+
+    @GetMapping("/{id}/segmented-script")
+    public Result<Map<String, Object>> getSegmentedScript(@PathVariable Long id) {
+        return Result.ok(pipelineService.getSegmentedScript(id));
     }
 
     @GetMapping("/{id}/sync-status")

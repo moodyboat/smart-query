@@ -24,6 +24,7 @@ public class QueryContextAssembler {
     private final SystemPromptBuilder systemPromptBuilder;
     private final ToolPromptLoader promptLoader;
     private final SchemaContextBuilder schemaContextBuilder;
+    private final OntologyContextBuilder ontologyContextBuilder;
     private final com.smartquery.tool.ToolRegistry toolRegistry;
 
     @org.springframework.beans.factory.annotation.Value("${smart-query.prompt.system-token-budget:16000}")
@@ -58,6 +59,12 @@ public class QueryContextAssembler {
         String schemaContext = schemaContextBuilder.buildSchemaContext(dataSourceId, remainingTokens);
         if (schemaContext != null) {
             systemPrompt = systemPrompt + "\n\n" + schemaContext;
+        }
+
+        // 注入本体模型上下文 (指标/维度/术语)
+        String ontologyContext = ontologyContextBuilder.buildOntologyContext(dataSourceId);
+        if (ontologyContext != null) {
+            systemPrompt = systemPrompt + "\n\n" + ontologyContext;
         }
 
         int finalTokens = systemPrompt.length() / CHARS_PER_TOKEN;

@@ -28,6 +28,7 @@ public class SystemPromptBuilder {
 
     private final ToolPromptLoader promptLoader;
     private final ToolRegistry toolRegistry;
+    private final OntologyContextBuilder ontologyContextBuilder;
 
     @org.springframework.beans.factory.annotation.Value("${smart-query.prompt.system-token-budget:16000}")
     private int systemTokenBudget;
@@ -115,6 +116,13 @@ public class SystemPromptBuilder {
             PromptPriority.CUSTOM, "mining-workflow",
             promptLoader.loadSystemSection("mining-workflow"),
             PromptContext::hasMiningModel
+        ));
+
+        // CUSTOM: 本体模型上下文（有数据源且配置了本体时注入）
+        sections.add(PromptSection.conditional(
+            PromptPriority.CUSTOM, "ontology-guidance",
+            promptLoader.loadSystemSection("ontology-guidance"),
+            pc -> pc.hasDataSource() && ontologyContextBuilder.hasOntology(pc.dataSourceId())
         ));
 
         return sections;

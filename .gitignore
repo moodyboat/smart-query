@@ -31,3 +31,7 @@ screenshots/
 *.log
 *.tmp
 .claude/
+
+# Runtime
+logs/
+tmp/

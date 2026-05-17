@@ -281,6 +281,16 @@ export async function getStepScript(id, nodeId) {
   return data.data
 }
 
+export async function trialMissingStrategy(pipelineId, columnStrategies) {
+  const { data } = await api.post(`/mining/pipeline/${pipelineId}/trial-missing-strategy`, { columnStrategies })
+  return data.data
+}
+
+export async function fetchSegmentedScript(pipelineId) {
+  const { data } = await api.get(`/mining/pipeline/${pipelineId}/segmented-script`)
+  return data.data
+}
+
 export async function fetchPipelineSyncStatus(id) {
   const { data } = await api.get(`/mining/pipeline/${id}/sync-status`)
   return data.data
