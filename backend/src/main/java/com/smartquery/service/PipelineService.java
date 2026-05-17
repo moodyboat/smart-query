@@ -1374,6 +1374,7 @@ public class PipelineService {
         sb.append("        try: _correlations[c] = round(float(X[c].corr(y)), 3)\n");
         sb.append("        except: pass\n\n");
 
+        sb.append("from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor\n");
         sb.append("result = {\n");
         sb.append("  'status': 'success', 'nodeType': 'feature_engineering',\n");
         sb.append("  'featureCount': len(feature_cols), 'targetColumn': target_col,\n");
@@ -1396,19 +1397,16 @@ public class PipelineService {
         sb.append("    for c in feature_cols\n  ],\n");
 
         // Histogram bins for numeric features
-        sb.append("  'histograms': {c: {'bins': [round(float(b), 2) for b in bin_edges], 'counts': [int(c) for c in counts]}\n");
-        sb.append("    for c, (counts, bin_edges) in [(c, np.histogram(X[c].dropna(), bins=10)) for c in X.select_dtypes(include=['number']).columns[:15]]},\n");
+        sb.append("  'histograms': {col: {'bins': [round(float(b), 2) for b in edges], 'counts': [int(cnt) for cnt in cts]}\n");
+        sb.append("    for col, (cts, edges) in [(col, np.histogram(X[col].dropna(), bins=10)) for col in X.select_dtypes(include=['number']).columns[:15]]},\n");
 
-        // Correlation matrix (top N features)
-        sb.append("  'correlationMatrix': (lambda m: {k: {kk: round(float(m.loc[k, kk]), 3) for kk in m.columns} for k in m.index})\n");
-        sb.append("    (X.select_dtypes(include=['number']).iloc[:, :15].corr().round(3).to_dict()),\n");
+        // Correlation matrix (top N features) — .corr().to_dict() already returns nested dict
+        sb.append("  'correlationMatrix': X.select_dtypes(include=['number']).iloc[:, :15].corr().round(3).to_dict(),\n");
 
         // Quick feature importance via DecisionTree
         sb.append("  'quickImportance': (lambda clf2: dict(sorted(zip(X.columns, clf2.feature_importances_), key=lambda x: -x[1])[:15]))\n");
-        sb.append("    (__import__('sklearn.tree', fromlist=['DecisionTreeClassifier','DecisionTreeRegressor'])\n");
-        sb.append("     .DecisionTreeClassifier(max_depth=3, random_state=42).fit(X, y) if y is not None and len(y.unique()) <= 20 else\n");
-        sb.append("     __import__('sklearn.tree', fromlist=['DecisionTreeRegressor'])\n");
-        sb.append("     .DecisionTreeRegressor(max_depth=3, random_state=42).fit(X, y) if y is not None else {}),\n");
+        sb.append("    (DecisionTreeClassifier(max_depth=3, random_state=42).fit(X, y) if y is not None and len(y.unique()) <= 20 else\n");
+        sb.append("     DecisionTreeRegressor(max_depth=3, random_state=42).fit(X, y) if y is not None else {}),\n");
 
         sb.append("}\nprint('[PREVIEW_RESULT] ' + json.dumps(result, default=str))\n");
     }
