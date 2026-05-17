@@ -141,6 +141,10 @@
         :ds-preview-column-stats="dsPreviewColumnStats"
         :trial-missing-loading="trialMissingLoading"
         :trial-missing-result="trialMissingResult"
+        :importance-option="importanceOption"
+        :correlation-option="correlationOption"
+        :histogram-options="histogramOptions"
+        :has-chart-data="hasChartData"
         @table-selected="onTableSelected"
         @target-column-change="onTargetColumnChange"
         @feat-select-all-change="onFeatSelectAll"
@@ -187,7 +191,8 @@ import { useAlgorithms } from '../composables/useAlgorithms.js'
 import { usePipelineCanvas } from '../composables/usePipelineCanvas.js'
 import { useMissingValueTrial } from '../composables/useMissingValueTrial.js'
 import { usePipelineStream } from '../composables/usePipelineStream.js'
-import { DEFAULT_MODEL_TYPE, DEFAULT_ALGORITHM } from '../constants'
+import { useFeatureCharts } from '../composables/useFeatureCharts.js'
+import { DEFAULT_MODEL_TYPE, DEFAULT_ALGORITHM, NODE_TYPES, NODE_TYPE_LABELS, PIPELINE_STATUS } from '../constants'
 
 import PipelineList from './pipeline/PipelineList.vue'
 import PipelineCanvas from './pipeline/PipelineCanvas.vue'
@@ -297,10 +302,10 @@ const selectedNodeTitle = computed(() => {
 const selectedFeatCount = computed(() => Object.values(featChecked.value).filter(Boolean).length)
 
 const canRun = computed(() => {
-  const dsNode = pipelineNodes.value.find(n => n.type === 'data_source')
+  const dsNode = pipelineNodes.value.find(n => n.type === NODE_TYPES.DATA_SOURCE)
   const hasTable = dsNode?.config?.table
-  const hasTraining = pipelineNodes.value.some(n => n.type === 'training')
-  const featNode = pipelineNodes.value.find(n => n.type === 'feature_engineering')
+  const hasTraining = pipelineNodes.value.some(n => n.type === NODE_TYPES.TRAINING)
+  const featNode = pipelineNodes.value.find(n => n.type === NODE_TYPES.FEATURE_ENGINEERING)
   let hasFeatures = false
   let hasTarget = false
   if (featNode?.config?.featureColumns) {
@@ -310,7 +315,7 @@ const canRun = computed(() => {
       hasFeatures = arr.length > 0
     } catch { hasFeatures = false }
   }
-  hasTarget = !!featNode?.config?.targetColumn || !!pipelineNodes.value.find(n => n.type === 'training')?.config?.modelType?.includes('clustering')
+  hasTarget = !!featNode?.config?.targetColumn || !!pipelineNodes.value.find(n => n.type === NODE_TYPES.TRAINING)?.config?.modelType?.includes('clustering')
   return pipelineNodes.value.length >= 3 && !!hasTable && hasTraining && hasFeatures && hasTarget
 })
 
@@ -337,10 +342,11 @@ watch(pipelineNodes, () => {
 const { isDragging, onPaletteDragStart, onNodeReorderStart, onDragEnd, findClosestInsertIndex, reorderNode } = usePipelineCanvas(pipelineNodes)
 const { trialLoading: trialMissingLoading, trialResult: trialMissingResult, runTrial: runMissingTrial } = useMissingValueTrial()
 const pipelineStream = usePipelineStream()
+const { importanceOption, correlationOption, histogramOptions, hasChartData } = useFeatureCharts(featAnalysis)
 
 // --- Node helper functions ---
 function nodeTitle(type) {
-  return { data_source: '数据接入', preprocessing: '数据预处理', fill_missing: '填充缺失值', feature_engineering: '特征工程', training: '模型训练', evaluation: '模型评估', output: '输出写入' }[type] || type
+  return NODE_TYPE_LABELS[type] || type
 }
 
 function nodeSummary(node) {
@@ -388,14 +394,15 @@ function nodeSummary(node) {
 }
 
 function defaultNodeConfig(type) {
+  const T = NODE_TYPES
   switch (type) {
-    case 'data_source': return { title: '数据接入', table: '', filter: '' }
-    case 'preprocessing': return { title: '数据预处理', handleMissing: 'drop', encoding: 'label', scaling: 'standard' }
-    case 'fill_missing': return { title: '填充缺失值', strategy: 'auto', columns: [], fillValues: {} }
-    case 'feature_engineering': return { title: '特征工程', featureColumns: '[]', targetColumn: '' }
-    case 'training': return { title: '模型训练', modelType: firstModelType(), algorithm: firstAlgorithm(), hyperparams: {} }
-    case 'evaluation': return { title: '模型评估', testSize: 20, cvFold: 0, validationMode: 'train_test', temporalColumn: null }
-    case 'output': return { title: '输出写入', table: '', mode: 'append', autoCreate: false }
+    case T.DATA_SOURCE: return { title: NODE_TYPE_LABELS[T.DATA_SOURCE], table: '', filter: '' }
+    case T.PREPROCESSING: return { title: NODE_TYPE_LABELS[T.PREPROCESSING], handleMissing: 'drop', encoding: 'label', scaling: 'standard' }
+    case T.FILL_MISSING: return { title: NODE_TYPE_LABELS[T.FILL_MISSING], strategy: 'auto', columns: [], fillValues: {} }
+    case T.FEATURE_ENGINEERING: return { title: NODE_TYPE_LABELS[T.FEATURE_ENGINEERING], featureColumns: '[]', targetColumn: '' }
+    case T.TRAINING: return { title: NODE_TYPE_LABELS[T.TRAINING], modelType: firstModelType(), algorithm: firstAlgorithm(), hyperparams: {} }
+    case T.EVALUATION: return { title: NODE_TYPE_LABELS[T.EVALUATION], testSize: 20, cvFold: 0, validationMode: 'train_test', temporalColumn: null }
+    case T.OUTPUT: return { title: NODE_TYPE_LABELS[T.OUTPUT], table: '', mode: 'append', autoCreate: false }
     default: return { title: type }
   }
 }
@@ -409,20 +416,21 @@ function firstAlgorithm() {
 }
 
 function isNodeConfigured(node) {
+  const T = NODE_TYPES
   const c = node.config || {}
   switch (node.type) {
-    case 'data_source': return !!c.table
-    case 'preprocessing': return true
-    case 'fill_missing': return true
-    case 'feature_engineering': {
+    case T.DATA_SOURCE: return !!c.table
+    case T.PREPROCESSING: return true
+    case T.FILL_MISSING: return true
+    case T.FEATURE_ENGINEERING: {
       try {
         const fc = c.featureColumns ? (typeof c.featureColumns === 'string' ? JSON.parse(c.featureColumns) : c.featureColumns) : []
         return fc.length > 0
       } catch { return false }
     }
-    case 'training': return !!c.algorithm
-    case 'evaluation': return true
-    case 'output': return !!c.table
+    case T.TRAINING: return !!c.algorithm
+    case T.EVALUATION: return true
+    case T.OUTPUT: return !!c.table
     default: return true
   }
 }
@@ -443,12 +451,12 @@ async function createPipeline() {
   if (!ds) { ElMessage.warning('请先配置数据源'); return }
 
   const defaultNodes = [
-    { id: 'n1', type: 'data_source', config: { ...defaultNodeConfig('data_source') } },
-    { id: 'n2', type: 'preprocessing', config: { ...defaultNodeConfig('preprocessing') } },
-    { id: 'n3', type: 'feature_engineering', config: { ...defaultNodeConfig('feature_engineering') } },
-    { id: 'n4', type: 'training', config: { ...defaultNodeConfig('training') } },
-    { id: 'n5', type: 'evaluation', config: { ...defaultNodeConfig('evaluation') } },
-    { id: 'n6', type: 'output', config: { ...defaultNodeConfig('output') } }
+    { id: 'n1', type: NODE_TYPES.DATA_SOURCE, config: { ...defaultNodeConfig(NODE_TYPES.DATA_SOURCE) } },
+    { id: 'n2', type: NODE_TYPES.PREPROCESSING, config: { ...defaultNodeConfig(NODE_TYPES.PREPROCESSING) } },
+    { id: 'n3', type: NODE_TYPES.FEATURE_ENGINEERING, config: { ...defaultNodeConfig(NODE_TYPES.FEATURE_ENGINEERING) } },
+    { id: 'n4', type: NODE_TYPES.TRAINING, config: { ...defaultNodeConfig(NODE_TYPES.TRAINING) } },
+    { id: 'n5', type: NODE_TYPES.EVALUATION, config: { ...defaultNodeConfig(NODE_TYPES.EVALUATION) } },
+    { id: 'n6', type: NODE_TYPES.OUTPUT, config: { ...defaultNodeConfig(NODE_TYPES.OUTPUT) } }
   ]
   const defaultEdges = [
     { source: 'n1', target: 'n2' }, { source: 'n2', target: 'n3' },
@@ -470,7 +478,7 @@ async function createPipeline() {
       const tables = await fetchDataSourceTables(ds.id) || []
       if (tables.length > 0) {
         const firstTable = tables[0].name
-        const dsNode = pipelineNodes.value.find(n => n.type === 'data_source')
+        const dsNode = pipelineNodes.value.find(n => n.type === NODE_TYPES.DATA_SOURCE)
         if (dsNode) dsNode.config.table = firstTable
 
         const columns = await fetchTableColumns(ds.id, firstTable) || []
@@ -511,7 +519,7 @@ function autoConfigureFeatures(columns, tableName) {
     if (enumCol) targetCol = enumCol.name
   }
 
-  const featNode = pipelineNodes.value.find(n => n.type === 'feature_engineering')
+  const featNode = pipelineNodes.value.find(n => n.type === NODE_TYPES.FEATURE_ENGINEERING)
   if (featNode) {
     const feats = targetCol ? featureCols.filter(c => c !== targetCol) : featureCols
     featNode.config.featureColumns = JSON.stringify(feats)
@@ -523,7 +531,7 @@ function autoConfigureFeatures(columns, tableName) {
     featChecked.value = checked
   }
 
-  const outNode = pipelineNodes.value.find(n => n.type === 'output')
+  const outNode = pipelineNodes.value.find(n => n.type === NODE_TYPES.OUTPUT)
   if (outNode && tableName) {
     outNode.config.table = tableName + '_prediction_result'
   }
@@ -550,17 +558,17 @@ function normalizeNodes(nodes) {
   try {
     return (Array.isArray(nodes) ? nodes : []).map(n => {
       const config = { ...n.config }
-      if (n.type === 'training' && config.hyperparameters && !config.hyperparams) {
+      if (n.type === NODE_TYPES.TRAINING && config.hyperparameters && !config.hyperparams) {
         config.hyperparams = config.hyperparameters
         delete config.hyperparameters
       }
-      if (n.type === 'training' && !config.hyperparams) {
+      if (n.type === NODE_TYPES.TRAINING && !config.hyperparams) {
         config.hyperparams = {}
       }
-      if (n.type === 'feature_engineering' && Array.isArray(config.featureColumns)) {
+      if (n.type === NODE_TYPES.FEATURE_ENGINEERING && Array.isArray(config.featureColumns)) {
         config.featureColumns = JSON.stringify(config.featureColumns)
       }
-      if (n.type === 'feature_engineering') {
+      if (n.type === NODE_TYPES.FEATURE_ENGINEERING) {
         if (!config.transforms) config.transforms = []
         else if (!Array.isArray(config.transforms)) config.transforms = []
         for (const tf of config.transforms) {
@@ -610,7 +618,7 @@ async function savePipeline(silent = false) {
   try {
     const nodesToSave = JSON.parse(JSON.stringify(pipelineNodes.value))
     for (const node of nodesToSave) {
-      if (node.type === 'training' && node.config?.hyperparams) {
+      if (node.type === NODE_TYPES.TRAINING && node.config?.hyperparams) {
         const params = algorithmParams(node.config.algorithm)
         for (const p of params) {
           if (p.type === 'float' && typeof node.config.hyperparams[p.key] === 'number') {
@@ -618,7 +626,7 @@ async function savePipeline(silent = false) {
           }
         }
       }
-      if (node.type === 'feature_engineering' && node.config?.transforms) {
+      if (node.type === NODE_TYPES.FEATURE_ENGINEERING && node.config?.transforms) {
         for (const tf of node.config.transforms) {
           if (tf.type === 'date_extract' && tf.partsArr) tf.parts = tf.partsArr.join(',')
           if (tf.type === 'binning' && tf.strategy === 'custom' && tf.edgesInput) {
@@ -635,7 +643,7 @@ async function savePipeline(silent = false) {
       name: editingPipeline.value.name,
       nodes: nodesToSave,
       edges: edges,
-      status: canRun.value ? 'ready' : 'draft'
+      status: canRun.value ? PIPELINE_STATUS.READY : PIPELINE_STATUS.DRAFT
     })
 
     try {
@@ -771,7 +779,7 @@ async function runPipeline() {
     if (metrics.overfitting_gap != null) parts.push(`过拟合差距 ${(metrics.overfitting_gap * 100).toFixed(1)}%`)
     ElMessage.success(`流程执行完成 — ${parts.join('，')}`)
   } catch (e) {
-    try { await updateMiningPipeline(editingPipeline.value.id, { status: 'failed' }) } catch {}
+    try { await updateMiningPipeline(editingPipeline.value.id, { status: PIPELINE_STATUS.FAILED }) } catch {}
     ElMessage.error('执行失败: ' + (e.message || '未知错误'))
   } finally {
     running.value = false
@@ -847,7 +855,7 @@ async function loadTableAndColumns() {
   catch { tableOptions.value = [] }
   finally { loadingTables.value = false }
 
-  const dsNode = pipelineNodes.value.find(n => n.type === 'data_source')
+  const dsNode = pipelineNodes.value.find(n => n.type === NODE_TYPES.DATA_SOURCE)
   if (dsNode?.config?.table) {
     await loadColumns(dsNode.config.table)
   }
@@ -855,7 +863,7 @@ async function loadTableAndColumns() {
 
 async function onTableSelected(tableName) {
   await loadColumns(tableName)
-  const featNode = pipelineNodes.value.find(n => n.type === 'feature_engineering')
+  const featNode = pipelineNodes.value.find(n => n.type === NODE_TYPES.FEATURE_ENGINEERING)
   if (featNode) {
     featNode.config.featureColumns = '[]'
     featNode.config.targetColumn = ''
@@ -867,7 +875,7 @@ async function loadColumns(tableName) {
   if (!editingPipeline.value?.dataSourceId || !tableName) { columnOptions.value = []; return }
   try {
     columnOptions.value = await fetchTableColumns(editingPipeline.value.dataSourceId, tableName) || []
-    const featNode = pipelineNodes.value.find(n => n.type === 'feature_engineering')
+    const featNode = pipelineNodes.value.find(n => n.type === NODE_TYPES.FEATURE_ENGINEERING)
     if (featNode) {
       const raw = featNode.config?.featureColumns
       const saved = raw ? (Array.isArray(raw) ? raw : JSON.parse(raw)) : []
@@ -881,7 +889,7 @@ async function loadColumns(tableName) {
 
 function onFeatSelectAll(val) {
   const checked = {}
-  const featNode = pipelineNodes.value.find(n => n.type === 'feature_engineering')
+  const featNode = pipelineNodes.value.find(n => n.type === NODE_TYPES.FEATURE_ENGINEERING)
   const target = featNode?.config?.targetColumn
   columnOptions.value.forEach(c => {
     if (val && c.name === target) {
@@ -895,7 +903,7 @@ function onFeatSelectAll(val) {
 }
 
 function syncFeatCols() {
-  const featNode = pipelineNodes.value.find(n => n.type === 'feature_engineering')
+  const featNode = pipelineNodes.value.find(n => n.type === NODE_TYPES.FEATURE_ENGINEERING)
   if (featNode) {
     const target = featNode.config.targetColumn
     const cols = Object.entries(featChecked.value)
@@ -908,7 +916,7 @@ function syncFeatCols() {
 }
 
 function onTargetColumnChange(target) {
-  const featNode = pipelineNodes.value.find(n => n.type === 'feature_engineering')
+  const featNode = pipelineNodes.value.find(n => n.type === NODE_TYPES.FEATURE_ENGINEERING)
   if (!featNode) return
   if (target && featChecked.value[target]) {
     featChecked.value[target] = false
@@ -920,7 +928,7 @@ let _autoAnalyzeTimer = null
 function autoAnalyzeDebounced() {
   if (_autoAnalyzeTimer) clearTimeout(_autoAnalyzeTimer)
   _autoAnalyzeTimer = setTimeout(() => {
-    const featNode = pipelineNodes.value.find(n => n.type === 'feature_engineering')
+    const featNode = pipelineNodes.value.find(n => n.type === NODE_TYPES.FEATURE_ENGINEERING)
     if (!featNode) return
     const hasTarget = !!featNode.config.targetColumn
     let hasFeatures = false
@@ -936,7 +944,7 @@ function autoAnalyzeDebounced() {
 }
 
 async function analyzeFeatures() {
-  if (!selectedNode.value || selectedNode.value.type !== 'feature_engineering') return
+  if (!selectedNode.value || selectedNode.value.type !== NODE_TYPES.FEATURE_ENGINEERING) return
   featAnalyzing.value = true
   featAnalysis.value = null
   try {

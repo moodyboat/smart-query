@@ -321,6 +321,24 @@
                   </span>
                 </div>
               </div>
+              <!-- Feature Charts -->
+              <div v-if="hasChartData" class="feat-charts" style="margin-top: 10px">
+                <div v-if="importanceOption" class="feat-chart-block">
+                  <div ref="importanceChartRef" style="height: 200px; width: 100%"></div>
+                </div>
+                <div v-if="correlationOption" class="feat-chart-block">
+                  <div ref="correlationChartRef" style="height: 260px; width: 100%"></div>
+                </div>
+                <div v-if="histogramOptions.length" class="feat-chart-block">
+                  <div class="preview-stat" style="margin-bottom: 4px"><span class="ps-label">特征分布</span></div>
+                  <div style="display: flex; flex-wrap: wrap; gap: 8px">
+                    <div v-for="h in histogramOptions" :key="h.name" style="flex: 1 1 180px; min-width: 160px">
+                      <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 2px">{{ h.name }}</div>
+                      <div :ref="el => setHistChartRef(h.name, el)" style="height: 120px; width: 100%"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </el-form-item>
           <el-form-item label="特征变换">
@@ -642,7 +660,13 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import * as echarts from 'echarts/core'
+import { BarChart, HeatmapChart } from 'echarts/charts'
+import { GridComponent, TooltipComponent, TitleComponent, VisualMapComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
+
+echarts.use([BarChart, HeatmapChart, GridComponent, TooltipComponent, TitleComponent, VisualMapComponent, CanvasRenderer])
 
 const stepTypes = [
   { type: 'data_source', icon: '📥', title: '数据接入', desc: '从数据库读取数据' },
@@ -676,7 +700,11 @@ const props = defineProps({
   dsPreviewColumnStats: { type: Array, default: () => [] },
   scriptLoading: { type: Boolean, default: false },
   trialMissingLoading: { type: Boolean, default: false },
-  trialMissingResult: { type: Object, default: null }
+  trialMissingResult: { type: Object, default: null },
+  importanceOption: { type: Object, default: null },
+  correlationOption: { type: Object, default: null },
+  histogramOptions: { type: Array, default: () => [] },
+  hasChartData: { type: Boolean, default: false }
 })
 
 const emit = defineEmits([
@@ -698,6 +726,57 @@ const emit = defineEmits([
   'syncFeatCols',
   'runMissingTrial'
 ])
+
+// --- Feature ECharts ---
+const importanceChartRef = ref(null)
+const correlationChartRef = ref(null)
+const histChartRefs = {}
+const chartInstances = []
+
+function setHistChartRef(name, el) {
+  if (el) histChartRefs[name] = el
+}
+
+function initChart(el, option) {
+  if (!el) return null
+  const inst = echarts.init(el)
+  inst.setOption(option)
+  chartInstances.push(inst)
+  return inst
+}
+
+watch([() => props.importanceOption, importanceChartRef], ([opt, el]) => {
+  if (!opt || !el) return
+  nextTick(() => {
+    const existing = chartInstances.find(i => i.getDom() === el)
+    if (existing) { existing.setOption(opt) } else { initChart(el, opt) }
+  })
+})
+
+watch([() => props.correlationOption, correlationChartRef], ([opt, el]) => {
+  if (!opt || !el) return
+  nextTick(() => {
+    const existing = chartInstances.find(i => i.getDom() === el)
+    if (existing) { existing.setOption(opt) } else { initChart(el, opt) }
+  })
+})
+
+watch(() => props.histogramOptions, (opts) => {
+  if (!opts?.length) return
+  nextTick(() => {
+    for (const h of opts) {
+      const el = histChartRefs[h.name]
+      if (!el) continue
+      const existing = chartInstances.find(i => i.getDom() === el)
+      if (existing) { existing.setOption(h.option) } else { initChart(el, h.option) }
+    }
+  })
+}, { deep: true })
+
+onBeforeUnmount(() => {
+  chartInstances.forEach(i => i.dispose())
+  chartInstances.length = 0
+})
 
 const algoOptions = computed(() => {
   const mt = props.selectedNode?.config?.modelType
@@ -1189,5 +1268,12 @@ function trialMissingBadge(colName) {
   color: var(--text-secondary);
   flex: 1;
   min-width: 200px;
+}
+.feat-chart-block {
+  margin-bottom: 8px;
+  padding: 8px;
+  background: var(--surface, #fafafa);
+  border-radius: var(--radius-md, 6px);
+  border: 1px solid var(--border-light, #eee);
 }
 </style>
