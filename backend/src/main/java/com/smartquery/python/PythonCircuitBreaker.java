@@ -61,4 +61,14 @@ public class PythonCircuitBreaker {
     public int getConsecutiveFailures() {
         return consecutiveFailures.get();
     }
+
+    /**
+     * 重置熔断器状态（用于管理员手动恢复）
+     */
+    public synchronized void reset() {
+        consecutiveFailures.set(0);
+        lastFailureTime.set(0);
+        state = State.CLOSED;
+        log.info("[CIRCUIT-BREAKER] manually reset to CLOSED state");
+    }
 }

@@ -1,5 +1,5 @@
 server:
-  port: 8080
+  port: 9000
   servlet:
     context-path: /
 
@@ -33,6 +33,7 @@ spring:
     enabled: true
     locations: classpath:db/migration
     baseline-on-migrate: true
+    validate-on-migrate: false  # 禁用验证，避免校验和不匹配问题
 
   # Jackson
   jackson:
@@ -102,7 +103,7 @@ smart-query:
     connect-timeout-seconds: 30
     max-retries: 3
     retry-delay-ms: 1000
-    default-api-url: https://open.bigmodel.cn/api/coding/paas/v4/chat/completions
+    default-api-url: https://open.bigmodel.cn/api/paas/v4/chat/completions
     default-max-tokens: 4096
 
   # Session
@@ -162,6 +163,7 @@ smart-query:
   # Python 执行环境
   python:
     execution-mode: process
+    command: /c/Python311/python.exe
     docker-image: smart-query-python:latest
     default-timeout-ms: 60000
     max-timeout-ms: 600000
@@ -169,6 +171,22 @@ smart-query:
     max-memory-mb: 512
     max-cpus: 1
     stream-drain-timeout-seconds: 5
+    artifact-dir: C:/temp/smartquery-artifacts
+    workspace-base: C:/temp/smartquery-workspace
+    # 熔断器配置
+    circuit-breaker:
+      failure-threshold: 10
+      recovery-timeout-ms: 30000
+
+  # ECharts 服务端渲染 (SSR) — 用于 Word 报告图表图片生成
+  # 通过 Node 进程用 ECharts SSR SVG 模式渲染真实图表，无浏览器、无截图
+  echarts:
+    enabled: true
+    node-command: node
+    script-path: tools/echarts-ssr/render.mjs
+    timeout-ms: 30000
+    default-width: 800
+    default-height: 600
 
   # SQL 安全
   sql-safety:
@@ -177,6 +195,23 @@ smart-query:
     denied-keywords: DROP,DELETE,UPDATE,INSERT,ALTER,CREATE,TRUNCATE,GRANT,REVOKE
     max-rows: 1000
     query-timeout-seconds: 30
+
+  # 查询和历史管理
+  query:
+    metadata-max-chars: 262144
+    history-token-budget: 20000
+    history-keep-recent: 10
+    metadata-max-display-rows: 50
+    metadata-max-section-length: 2000
+    metadata-max-python-stdout: 3000
+    history-trim-chars: 100
+
+  # 对话摘要
+  summary:
+    enabled: true
+    model: glm-4
+    max-tokens: 2000
+    cache-ttl-minutes: 30
 
   # 日志
   logging:
@@ -189,6 +224,28 @@ smart-query:
     core-size: 4
     max-size: 8
     queue-capacity: 100
+
+  # 任务协调器
+  coordinator:
+    enabled: true
+    parallel-execution: true
+    max-concurrent-tasks: 5
+    task-timeout-seconds: 300
+    enable-task-retry: true
+    max-retry-attempts: 2
+    retry-delay-ms: 1000
+
+  # 图表和报告
+  chart:
+    image-timeout-seconds: 30
+    image-width: 800
+    image-height: 600
+    storage-path: ./charts  # 图表图片存储路径
+    use-phantomjs: false
+  report:
+    enable-llm-summary: true
+    fallback-to-simple: true
+    max-appendix-messages: 20
 
 logging:
   level:

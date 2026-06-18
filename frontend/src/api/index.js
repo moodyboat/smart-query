@@ -43,20 +43,31 @@ api.interceptors.response.use(
       ElMessage.error('网络连接失败，请检查网络')
     } else {
       const status = error.response.status
+      const responseData = error.response.data
+      // Try to get the actual error message from backend response
+      let errorMsg = null
+      if (responseData?.message) {
+        errorMsg = responseData.message
+      } else if (typeof responseData === 'string') {
+        errorMsg = responseData
+      }
+
       const msgs = {
-        400: error.response.data?.message || '请求参数错误',
+        400: errorMsg || '请求参数错误',
         401: '请先登录',
         403: '没有操作权限',
         404: '请求的资源不存在',
-        409: error.response.data?.message || '操作冲突',
+        409: errorMsg || '操作冲突',
         429: '请求过于频繁，请稍后重试',
-        500: '服务内部错误，请稍后重试'
+        500: errorMsg || '服务内部错误，请稍后重试'
       }
       ElMessage.error(msgs[status] || `请求失败 (${status})`)
     }
     return Promise.reject(error)
   }
 )
+
+export default api
 
 export async function fetchConversations() {
   const { data } = await api.get('/conversation')
@@ -70,6 +81,10 @@ export async function createConversation(title) {
 
 export async function deleteConversation(id) {
   await api.delete(`/conversation/${id}`)
+}
+
+export async function batchDeleteConversations(ids) {
+  await api.post('/conversation/batch-delete', { ids })
 }
 
 export async function renameConversation(id, title) {
@@ -121,6 +136,26 @@ export async function fetchTablePreview(dataSourceId, tableName, limit = PREVIEW
   return data.data
 }
 
+export async function createDataSource(dataSource) {
+  const { data } = await api.post('/datasource', dataSource)
+  return data.data
+}
+
+export async function updateDataSource(id, dataSource) {
+  const { data } = await api.put(`/datasource/${id}`, dataSource)
+  return data.data
+}
+
+export async function deleteDataSource(id) {
+  const { data } = await api.delete(`/datasource/${id}`)
+  return data.data
+}
+
+export async function testDataSourceConnection(id) {
+  const { data } = await api.post(`/datasource/${id}/test`)
+  return data.data
+}
+
 export async function rerenderChart(chartId, filterValues) {
   const { data } = await api.post(`/chart/${chartId}/rerender`, filterValues)
   return data.data
@@ -131,8 +166,12 @@ export async function fetchDashboardWithCharts(dashboardId) {
   return data.data
 }
 
-export function buildChatUrl(conversationId, dataSourceId) {
-  return `${API_BASE}/chat?conversationId=${conversationId}&dataSourceId=${dataSourceId}`
+export function buildChatUrl(conversationId, dataSourceId, scenario = null) {
+  let url = `${API_BASE}/chat?conversationId=${conversationId}&dataSourceId=${dataSourceId}`
+  if (scenario) {
+    url += `&scenario=${scenario}`
+  }
+  return url
 }
 
 // Mining Model APIs
@@ -169,6 +208,10 @@ export async function updateMiningModel(id, updates) {
 
 export async function deleteMiningModel(id) {
   await api.delete(`/mining/model/${id}`)
+}
+
+export async function forceDeleteMiningModel(id) {
+  await api.delete(`/mining/model/${id}/force`)
 }
 
 export async function trainMiningModel(id) {
@@ -345,4 +388,10 @@ export async function fetchAdminStats() {
 export async function fetchAdminSessions() {
   const { data } = await api.get('/admin/sessions')
   return data
+}
+
+// Word Report APIs
+export async function downloadWordReport(conversationId, title) {
+  const url = `/word-report/download/conversation/${conversationId}${title ? '?title=' + encodeURIComponent(title) : ''}`
+  window.open(`${API_BASE}${url}`, '_blank')
 }

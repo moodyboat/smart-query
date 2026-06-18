@@ -7,6 +7,8 @@ export const useUIStore = defineStore('ui', () => {
   const miningVisible = ref(false)
   const dashboardVisible = ref(false)
   const dashboardId = ref(null)
+  const dataSourceVisible = ref(false)
+  const promptManagerVisible = ref(false)
 
   function toggleSidebar() {
     sidebarOpen.value = !sidebarOpen.value
@@ -47,12 +49,30 @@ export const useUIStore = defineStore('ui', () => {
     dashboardVisible.value = false
   }
 
+  function openDataSource() {
+    dataSourceVisible.value = true
+  }
+
+  function closeDataSource() {
+    dataSourceVisible.value = false
+  }
+
+  function openPromptManager() {
+    promptManagerVisible.value = true
+  }
+
+  function closePromptManager() {
+    promptManagerVisible.value = false
+  }
+
   return {
     sidebarOpen,
     isMobile,
     miningVisible,
     dashboardVisible,
     dashboardId,
+    dataSourceVisible,
+    promptManagerVisible,
     miningInitialModelId,
     toggleSidebar,
     closeSidebar,
@@ -61,6 +81,10 @@ export const useUIStore = defineStore('ui', () => {
     closeMining,
     consumeMiningInitialModel,
     openDashboard,
-    closeDashboard
+    closeDashboard,
+    openDataSource,
+    closeDataSource,
+    openPromptManager,
+    closePromptManager
   }
 })

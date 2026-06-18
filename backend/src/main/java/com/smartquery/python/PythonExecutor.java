@@ -50,6 +50,8 @@ public class PythonExecutor {
     @Value("${smart-query.python.command:python3}")
     private String pythonCmd;
 
+    private String resolvedPythonCmd; // 运行时解析后的 Python 命令路径
+
     @Value("${smart-query.python.max-memory-mb:512}")
     private int maxMemoryMb;
 
@@ -81,6 +83,18 @@ public class PythonExecutor {
         try {
             Files.createDirectories(Path.of(artifactDir));
             Files.createDirectories(Path.of(workspaceBase));
+
+            // 转换 Unix 风格路径为 Windows 原生路径（Git Bash 兼容）
+            resolvedPythonCmd = pythonCmd;
+            if (pythonCmd.matches("^/[a-zA-Z]/.*")) {
+                // Git Bash 路径格式: /c/Python311/python.exe -> C:\Python311\python.exe
+                String driveLetter = pythonCmd.substring(1, 2).toUpperCase();
+                resolvedPythonCmd = driveLetter + ":" + pythonCmd.substring(2).replace("/", "\\");
+                log.info("[PYTHON] 转换 Git Bash 路径: {} -> {}", pythonCmd, resolvedPythonCmd);
+            }
+
+            log.info("[PYTHON] Python执行器初始化完成: command={}, mode={}, artifactDir={}, workspaceBase={}",
+                resolvedPythonCmd, executionMode, artifactDir, workspaceBase);
         } catch (IOException e) {
             log.error("[PYTHON] Failed to create directories: artifactDir={}, workspaceBase={}: {}",
                 artifactDir, workspaceBase, e.getMessage());
@@ -113,10 +127,15 @@ public class PythonExecutor {
             PythonSandbox.validate(code);
 
             tempFile = Files.createTempFile("smartquery_", ".py");
-            // Restrict temp file to owner-only to prevent credential leakage
-            Files.setPosixFilePermissions(tempFile, java.util.Set.of(
-                java.nio.file.attribute.PosixFilePermission.OWNER_READ,
-                java.nio.file.attribute.PosixFilePermission.OWNER_WRITE));
+            // Restrict temp file to owner-only to prevent credential leakage (skip on Windows)
+            try {
+                Files.setPosixFilePermissions(tempFile, java.util.Set.of(
+                    java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                    java.nio.file.attribute.PosixFilePermission.OWNER_WRITE));
+            } catch (UnsupportedOperationException | java.io.IOException e) {
+                // Windows or filesystem doesn't support POSIX permissions, skip
+                log.debug("[PYTHON] Cannot set POSIX permissions (non-POSIX filesystem): {}", e.getMessage());
+            }
             String[] wrapped = wrapCode(code, dataSourceId, conversationId);
             Files.writeString(tempFile, wrapped[0]);
 
@@ -124,7 +143,7 @@ public class PythonExecutor {
             if ("docker".equals(executionMode)) {
                 pb = buildDockerProcess(tempFile, dataSourceId);
             } else {
-                pb = new ProcessBuilder(pythonCmd, tempFile.toString());
+                pb = new ProcessBuilder(resolvedPythonCmd, tempFile.toString());
             }
             pb.redirectErrorStream(false);
             pb.environment().put("PYTHONIOENCODING", "utf-8");
@@ -132,7 +151,9 @@ public class PythonExecutor {
                 pb.environment().put("_SMARTQUERY_DB_URL", wrapped[1]);
             }
 
+            log.debug("[PYTHON] Starting process: command={}, script={}", resolvedPythonCmd, tempFile);
             Process process = pb.start();
+            log.debug("[PYTHON] Process started: pid={}", process.pid());
 
             // Memory monitoring thread for process mode
             if (!"docker".equals(executionMode) && maxMemoryMb > 0) {
@@ -197,13 +218,15 @@ public class PythonExecutor {
             int elapsed = (int) (System.currentTimeMillis() - start);
             circuitBreaker.recordFailure();
             if (memoryMonitor != null) memoryMonitor.shutdownNow();
+            log.error("[PYTHON] Security exception: {}", e.getMessage(), e);
             return PythonResult.error("安全检查未通过: " + e.getMessage(), -3, elapsed);
         } catch (Exception e) {
             int elapsed = (int) (System.currentTimeMillis() - start);
             circuitBreaker.recordFailure();
             if (memoryMonitor != null) memoryMonitor.shutdownNow();
             try { Files.deleteIfExists(tempFile); } catch (Exception ignored) {}
-            return PythonResult.error("执行异常: " + e.getMessage(), -2, elapsed);
+            log.error("[PYTHON] Execution exception: command={}, error={}", resolvedPythonCmd, e.getMessage(), e);
+            return PythonResult.error("执行异常: " + e.getClass().getSimpleName() + " - " + e.getMessage(), -2, elapsed);
         }
     }
 
@@ -227,7 +250,7 @@ public class PythonExecutor {
         // Per-conversation workspace
         if (conversationId != null) {
             String workspaceDir = workspaceBase + "/" + conversationId;
-            sb.append("_workspace = '").append(workspaceDir).append("'\n");
+            sb.append("_workspace = r'").append(workspaceDir).append("'\n");
             sb.append("os.makedirs(_workspace, exist_ok=True)\n");
         } else {
             sb.append("_workspace = '/tmp'\n");
@@ -238,7 +261,7 @@ public class PythonExecutor {
         sb.append("import matplotlib\n");
         sb.append("matplotlib.use('Agg')\n");
         sb.append("import matplotlib.pyplot as plt\n");
-        sb.append("_artifact_dir = '").append(artifactDir).append("'\n");
+        sb.append("_artifact_dir = r'").append(artifactDir).append("'\n");
         sb.append("os.makedirs(_artifact_dir, exist_ok=True)\n");
         sb.append("_fig_counter = 0\n");
         sb.append("_artifacts = []\n");

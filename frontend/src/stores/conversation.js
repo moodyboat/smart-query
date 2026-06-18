@@ -12,6 +12,7 @@ import {
 export const useConversationStore = defineStore('conversation', () => {
   const currentConvId = ref(null)
   const currentDsId = ref(null)
+  const currentScenario = ref(null)  // 新增：当前场景
   let historyMsgCounter = 0
 
   // 消息缓存: convId → { formatted, chartsToRestore }
@@ -23,6 +24,14 @@ export const useConversationStore = defineStore('conversation', () => {
 
   function setDataSource(dsId) {
     currentDsId.value = dsId
+  }
+
+  function setScenario(scenarioCode) {
+    currentScenario.value = scenarioCode
+  }
+
+  function getCurrentScenario() {
+    return currentScenario.value
   }
 
   function clearCurrent() {
@@ -333,8 +342,11 @@ export const useConversationStore = defineStore('conversation', () => {
   return {
     currentConvId,
     currentDsId,
+    currentScenario,
     setCurrentConversation,
     setDataSource,
+    setScenario,
+    getCurrentScenario,
     clearCurrent,
     invalidateCache,
     loadConversationHistory

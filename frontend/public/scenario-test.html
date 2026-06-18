@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>场景对话功能测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 900px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .test-section {
+            background: white;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .test-title {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 15px;
+            color: #333;
+        }
+        .scenario-card {
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 10px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .scenario-card:hover {
+            border-color: #409eff;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .scenario-card.selected {
+            border-color: #67c23a;
+            background-color: #f0f9ff;
+        }
+        .scenario-name {
+            font-size: 16px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .scenario-desc {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 10px;
+        }
+        .start-btn {
+            background: #409eff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            width: 100%;
+        }
+        .start-btn:hover {
+            background: #66b1ff;
+        }
+        .console-output {
+            background: #f0f0f0;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+            min-height: 100px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .status {
+            padding: 8px 12px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        .status.success { background: #f0f9ff; color: #67c23a; }
+        .status.error { background: #fef0f0; color: #f56c6c; }
+        .status.info { background: #f4f4f5; color: #909399; }
+    </style>
+</head>
+<body>
+    <h1>🧪 场景对话功能测试</h1>
+    <p>当前前端地址: <strong>http://localhost:5181</strong></p>
+
+    <div class="test-section">
+        <div class="test-title">1. API数据验证</div>
+        <button onclick="testScenarioAPI()">测试场景API</button>
+        <div id="api-result" class="console-output"></div>
+    </div>
+
+    <div class="test-section">
+        <div class="test-title">2. 场景选择测试</div>
+        <div id="scenarios-container"></div>
+    </div>
+
+    <div class="test-section">
+        <div class="test-title">3. 场景切换测试</div>
+        <div id="switch-result" class="status info">点击"开始对话"按钮测试场景切换功能</div>
+    </div>
+
+    <div class="test-section">
+        <div class="test-title">4. 控制台日志</div>
+        <div id="console-log" class="console-output">控制台日志将显示在这里...</div>
+    </div>
+
+    <script>
+        let scenarios = [];
+        let selectedScenarioId = null;
+
+        // 拦截console.log
+        const originalLog = console.log;
+        console.log = function(...args) {
+            originalLog.apply(console, args);
+            const logDiv = document.getElementById('console-log');
+            if (logDiv) {
+                logDiv.innerHTML += '> ' + args.join(' ') + '<br>';
+                logDiv.scrollTop = logDiv.scrollHeight;
+            }
+        };
+
+        async function testScenarioAPI() {
+            const resultDiv = document.getElementById('api-result');
+            try {
+                resultDiv.innerHTML = '正在加载场景数据...';
+                const response = await fetch('/api/v1/scenarios');
+                const data = await response.json();
+
+                if (data.code === 200 && data.data) {
+                    scenarios = data.data;
+                    resultDiv.innerHTML = `✅ 成功加载 ${data.data.length} 个场景<br>` +
+                                        JSON.stringify(data.data[0], null, 2).substring(0, 200) + '...';
+                    displayScenarios(data.data);
+                } else {
+                    resultDiv.innerHTML = '❌ API响应异常';
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `❌ API调用失败: ${error.message}`;
+            }
+        }
+
+        function displayScenarios(scenarioData) {
+            const container = document.getElementById('scenarios-container');
+            container.innerHTML = '';
+
+            scenarioData.forEach(scenario => {
+                const card = document.createElement('div');
+                card.className = 'scenario-card';
+                card.dataset.id = scenario.id;
+                card.innerHTML = `
+                    <div class="scenario-name">${scenario.name}</div>
+                    <div class="scenario-desc">${scenario.description}</div>
+                    <div>编码: ${scenario.code} | 类别: ${scenario.category}</div>
+                `;
+                card.onclick = () => selectScenario(scenario.id, card);
+                container.appendChild(card);
+            });
+        }
+
+        function selectScenario(id, card) {
+            // 移除之前的选中状态
+            document.querySelectorAll('.scenario-card').forEach(c => c.classList.remove('selected'));
+            // 添加新的选中状态
+            card.classList.add('selected');
+            selectedScenarioId = id;
+
+            const scenario = scenarios.find(s => s.id === id);
+            if (scenario) {
+                document.getElementById('switch-result').innerHTML =
+                    `✅ 已选择场景: ${scenario.name} (${scenario.code})<br>点击下方的"开始对话"按钮测试切换功能`;
+            }
+        }
+
+        function startScenarioChat(scenarioId) {
+            const scenario = scenarios.find(s => s.id === scenarioId);
+            if (!scenario) {
+                document.getElementById('switch-result').innerHTML = '❌ 请先选择一个场景';
+                return;
+            }
+
+            console.log('=== 模拟场景切换 ===');
+            console.log('场景信息:', scenario);
+
+            // 模拟场景切换
+            document.getElementById('switch-result').innerHTML =
+                `✅ 场景切换成功！<br>` +
+                `场景名称: ${scenario.name}<br>` +
+                `场景编码: ${scenario.code}<br>` +
+                `描述: ${scenario.description}`;
+        }
+
+        // 页面加载时自动测试API
+        window.onload = function() {
+            console.log('测试页面已加载');
+            setTimeout(testScenarioAPI, 500);
+        };
+    </script>
+</body>
+</html>

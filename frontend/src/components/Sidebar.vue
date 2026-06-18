@@ -1,7 +1,17 @@
 <template>
   <aside class="sidebar">
     <div class="sidebar-header">
-      <h2>智能问数</h2>
+      <div class="header-top">
+        <h2>智能问数</h2>
+        <el-button
+          v-if="conversations.length > 0 && !batchMode"
+          @click="toggleBatchMode"
+          size="small"
+          text
+        >
+          批量管理
+        </el-button>
+      </div>
       <el-select
         v-model="selectedDsId"
         placeholder="选择数据源"
@@ -9,7 +19,7 @@
         size="small"
       >
         <el-option
-          v-for="ds in dataSources"
+          v-for="ds in qaEnabledDataSources"
           :key="ds.id"
           :label="ds.name"
           :value="ds.id"
@@ -26,13 +36,43 @@
     </div>
 
     <div class="conversation-list">
+      <!-- 批量操作栏 -->
+      <div v-if="batchMode" class="batch-actions">
+        <div class="batch-info">
+          <el-checkbox
+            v-model="allSelected"
+            :indeterminate="isIndeterminate"
+            @change="handleSelectAll"
+          >
+            全选 ({{ selectedCount }}/{{ filteredConversations.length }})
+          </el-checkbox>
+        </div>
+        <div class="batch-buttons">
+          <el-button
+            size="small"
+            :disabled="selectedCount === 0"
+            @click="handleBatchDelete"
+            type="danger"
+          >
+            删除选中 ({{ selectedCount }})
+          </el-button>
+          <el-button size="small" @click="exitBatchMode">取消</el-button>
+        </div>
+      </div>
+
       <div
         v-for="conv in filteredConversations"
         :key="conv.id"
         class="conv-item"
-        :class="{ active: conv.id === currentConvId }"
-        @click="$emit('selectConversation', conv.id)"
+        :class="{ active: conv.id === currentConvId, 'batch-mode': batchMode }"
+        @click="handleConvClick(conv)"
       >
+        <el-checkbox
+          v-if="batchMode"
+          v-model="selectedConversations[conv.id]"
+          @click.stop
+          class="conv-checkbox"
+        />
         <span class="conv-icon">💬</span>
         <template v-if="editingId === conv.id">
           <input
@@ -54,8 +94,17 @@
     </div>
 
     <div class="sidebar-footer">
+      <el-button style="width: 100%; margin-bottom: var(--space-sm)" @click="$emit('openPromptManager')">
+        <el-icon><EditPen /></el-icon> 提示词管理
+      </el-button>
+      <el-button style="width: 100%; margin-bottom: var(--space-sm)" @click="openMetricEngine">
+        <el-icon><DataAnalysis /></el-icon> 指标引擎
+      </el-button>
       <el-button style="width: 100%; margin-bottom: var(--space-sm)" @click="$emit('openMining')">
-        数据挖掘管理
+        <el-icon><TrendCharts /></el-icon> 数据挖掘管理
+      </el-button>
+      <el-button style="width: 100%; margin-bottom: var(--space-sm)" @click="$emit('openDataSource')">
+        <el-icon><DataLine /></el-icon> 数据源管理
       </el-button>
       <el-button type="primary" style="width: 100%" :loading="creating" @click="handleNewConversation">
         <el-icon><Plus /></el-icon> 新建对话
@@ -66,9 +115,9 @@
 
 <script setup>
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
-import { Plus } from '@element-plus/icons-vue'
+import { Plus, DataAnalysis, DataLine, TrendCharts, EditPen, Setting, Delete } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { fetchConversations, fetchDataSources, createConversation, deleteConversation, renameConversation } from '../api'
+import { fetchConversations, fetchDataSources, createConversation, deleteConversation, renameConversation, batchDeleteConversations } from '../api'
 
 const conversations = ref([])
 const dataSources = ref([])
@@ -79,12 +128,38 @@ const editingId = ref(null)
 const editTitle = ref('')
 const editInput = ref(null)
 
-const emit = defineEmits(['selectConversation', 'conversationCreated', 'conversationDeleted', 'dataSourceChanged', 'openMining'])
+// Batch mode
+const batchMode = ref(false)
+const selectedConversations = ref({})
+
+const emit = defineEmits(['selectConversation', 'conversationCreated', 'conversationDeleted', 'dataSourceChanged', 'openMining', 'openDataSource', 'openPromptManager'])
 
 const filteredConversations = computed(() => {
   if (!searchQuery.value.trim()) return conversations.value
   const q = searchQuery.value.toLowerCase()
   return conversations.value.filter(c => (c.title || '新对话').toLowerCase().includes(q))
+})
+
+const qaEnabledDataSources = computed(() => {
+  return dataSources.value.filter(ds => ds.forQuestionAnswering ?? true)
+})
+
+// Batch mode computed properties
+const selectedCount = computed(() => {
+  return Object.values(selectedConversations.value).filter(v => v).length
+})
+
+const allSelected = computed({
+  get() {
+    return filteredConversations.value.length > 0 && selectedCount.value === filteredConversations.value.length
+  },
+  set(val) {
+    // Handled in handleSelectAll
+  }
+})
+
+const isIndeterminate = computed(() => {
+  return selectedCount.value > 0 && selectedCount.value < filteredConversations.value.length
 })
 
 watch(selectedDsId, (val) => {
@@ -97,9 +172,12 @@ onMounted(async () => {
     conversations.value = convs || []
     dataSources.value = dss || []
     if (dss?.length > 0) {
-      const business = dss.find(ds => !ds.system) || dss[0]
-      selectedDsId.value = business.id
-      emit('dataSourceChanged', business.id)
+      const qaEnabled = qaEnabledDataSources.value
+      const business = qaEnabled.find(ds => !ds.system) || qaEnabled[0]
+      if (business) {
+        selectedDsId.value = business.id
+        emit('dataSourceChanged', business.id)
+      }
     }
   } catch (e) {
     console.error('Failed to load sidebar data', e)
@@ -168,6 +246,76 @@ async function saveRename(convId) {
 
 function cancelRename() {
   editingId.value = null
+}
+
+function openMetricEngine() {
+  window.open('http://localhost:5174', '_blank')
+}
+
+// Batch mode functions
+function toggleBatchMode() {
+  batchMode.value = true
+  selectedConversations.value = {}
+}
+
+function exitBatchMode() {
+  batchMode.value = false
+  selectedConversations.value = {}
+}
+
+function handleSelectAll(val) {
+  filteredConversations.value.forEach(conv => {
+    selectedConversations.value[conv.id] = val
+  })
+}
+
+function handleConvClick(conv) {
+  if (batchMode.value) {
+    // Toggle selection in batch mode
+    selectedConversations.value[conv.id] = !selectedConversations.value[conv.id]
+  } else {
+    // Normal conversation selection
+    currentConvId.value = conv.id
+    emit('selectConversation', conv.id)
+  }
+}
+
+async function handleBatchDelete() {
+  const idsToDelete = Object.keys(selectedConversations.value).filter(id => selectedConversations.value[id])
+  if (idsToDelete.length === 0) return
+
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除选中的 ${idsToDelete.length} 个对话吗？此操作不可撤销。`,
+      '批量删除对话',
+      {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+
+    await batchDeleteConversations(idsToDelete)
+    conversations.value = conversations.value.filter(c => !idsToDelete.includes(c.id))
+
+    // Clear current conversation if it was deleted
+    if (idsToDelete.includes(currentConvId.value)) {
+      currentConvId.value = null
+      emit('conversationDeleted', currentConvId.value)
+    }
+
+    selectedConversations.value = {}
+    batchMode.value = false
+
+    ElMessage.success(`成功删除 ${idsToDelete.length} 个对话`)
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('Batch delete failed:', error)
+      // Show detailed error message
+      const errorMsg = error.response?.data?.message || error.message || '批量删除失败，请重试'
+      ElMessage.error(errorMsg)
+    }
+  }
 }
 
 function setCurrentConversation(id) {
@@ -253,6 +401,7 @@ defineExpose({ setCurrentConversation, getSelectedDataSourceId, conversations, r
 }
 
 .sidebar-footer {
-  padding: var(--space-md); border-top: 1px solid var(--border);
+  padding: var(--space-md);
+  border-top: 1px solid var(--border);
 }
 </style>

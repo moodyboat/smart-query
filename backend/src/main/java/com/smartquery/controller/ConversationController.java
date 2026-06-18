@@ -64,6 +64,63 @@ public class ConversationController {
         return Result.ok(null);
     }
 
+    @PostMapping("/batch-delete")
+    public Result<Void> batchDelete(@RequestBody java.util.Map<String, java.util.List<Long>> body) {
+        try {
+            java.util.List<Long> ids = body.get("ids");
+            if (ids == null || ids.isEmpty()) {
+                return Result.error(400, "删除列表不能为空");
+            }
+
+            // Filter out null values
+            ids = ids.stream().filter(id -> id != null).collect(java.util.stream.Collectors.toList());
+
+            if (ids.isEmpty()) {
+                return Result.error(400, "没有有效的对话ID");
+            }
+
+            java.util.Set<Long> failedIds = new java.util.HashSet<>();
+            int deletedCount = 0;
+
+            for (Long id : ids) {
+                try {
+                    // Cascade delete related entities for each conversation
+                    chatMessageMapper.delete(
+                        new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ChatMessage>()
+                            .eq(ChatMessage::getConversationId, id));
+                    chartMapper.delete(
+                        new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Chart>()
+                            .eq(Chart::getConversationId, id));
+                    reportMapper.delete(
+                        new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Report>()
+                            .eq(Report::getConversationId, id));
+                    dashboardMapper.delete(
+                        new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Dashboard>()
+                            .eq(Dashboard::getConversationId, id));
+                    conversationMapper.deleteById(id);
+                    deletedCount++;
+                } catch (Exception e) {
+                    // Log error but continue with other conversations
+                    failedIds.add(id);
+                    System.err.println("Failed to delete conversation " + id + ": " + e.getMessage());
+                }
+            }
+
+            if (deletedCount == 0) {
+                return Result.error(400, "没有找到可删除的对话");
+            }
+
+            if (!failedIds.isEmpty()) {
+                return Result.error(400, "部分对话删除失败，请重试");
+            }
+
+            return Result.ok(null);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return Result.error(500, "批量删除失败: " + e.getMessage());
+        }
+    }
+
     @PutMapping("/{id}/title")
     public Result<Void> updateTitle(@PathVariable Long id, @RequestBody java.util.Map<String, String> body) {
         String title = body.get("title");

@@ -7,6 +7,8 @@
     @conversationDeleted="onConversationDeleted"
     @dataSourceChanged="(dsId) => conv.setDataSource(dsId)"
     @openMining="ui.openMining()"
+    @openDataSource="ui.openDataSource()"
+    @openPromptManager="ui.openPromptManager()"
   />
   <ChatPanel
     v-show="!ui.miningVisible"
@@ -29,6 +31,14 @@
     v-if="ui.miningVisible"
     @close="ui.closeMining()"
   />
+  <DataSourceManager
+    v-if="ui.dataSourceVisible"
+    @close="ui.closeDataSource()"
+  />
+  <PromptManager
+    v-if="ui.promptManagerVisible"
+    @close="ui.closePromptManager()"
+  />
 </template>
 
 <script setup>
@@ -37,6 +47,8 @@ import Sidebar from './components/Sidebar.vue'
 import ChatPanel from './components/ChatPanel.vue'
 import DashboardView from './components/DashboardView.vue'
 import MiningManager from './components/MiningManager.vue'
+import DataSourceManager from './components/DataSourceManager.vue'
+import PromptManager from './components/PromptManager.vue'
 import { useConversationStore } from './stores/conversation'
 import { useUIStore } from './stores/ui'
 
@@ -82,6 +94,7 @@ function onMessageCompleted() {
   sidebar.value?.refreshConversations()
   conv.invalidateCache(conv.currentConvId)
 }
+
 </script>
 
 <style scoped>

@@ -18,8 +18,18 @@
     <el-tabs v-model="activeTab" class="mining-tabs">
       <el-tab-pane label="模型管理" name="models">
         <div class="tab-toolbar">
-          <el-input v-model="modelSearch" placeholder="搜索模型名称、算法、表名..." size="small" clearable style="width:260px" prefix-icon="Search" />
-          <el-button type="primary" size="small" @click="showCreateDialog = true">新建模型</el-button>
+          <div class="toolbar-left">
+            <el-input v-model="modelSearch" placeholder="搜索模型名称、算法、表名..." size="small" clearable style="width:260px" prefix-icon="Search" />
+            <div v-if="selectedModels.size > 0" class="selection-info">
+              <span class="selected-count">✓ 已选择 {{ selectedModels.size }} 个模型</span>
+              <el-button type="danger" size="small" @click="handleBatchDelete">🗑️ 批量删除</el-button>
+              <el-button size="small" @click="clearSelection">取消选择</el-button>
+            </div>
+            <div v-else class="batch-hint">
+              <span class="hint-text">💡 提示：点击模型卡片左上角的复选框可批量选择模型进行批量删除</span>
+            </div>
+          </div>
+          <el-button type="primary" size="small" @click="showCreateDialog = true">+ 新建模型</el-button>
         </div>
         <!-- Model List -->
         <ModelList
@@ -44,6 +54,7 @@
           :formatMetricName="formatMetricName"
           :formatMetricValue="formatMetricValue"
           :needsSync="needsSync"
+          :selectedModels="selectedModels"
           @select="selectModel"
           @train="doTrain"
           @editModel="editModel"
@@ -54,6 +65,7 @@
           @actionCmd="onActionCmd"
           @goToPipeline="goToPipeline"
           @handleSyncPipeline="handleSyncPipeline"
+          @updateSelection="handleUpdateSelection"
         />
       </el-tab-pane>
       <el-tab-pane label="流程编排" name="pipeline">
@@ -264,6 +276,15 @@
       @syncNodeChanges="doSyncNodeChanges"
       @nodeParamUpdate="onNodeParamUpdate"
     />
+
+    <!-- Training Dialog -->
+    <TrainingDialog
+      v-model:show="showTrainingDialog"
+      :model="trainingModel"
+      :algorithm-label="algorithmLabel"
+      @complete="handleTrainingComplete"
+      @error="handleTrainingError"
+    />
   </div>
 </template>
 
@@ -276,9 +297,10 @@ import ModelCreateDialog from './mining/ModelCreateDialog.vue'
 import ModelScheduleDialog from './mining/ModelScheduleDialog.vue'
 import ModelPredictDialog from './mining/ModelPredictDialog.vue'
 import ModelDetail from './mining/ModelDetail.vue'
+import TrainingDialog from './mining/TrainingDialog.vue'
 import {
   fetchMiningModels, fetchMiningModel, createMiningModel, updateMiningModel,
-  deleteMiningModel, trainMiningModel, publishMiningModel, offlineMiningModel,
+  deleteMiningModel, forceDeleteMiningModel, trainMiningModel, publishMiningModel, offlineMiningModel,
   updateModelHyperparams, fetchModelExecutions, fetchDataSources,
   fetchDataSourceTables, fetchTableColumns, updateModelSchedule, predictMiningModel,
   batchPredictMiningModel, validateMiningModel, fetchModelPredictions,
@@ -337,6 +359,7 @@ const filterDsId = computed({
 })
 const activeTab = ref('models')
 const modelSearch = ref('')
+const selectedModels = ref(new Set())
 const saving = ref(false)
 const savingParams = ref(false)
 const pipelineEditorRef = ref(null)
@@ -571,11 +594,122 @@ onBeforeUnmount(() => {
   cleanupActions()
 })
 
-async function doTrain(id) { return handleTrain(id, detailModel) }
+// Training Dialog state
+const showTrainingDialog = ref(false)
+const trainingModel = ref(null)
+
+async function doTrain(id) {
+  const model = models.value.find(m => m.id === id) || detailModel.value
+  if (!model) return
+
+  // 打开训练对话框，显示实时进度
+  trainingModel.value = model
+  showTrainingDialog.value = true
+
+  // 同时触发实际训练（这里仍然调用原有的训练逻辑）
+  return handleTrain(id, detailModel)
+}
+
+function handleTrainingComplete(result) {
+  ElMessage.success('训练完成')
+  loadModels() // 刷新模型列表
+  if (detailModel.value) {
+    refreshDetail()
+  }
+}
+
+function handleTrainingError(error) {
+  ElMessage.error('训练失败: ' + error.error)
+}
+
 async function doPublish(id) { return handlePublish(id, models, detailModel) }
 async function doConfirmPublish() { return confirmPublish(detailModel) }
 async function doOffline(id) { return handleOffline(id, detailModel) }
 async function doDelete(id, name) { return handleDelete(id, name, showDetail, detailModel) }
+
+// 批量选择和删除功能
+function handleUpdateSelection(modelId, checked) {
+  if (checked) {
+    selectedModels.value.add(modelId)
+  } else {
+    selectedModels.value.delete(modelId)
+  }
+}
+
+function clearSelection() {
+  selectedModels.value.clear()
+}
+
+async function handleBatchDelete() {
+  const selectedIds = Array.from(selectedModels.value)
+  if (selectedIds.length === 0) return
+
+  const selectedModelsList = models.value.filter(m => selectedIds.includes(m.id))
+
+  // 检查是否有特殊状态的模型
+  const publishedModels = selectedModelsList.filter(m => m.status === 'published')
+  const trainingModels = selectedModelsList.filter(m => m.status === 'training')
+  const ghostModels = selectedModelsList.filter(m => {
+    // 检查是否为幽灵模型（状态异常或模型文件不存在）
+    return m.status === 'failed' ||
+           (m.modelPath && !m.modelPath.includes('C:\\Users\\lenovo')) ||
+           (m.modelPath && m.modelPath.includes('/Users/gonghang')) ||
+           (m.modelPath && m.modelPath.includes('/tmp/smartquery-workspace'))
+  })
+
+  let confirmMessage = `确定要删除选中的 ${selectedIds.length} 个模型吗？此操作不可恢复。`
+
+  if (publishedModels.length > 0) {
+    confirmMessage += `\n\n⚠️ 包含 ${publishedModels.length} 个已发布模型，将使用强制删除`
+  }
+  if (trainingModels.length > 0) {
+    confirmMessage += `\n\n⚠️ 包含 ${trainingModels.length} 个训练中模型，将使用强制删除`
+  }
+  if (ghostModels.length > 0) {
+    confirmMessage += `\n\n👻 包含 ${ghostModels.length} 个幽灵模型（文件丢失或状态异常），将使用强制删除`
+  }
+
+  if (!confirm(confirmMessage)) {
+    return
+  }
+
+  try {
+    let successCount = 0
+    let forceDeleteCount = 0
+
+    // 分别处理不同类型的模型
+    for (const model of selectedModelsList) {
+      try {
+        const needsForceDelete = model.status === 'published' ||
+                                model.status === 'training' ||
+                                ghostModels.includes(model)
+
+        if (needsForceDelete) {
+          await forceDeleteMiningModel(model.id)
+          forceDeleteCount++
+        } else {
+          await deleteMiningModel(model.id)
+        }
+        successCount++
+      } catch (e) {
+        console.error(`删除模型 ${model.name} (ID: ${model.id}) 失败:`, e)
+      }
+    }
+
+    if (successCount === selectedIds.length) {
+      ElMessage.success(`成功删除 ${successCount} 个模型` + (forceDeleteCount > 0 ? `（其中 ${forceDeleteCount} 个使用强制删除）` : ''))
+    } else if (successCount > 0) {
+      ElMessage.warning(`部分删除成功：${successCount}/${selectedIds.length}`)
+    } else {
+      ElMessage.error('批量删除失败')
+    }
+
+    clearSelection()
+    await loadModels()
+  } catch (e) {
+    ElMessage.error('批量删除失败: ' + (e.message || '未知错误'))
+  }
+}
 async function doSaveSchedule() { return saveSchedule(loadModels) }
 async function doSyncNodeChanges() {
   try {
@@ -911,7 +1045,12 @@ function onDetailTuneParams(model) {
 }
 .mining-tabs :deep(.el-tabs__content) { flex: 1; overflow: auto; }
 .mining-tabs :deep(.el-tab-pane) { height: 100%; }
-.tab-toolbar { display: flex; justify-content: flex-end; margin-bottom: 12px; }
+.tab-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.toolbar-left { display: flex; align-items: center; gap: 12px; flex: 1; flex-wrap: wrap; }
+.selection-info { display: flex; align-items: center; gap: 8px; background: var(--el-color-danger-light-9); padding: 6px 12px; border-radius: 6px; border: 1px solid var(--el-color-danger-light-5); }
+.selected-count { font-size: 14px; color: var(--el-color-danger); font-weight: 600; }
+.batch-hint { display: flex; align-items: center; }
+.hint-text { font-size: 12px; color: var(--el-color-info); background: var(--el-color-info-light-9); padding: 4px 10px; border-radius: 4px; }
 .mining-header {
   height: 52px; background: var(--surface); border-bottom: 1px solid var(--border);
   display: flex; align-items: center; justify-content: space-between;

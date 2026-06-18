@@ -33,6 +33,7 @@ public class ReActEngine {
     private final ToolOrchestrator toolOrchestrator;
     private final QueryContextAssembler contextAssembler;
     private final ContextCompactor contextCompactor;
+    private final CoordinatorIntegration coordinatorIntegration;
     private final com.smartquery.logging.ConversationStatsService statsService;
     private final List<LifecycleHook> lifecycleHooks;
     private final com.smartquery.tool.hook.AutoRepairHook autoRepairHook;
@@ -62,6 +63,7 @@ public class ReActEngine {
             ToolOrchestrator toolOrchestrator,
             QueryContextAssembler contextAssembler,
             ContextCompactor contextCompactor,
+            CoordinatorIntegration coordinatorIntegration,
             com.smartquery.logging.ConversationStatsService statsService,
             List<LifecycleHook> lifecycleHooks,
             com.smartquery.tool.hook.AutoRepairHook autoRepairHook,
@@ -72,6 +74,7 @@ public class ReActEngine {
         this.toolOrchestrator = toolOrchestrator;
         this.contextAssembler = contextAssembler;
         this.contextCompactor = contextCompactor;
+        this.coordinatorIntegration = coordinatorIntegration;
         this.statsService = statsService;
         this.lifecycleHooks = lifecycleHooks;
         this.autoRepairHook = autoRepairHook;
@@ -100,8 +103,21 @@ public class ReActEngine {
         List<Map<String, Object>> historyMessages,
         BooleanSupplier abortChecker
     ) {
+        return runReActLoop(conversationId, model, dataSourceId, userMessage, historyMessages, null, null, abortChecker);
+    }
+
+    public List<ReActEvent> runReActLoop(
+        Long conversationId,
+        String model,
+        Long dataSourceId,
+        String userMessage,
+        List<Map<String, Object>> historyMessages,
+        String scenarioCode,
+        Map<String, Object> scenarioVariables,
+        BooleanSupplier abortChecker
+    ) {
         List<ReActEvent> events = new ArrayList<>();
-        runReActLoopStreaming(conversationId, model, dataSourceId, userMessage, historyMessages, abortChecker, events::add);
+        runReActLoopStreaming(conversationId, model, dataSourceId, userMessage, historyMessages, scenarioCode, scenarioVariables, abortChecker, events::add);
         return events;
     }
 
@@ -114,11 +130,63 @@ public class ReActEngine {
         Long dataSourceId,
         String userMessage,
         List<Map<String, Object>> historyMessages,
+        String scenarioCode,
+        Map<String, Object> scenarioVariables,
+        BooleanSupplier abortChecker,
+        Consumer<ReActEvent> eventConsumer
+    ) {
+        runReActLoopStreaming(conversationId, model, dataSourceId, userMessage, historyMessages, null, scenarioCode, scenarioVariables, abortChecker, eventConsumer);
+    }
+
+    /**
+     * 实时流式输出: 每产生一个事件立即回调（带工具定义）
+     */
+    public void runReActLoopStreaming(
+        Long conversationId,
+        String model,
+        Long dataSourceId,
+        String userMessage,
+        List<Map<String, Object>> historyMessages,
+        List<Map<String, Object>> toolDefs,
+        String scenarioCode,
+        Map<String, Object> scenarioVariables,
         BooleanSupplier abortChecker,
         Consumer<ReActEvent> eventConsumer
     ) {
         // 1. 构建初始消息 (system + history + user)
-        String systemPrompt = contextAssembler.fetchPromptParts(model, dataSourceId).systemPrompt();
+        String systemPrompt = contextAssembler.fetchPromptParts(model, dataSourceId, scenarioCode, scenarioVariables).systemPrompt();
+
+        // 1.5 检查是否需要任务协调
+        log.info("[REACT] Checking if coordination needed for message: {}", userMessage);
+
+        if (coordinatorIntegration.needsCoordination(userMessage)) {
+            log.info("[REACT] === COORDINATION TRIGGERED === for message: {}", userMessage);
+
+            List<com.smartquery.coordinator.model.Task> subTasks =
+                coordinatorIntegration.extractTasks(userMessage);
+
+            log.info("[REACT] Extracted {} subtasks", subTasks.size());
+
+            if (!subTasks.isEmpty()) {
+                log.info("[REACT] Starting coordination of {} tasks", subTasks.size());
+
+                List<com.smartquery.coordinator.model.TaskResult> results =
+                    coordinatorIntegration.coordinate(userMessage, subTasks);
+
+                log.info("[REACT] Coordination completed, {} results", results.size());
+
+                String formattedResults = coordinatorIntegration.formatResults(results);
+
+                log.info("[REACT] Formatted results:\n{}", formattedResults);
+
+                // 将协调结果作为系统消息注入
+                systemPrompt = systemPrompt + "\n\n" + formattedResults;
+
+                eventConsumer.accept(new ReActEvent.Info("任务协调完成，已执行 " + results.size() + " 个子任务"));
+            }
+        } else {
+            log.info("[REACT] No coordination needed, proceeding with normal ReAct loop");
+        }
 
         // LifecycleHook: onSessionStart — 注入附加上下文
         StringBuilder sessionExtras = new StringBuilder();
@@ -157,7 +225,9 @@ public class ReActEngine {
         ReActState state = ReActState.initial(messages);
 
         // 3. 获取工具定义 (无数据源时过滤掉 DB 依赖工具)
-        List<Map<String, Object>> toolDefs = toolRegistry.getToolDefinitions(dataSourceId);
+        if (toolDefs == null) {
+            toolDefs = toolRegistry.getToolDefinitions(dataSourceId);
+        }
 
         log.info("[REACT] starting loop: model={}, maxTurns={}, history={}", model, maxTurns, historyMessages.size());
 
@@ -205,37 +275,71 @@ public class ReActEngine {
             final Consumer<String> tokenConsumer = token -> eventConsumer.accept(new ReActEvent.ThinkingDelta(token));
 
             final long[] llmTiming = {0};
-            List<LlmChunk> chunks;
-            try {
-                chunks = CompletableFuture.supplyAsync(() -> {
-                    llmTiming[0] = System.currentTimeMillis();
-                    return llmService.chatWithToolsStreaming(model, currentMessages, currentToolDefs, tokenConsumer);
-                }, llmExecutor
-                ).get(llmTimeoutSeconds, TimeUnit.SECONDS);
-            } catch (java.util.concurrent.TimeoutException e) {
-                String msg = "LLM API call timed out after " + llmTimeoutSeconds + " seconds";
-                log.error("[REACT] {}", msg);
-                eventConsumer.accept(new ReActEvent.Error("LLM 调用超时", msg));
-                eventConsumer.accept(new ReActEvent.Done(state.turnCount(), state.totalTokens(), state.totalCost()));
-                break;
-            } catch (java.util.concurrent.ExecutionException e) {
-                Throwable cause = e.getCause() != null ? e.getCause() : e;
-                log.error("[REACT] LLM call failed: {}", cause.getMessage());
-                eventConsumer.accept(new ReActEvent.Error("LLM 调用失败", cause.getMessage()));
-                eventConsumer.accept(new ReActEvent.Done(state.turnCount(), state.totalTokens(), state.totalCost()));
-                break;
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                log.error("[REACT] LLM call interrupted");
-                eventConsumer.accept(new ReActEvent.Error("LLM 调用被中断", e.getMessage()));
-                eventConsumer.accept(new ReActEvent.Done(state.turnCount(), state.totalTokens(), state.totalCost()));
-                break;
-            } catch (Exception e) {
-                log.error("[REACT] LLM call failed: {}", e.getMessage());
-                eventConsumer.accept(new ReActEvent.Error("LLM 调用失败", e.getMessage()));
-                eventConsumer.accept(new ReActEvent.Done(state.turnCount(), state.totalTokens(), state.totalCost()));
-                break;
+            final List<LlmChunk>[] chunksHolder = new List[1];
+
+            // LLM 调用失败重试机制（可恢复错误）
+            boolean llmSuccess = false;
+            int llmAttempts = 0;
+            final int maxLlmAttempts = 2;
+
+            while (!llmSuccess && llmAttempts <= maxLlmAttempts) {
+                llmAttempts++;
+                try {
+                    chunksHolder[0] = CompletableFuture.supplyAsync(() -> {
+                        llmTiming[0] = System.currentTimeMillis();
+                        return llmService.chatWithToolsStreaming(model, currentMessages, currentToolDefs, tokenConsumer);
+                    }, llmExecutor
+                    ).get(llmTimeoutSeconds, TimeUnit.SECONDS);
+                    llmSuccess = true;
+                } catch (java.util.concurrent.TimeoutException e) {
+                    String msg = "LLM API call timed out after " + llmTimeoutSeconds + " seconds";
+                    log.warn("[REACT] attempt {}: {}", llmAttempts, msg);
+
+                    if (llmAttempts <= maxLlmAttempts) {
+                        eventConsumer.accept(new ReActEvent.Info("⏱️ LLM 调用超时，正在重试... (" + llmAttempts + "/" + maxLlmAttempts + ")"));
+                        try { Thread.sleep(1000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                        continue;
+                    }
+
+                    log.error("[REACT] {} after {} attempts", msg, maxLlmAttempts);
+                    eventConsumer.accept(new ReActEvent.Error("LLM 调用超时", "经过 " + maxLlmAttempts + " 次尝试后仍然超时"));
+                    handleLlmFailure(state, eventConsumer, "timeout");
+                    return;
+                } catch (java.util.concurrent.ExecutionException e) {
+                    Throwable cause = e.getCause() != null ? e.getCause() : e;
+                    log.warn("[REACT] attempt {}: LLM call failed - {}", llmAttempts, cause.getMessage());
+
+                    if (llmAttempts <= maxLlmAttempts && isRecoverableError(cause)) {
+                        eventConsumer.accept(new ReActEvent.Info("🔄 LLM 调用失败，正在重试... (" + llmAttempts + "/" + maxLlmAttempts + ")"));
+                        try { Thread.sleep(2000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                        continue;
+                    }
+
+                    log.error("[REACT] LLM call failed after {} attempts: {}", maxLlmAttempts, cause.getMessage());
+                    eventConsumer.accept(new ReActEvent.Error("LLM 调用失败", cause.getMessage()));
+                    handleLlmFailure(state, eventConsumer, "execution");
+                    return;
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    log.error("[REACT] LLM call interrupted");
+                    eventConsumer.accept(new ReActEvent.Error("LLM 调用被中断", e.getMessage()));
+                    eventConsumer.accept(new ReActEvent.Done(state.turnCount(), state.totalTokens(), state.totalCost()));
+                    return;
+                } catch (Exception e) {
+                    log.error("[REACT] LLM call failed: {}", e.getMessage());
+                    eventConsumer.accept(new ReActEvent.Error("LLM 调用失败", e.getMessage()));
+                    handleLlmFailure(state, eventConsumer, "unknown");
+                    return;
+                }
             }
+
+            if (!llmSuccess) {
+                log.error("[REACT] All LLM attempts failed");
+                handleLlmFailure(state, eventConsumer, "exhausted");
+                return;
+            }
+
+            List<LlmChunk> chunks = chunksHolder[0];
             long llmDurationMs = System.currentTimeMillis() - llmTiming[0];
 
             // LLM 调用遥测
@@ -486,11 +590,27 @@ public class ReActEngine {
                 }
                 case "generate_chart" -> {
                     Long chartId = toLong(data.get("chartId"));
+                    // 避免双重序列化：echartsOption 可能已经是 JSON 字符串
+                    String echartsOption;
+                    Object optionObj = data.get("echartsOption");
+                    if (optionObj instanceof String) {
+                        echartsOption = (String) optionObj; // 已经是字符串，直接使用
+                    } else if (optionObj != null) {
+                        try {
+                            echartsOption = objectMapper.writeValueAsString(optionObj); // 序列化对象
+                        } catch (Exception e) {
+                            log.warn("[REACT] Failed to serialize echartsOption: {}", e.getMessage());
+                            echartsOption = "";
+                        }
+                    } else {
+                        echartsOption = "";
+                    }
+
                     emitter.accept(new ReActEvent.ChartGenerated(
                         chartId,
                         (String) data.getOrDefault("title", ""),
                         (String) data.getOrDefault("chartType", ""),
-                        data.containsKey("echartsOption") ? objectMapper.writeValueAsString(data.get("echartsOption")) : ""
+                        echartsOption
                     ));
                 }
                 case "generate_report" -> {
@@ -547,5 +667,50 @@ public class ReActEngine {
         } catch (Exception e) {
             return "{}";
         }
+    }
+
+    /**
+     * 判断错误是否可恢复（临时性错误）
+     */
+    private boolean isRecoverableError(Throwable error) {
+        String message = error.getMessage();
+        if (message == null) return false;
+
+        String lowerMessage = message.toLowerCase();
+
+        // 可恢复的错误类型
+        if (lowerMessage.contains("timeout") || lowerMessage.contains("timed out")) return true;
+        if (lowerMessage.contains("connection") || lowerMessage.contains("connect")) return true;
+        if (lowerMessage.contains("429") || lowerMessage.contains("rate limit")) return true;
+        if (lowerMessage.contains("503") || lowerMessage.contains("502") || lowerMessage.contains("504")) return true;
+        if (lowerMessage.contains("temporary") || lowerMessage.contains("temporarily")) return true;
+        if (lowerMessage.contains("network") || lowerMessage.contains("socket")) return true;
+
+        return false;
+    }
+
+    /**
+     * 处理 LLM 调用失败，尝试优雅降级
+     */
+    private void handleLlmFailure(ReActState state, Consumer<ReActEvent> eventConsumer, String failureType) {
+        log.error("[REACT] Handling LLM failure: type={}, turns={}", failureType, state.turnCount());
+
+        // 如果已经有足够的上下文和工具调用结果，尝试生成一个有意义的结束
+        if (state.turnCount() > 0) {
+            eventConsumer.accept(new ReActEvent.Info("⚠️ LLM 调用遇到问题，但已收集到部分结果"));
+            eventConsumer.accept(new ReActEvent.Done(state.turnCount(), state.totalTokens(), state.totalCost()));
+            return;
+        }
+
+        // 如果在第一轮就失败，提供用户友好的错误信息
+        String userMessage = switch (failureType) {
+            case "timeout" -> "⏱️ 系统繁忙，LLM 响应超时。请稍后重试，或简化问题后再次尝试。";
+            case "execution" -> "🔄 LLM 服务暂时不可用。请稍后重试，或联系管理员检查服务状态。";
+            case "exhausted" -> "⚠️ 多次尝试后仍无法连接 LLM 服务。建议：\n1. 检查网络连接\n2. 稍后重试\n3. 联系管理员";
+            default -> "❌ LLM 调用失败，请稍后重试";
+        };
+
+        eventConsumer.accept(new ReActEvent.Error("LLM 服务异常", userMessage));
+        eventConsumer.accept(new ReActEvent.Done(state.turnCount(), state.totalTokens(), state.totalCost()));
     }
 }

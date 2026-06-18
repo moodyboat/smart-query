@@ -61,12 +61,15 @@ public class ReportGenerateTool implements LlmTool {
                 return ToolResult.error(getName(), "sections 不能为空", System.currentTimeMillis() - start);
             }
 
-            // Validate chart_id references
+            // Validate chart_id references and fetch chart data
             List<Long> chartIds = sections.stream()
                 .map(s -> s.get("chart_id"))
                 .filter(id -> id instanceof Number)
                 .map(id -> ((Number) id).longValue())
                 .distinct().toList();
+
+            // Fetch chart data for embedding in report
+            Map<Long, Chart> chartDataMap = new java.util.HashMap<>();
             if (!chartIds.isEmpty()) {
                 List<Long> existingIds = chartMapper.selectBatchIds(chartIds).stream()
                     .map(Chart::getId).toList();
@@ -76,6 +79,31 @@ public class ReportGenerateTool implements LlmTool {
                         "以下图表 ID 不存在: " + missing + "，请先调用 generate_chart 生成",
                         System.currentTimeMillis() - start);
                 }
+
+                // Load chart data for embedding
+                List<Chart> charts = chartMapper.selectBatchIds(chartIds);
+                for (Chart chart : charts) {
+                    chartDataMap.put(chart.getId(), chart);
+                }
+
+                // Embed chart data into sections
+                List<Map<String, Object>> enrichedSections = new java.util.ArrayList<>();
+                for (Map<String, Object> section : sections) {
+                    Map<String, Object> enrichedSection = new LinkedHashMap<>(section);
+                    Object chartIdObj = section.get("chart_id");
+                    if (chartIdObj instanceof Number) {
+                        Long chartId = ((Number) chartIdObj).longValue();
+                        Chart chart = chartDataMap.get(chartId);
+                        if (chart != null) {
+                            // Embed complete chart data
+                            enrichedSection.put("chartOption", chart.getEchartsOption());
+                            enrichedSection.put("chartTitle", chart.getTitle());
+                            enrichedSection.put("chartType", chart.getChartType());
+                        }
+                    }
+                    enrichedSections.add(enrichedSection);
+                }
+                sections = enrichedSections;
             }
 
             // 持久化到数据库

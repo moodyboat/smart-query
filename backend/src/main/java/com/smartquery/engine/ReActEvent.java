@@ -14,6 +14,7 @@ public sealed interface ReActEvent {
     record SqlGenerated(String sql, String explanation) implements ReActEvent {}
     record SqlExecuting(String sql) implements ReActEvent {}
     record Result(String summary, List<Map<String, Object>> data, int totalRows, String error) implements ReActEvent {}
+    record Info(String message) implements ReActEvent {}
 
     // === Python 数据挖掘 ===
     record PythonGenerating(String code) implements ReActEvent {}

@@ -1,8 +1,15 @@
 <template>
-  <section class="main-area">
-    <header class="chat-header">
+  <section class="main-area" :class="{ 'scenario-mode': convStore.getCurrentScenario() }" :style="scenarioTheme.background ? { '--bg': scenarioTheme.background } : {}">
+    <header class="chat-header" :style="scenarioTheme.headerBg ? { 'background': scenarioTheme.headerBg } : {}">
       <button v-if="showSidebarToggle" class="hamburger-btn" @click="emit('toggleSidebar')">☰</button>
-      <span class="header-title">智能数据分析助手</span>
+      <span class="header-title">
+        <span v-if="convStore.getCurrentScenario()" class="scenario-icon">{{ currentScenarioConfig.icon }}</span>
+        {{ scenarioWelcome.title || '智能数据分析助手' }}
+      </span>
+      <!-- 当前场景指示器 -->
+      <el-tag v-if="convStore.getCurrentScenario()" type="success" size="small" class="scenario-indicator" @click="showScenarioPrompt" style="cursor: pointer" :style="{ 'background-color': scenarioTheme.primary, 'border-color': scenarioTheme.primary }">
+        {{ currentScenarioConfig.icon }} {{ currentScenarioConfig.name }} <span style="margin-left: 8px; opacity: 0.8;">查看提示词</span>
+      </el-tag>
       <span v-if="connectionState === 'connecting'" class="conn-badge connecting">连接中...</span>
       <span v-else-if="connectionState === 'streaming'" class="conn-badge streaming">
         <span class="spinner-sm"></span>接收中
@@ -18,34 +25,32 @@
       <button class="trace-btn" @click="adminVisible = true" title="系统监控">
         <el-icon :size="16"><Monitor /></el-icon>
       </button>
+      <button v-if="conversationId && messages.length > 0" class="trace-btn" @click="generateWordReport" title="生成Word报告">
+        <el-icon :size="16"><Document /></el-icon>
+      </button>
     </header>
 
     <div class="messages-area" ref="messagesArea">
-      <div v-if="messages.length === 0" class="welcome">
-        <h3>欢迎使用智能问数</h3>
-        <p class="welcome-desc">不只是查询 — 我可以帮你做完整的数据分析</p>
-        <div class="welcome-cards">
-          <div class="welcome-card">
-            <div class="card-icon sql-icon">SQL</div>
-            <div class="card-title">智能查询</div>
-            <div class="card-desc">用自然语言查询数据库，自动生成 SQL</div>
-          </div>
-          <div class="welcome-card">
-            <div class="card-icon py-icon">Py</div>
-            <div class="card-title">数据挖掘</div>
-            <div class="card-desc">Python 分析、建模、预测，支持迭代调试</div>
-          </div>
-          <div class="welcome-card">
-            <div class="card-icon chart-icon">📊</div>
-            <div class="card-title">可视化</div>
-            <div class="card-desc">ECharts 图表、仪表盘大屏，自动筛选联动</div>
-          </div>
-          <div class="welcome-card">
-            <div class="card-icon report-icon">📋</div>
-            <div class="card-title">分析报告</div>
-            <div class="card-desc">多表查询、计算分析、结构化报告生成</div>
+      <div v-if="messages.length === 0" class="welcome" :style="scenarioTheme.cardBg ? { '--welcome-card-bg': scenarioTheme.cardBg } : {}">
+        <div class="welcome-avatar" v-if="convStore.getCurrentScenario()">
+          <div class="avatar-circle" :style="{ 'background': scenarioTheme.gradient || 'var(--color-primary)' }">
+            <span class="avatar-emoji">{{ currentScenarioConfig.icon }}</span>
           </div>
         </div>
+        <h3>{{ scenarioWelcome.title || '欢迎使用智能问数' }}</h3>
+        <p class="welcome-desc">{{ scenarioWelcome.subtitle || '不只是查询 — 我可以帮你做完整的数据分析' }}</p>
+        <p class="welcome-description" v-if="convStore.getCurrentScenario()">{{ scenarioWelcome.description }}</p>
+
+        <div class="welcome-cards" v-if="scenarioCapabilities.length > 0">
+          <div class="welcome-card" v-for="(capability, index) in scenarioCapabilities" :key="index">
+            <div class="card-icon" :style="{ 'background': capability.iconColor || '#409EFF' }">
+              {{ capability.icon }}
+            </div>
+            <div class="card-title">{{ capability.title }}</div>
+            <div class="card-desc">{{ capability.description }}</div>
+          </div>
+        </div>
+
         <div class="welcome-examples">
           <div class="example-label">试试问我:</div>
           <div
@@ -77,6 +82,16 @@
         <span>该对话暂无回复</span>
         <button class="retry-btn-inline" @click="retryLastMessage">重新发送</button>
       </div>
+
+      <!-- 场景提示词模块 -->
+      <ScenarioModule
+        v-if="showPromptModules"
+        :modules="scenarioModules"
+        :show-modules="showPromptModules"
+        @hide="hidePromptModules"
+        @expandAll="expandAllModules"
+        @itemClick="handleModuleItemClick"
+      />
     </div>
 
     <div class="input-area">
@@ -107,15 +122,20 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, nextTick, onBeforeUnmount } from 'vue'
-import { View, Monitor } from '@element-plus/icons-vue'
+import { ref, reactive, computed, nextTick, onBeforeUnmount, watch } from 'vue'
+import { View, Monitor, MagicStick, Document } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox, ElLoading } from 'element-plus'
 import MessageRow from './MessageRow.vue'
 import TracePanel from './TracePanel.vue'
 import AdminStatsPanel from './AdminStatsPanel.vue'
-import { buildChatUrl, fetchReport } from '../api'
+import ScenarioModule from './ScenarioModule.vue'
+import { buildChatUrl, fetchReport, downloadWordReport } from '../api'
+import api from '../api'
 import { SSE_SAFETY_TIMEOUT_MS } from '../constants'
 import { useMiningStore } from '../stores/mining'
 import { useUIStore } from '../stores/ui'
+import { useConversationStore } from '../stores/conversation'
+import { getScenarioConfig } from '../config/scenarios.js'
 
 const props = defineProps({
   conversationId: Number,
@@ -127,6 +147,12 @@ const traceVisible = ref(false)
 const adminVisible = ref(false)
 const mining = useMiningStore()
 const ui = useUIStore()
+const convStore = useConversationStore()
+
+// 提示词模块相关
+const scenarioModules = ref([])
+const showPromptModules = ref(false)
+const currentPromptContent = ref('')
 
 const messages = ref([])
 const inputText = ref('')
@@ -139,13 +165,31 @@ const stepInfo = reactive({ current: 0, total: 0 })
 const connectionState = ref('idle') // idle | connecting | streaming | error
 let msgIdCounter = 0
 
-const exampleQueries = [
-  '各区域销售额对比，生成柱状图',
-  '用Python分析客户流失原因',
-  '建一个员工薪资分类预测模型',
-  '生成本月销售分析报告',
-  '做一个销售仪表盘大屏'
-]
+// 场景化配置
+const currentScenarioConfig = computed(() => {
+  const scenarioCode = convStore.getCurrentScenario()
+  return getScenarioConfig(scenarioCode)
+})
+
+// 场景化的示例问题
+const exampleQueries = computed(() => {
+  return currentScenarioConfig.value.examples || []
+})
+
+// 场景化的能力卡片
+const scenarioCapabilities = computed(() => {
+  return currentScenarioConfig.value.capabilities || []
+})
+
+// 场景化主题
+const scenarioTheme = computed(() => {
+  return currentScenarioConfig.value.theme || {}
+})
+
+// 场景化欢迎信息
+const scenarioWelcome = computed(() => {
+  return currentScenarioConfig.value.welcome || {}
+})
 
 const emit = defineEmits(['openDashboard', 'messageCompleted', 'toggleSidebar'])
 
@@ -238,7 +282,7 @@ async function sendMessage() {
   resetSafety()
 
   try {
-    const url = buildChatUrl(convId, dsId)
+    const url = buildChatUrl(convId, dsId, convStore.getCurrentScenario())
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -593,7 +637,198 @@ function retryConnection(text) {
   sendMessage()
 }
 
-defineExpose({ sendMessage, clearMessages, messages, updateChartOption, pendingCharts, restoreHistory })
+// 场景标签映射
+function getScenarioLabel(scenarioCode) {
+  const labels = {
+    'general': '通用查询',
+    'sales_analysis': '销售分析',
+    'user_analysis': '用户分析',
+    'financial_analysis': '财务分析',
+    'operations_monitoring': '运营监控',
+    'data_mining': '数据挖掘'
+  }
+  return labels[scenarioCode] || scenarioCode
+}
+
+// 解析提示词为可点击模块
+function parsePromptToModules(promptContent) {
+  if (!promptContent) return []
+
+  const modules = []
+  const lines = promptContent.split('\n')
+  let currentModule = null
+  let currentSubItems = []
+
+  lines.forEach(line => {
+    // 检测标题（## 标题）
+    const titleMatch = line.match(/^##\s+(.+)$/)
+    if (titleMatch) {
+      // 保存上一个模块
+      if (currentModule && currentSubItems.length > 0) {
+        currentModule.items = [...currentSubItems]
+        modules.push(currentModule)
+      }
+      // 创建新模块
+      currentModule = {
+        title: titleMatch[1].trim(),
+        items: []
+      }
+      currentSubItems = []
+    } else if (line.trim().match(/^\d+\.\s+/)) {
+      // 检测列表项（1. 功能描述）
+      const itemMatch = line.match(/^\d+\.\s+(.+)$/)
+      if (itemMatch && currentModule) {
+        currentSubItems.push({
+          text: itemMatch[1].trim(),
+          type: 'instruction'
+        })
+      }
+    } else if (line.trim().match(/\*\*(.+)\*\*/)) {
+      // 检测粗体强调（**重要概念**）
+      const conceptMatch = line.match(/\*\*(.+)\*\*/)
+      if (conceptMatch && currentModule) {
+        currentSubItems.push({
+          text: conceptMatch[1].trim(),
+          type: 'concept',
+          content: conceptMatch[1].trim()
+        })
+      }
+    }
+  })
+
+  // 保存最后一个模块
+  if (currentModule && currentSubItems.length > 0) {
+    currentModule.items = [...currentSubItems]
+    modules.push(currentModule)
+  }
+
+  return modules
+}
+
+// 点击提示词模块发送指令
+const sendModuleInstruction = (moduleItem) => {
+  const instruction = moduleItem.text || moduleItem.content
+  if (instruction) {
+    inputText.value = instruction
+    sendMessage()
+  }
+}
+
+// 显示场景提示词
+async function showScenarioPrompt() {
+  const scenarioCode = convStore.getCurrentScenario()
+  console.log('当前场景代码:', scenarioCode)
+
+  if (!scenarioCode) {
+    ElMessage.warning('当前未选择场景，请先在提示词管理中选择一个场景并开始对话')
+    return
+  }
+
+  try {
+    console.log('正在获取场景提示词，场景代码:', scenarioCode)
+    const response = await api.get(`/scenarios/code/${scenarioCode}/prompt`)
+    console.log('提示词API响应:', response)
+
+    if (response.data && response.data.code === 200 && response.data.data) {
+      ElMessageBox.alert(response.data.data, '当前场景提示词', {
+        customClass: 'scenario-prompt-dialog',
+        dangerouslyUseHTMLString: false,
+        confirmButtonText: '关闭'
+      })
+    } else {
+      console.error('API响应格式不正确:', response)
+      ElMessage.warning('获取提示词失败：响应格式不正确')
+    }
+  } catch (error) {
+    console.error('获取提示词失败，详细错误:', error)
+    console.error('错误消息:', error.message)
+    console.error('错误响应:', error.response)
+    ElMessage.error(`获取提示词失败：${error.message || '未知错误'}`)
+  }
+}
+
+// 加载场景模块
+async function loadScenarioModules() {
+  const scenarioCode = convStore.getCurrentScenario()
+  if (!scenarioCode) {
+    showPromptModules.value = false
+    return
+  }
+
+  try {
+    const response = await api.get(`/scenarios/code/${scenarioCode}/prompt`)
+    if (response.data.code === 200 && response.data.data) {
+      currentPromptContent.value = response.data.data
+      scenarioModules.value = parsePromptToModules(response.data.data)
+      showPromptModules.value = scenarioModules.value.length > 0
+    } else {
+      showPromptModules.value = false
+    }
+  } catch (error) {
+    console.error('加载场景模块失败:', error)
+    showPromptModules.value = false
+  }
+}
+
+// 隐藏提示词模块
+function hidePromptModules() {
+  showPromptModules.value = false
+}
+
+// 处理模块项点击
+function handleModuleItemClick(item) {
+  sendModuleInstruction(item)
+}
+
+// 展开所有模块
+function expandAllModules() {
+  showPromptModules.value = true
+}
+
+// 生成Word报告
+async function generateWordReport() {
+  if (!props.conversationId) {
+    ElMessage.warning('请先进行对话后再生成报告')
+    return
+  }
+
+  if (messages.value.length === 0) {
+    ElMessage.warning('当前对话没有内容，无法生成报告')
+    return
+  }
+
+  try {
+    const loading = ElLoading.service({
+      lock: true,
+      text: '正在生成Word报告...',
+      background: 'rgba(0, 0, 0, 0.7)'
+    })
+
+    try {
+      const reportTitle = `对话报告_${props.conversationId}_${new Date().toLocaleDateString()}`
+
+      // 调用下载API直接在新标签页打开
+      downloadWordReport(props.conversationId, reportTitle)
+
+      ElMessage.success('Word报告已生成，正在下载...')
+
+    } finally {
+      loading.close()
+    }
+  } catch (error) {
+    console.error('生成Word报告失败:', error)
+    ElMessage.error('生成Word报告失败：' + (error.message || '未知错误'))
+  }
+}
+
+// 监听场景变化，自动加载模块
+watch(() => convStore.getCurrentScenario(), (newScenario, oldScenario) => {
+  if (newScenario && newScenario !== oldScenario) {
+    loadScenarioModules()
+  }
+}, { immediate: false })
+
+defineExpose({ sendMessage, clearMessages, messages, updateChartOption, pendingCharts, restoreHistory, showScenarioPrompt, loadScenarioModules, parsePromptToModules, sendModuleInstruction, hidePromptModules })
 </script>
 
 <style scoped>
@@ -609,6 +844,30 @@ defineExpose({ sendMessage, clearMessages, messages, updateChartOption, pendingC
   justify-content: space-between;
 }
 .header-title { color: var(--text-primary); }
+.scenario-indicator {
+  font-weight: 500;
+  padding: 4px 12px;
+  border-radius: 20px;
+  animation: fadeIn 0.3s ease-in;
+  margin-left: var(--space-sm);
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* 场景提示词对话框样式 */
+:deep(.scenario-prompt-dialog) {
+  max-width: 800px;
+}
+:deep(.scenario-prompt-dialog .el-message-box__content) {
+  white-space: pre-wrap;
+  font-family: monospace;
+  font-size: 14px;
+  line-height: 1.6;
+  max-height: 400px;
+  overflow-y: auto;
+}
 .hamburger-btn {
   width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;
   background: transparent; border: none; font-size: var(--font-2xl); cursor: pointer;
@@ -656,16 +915,20 @@ defineExpose({ sendMessage, clearMessages, messages, updateChartOption, pendingC
 }
 .welcome-card {
   padding: var(--space-md) 14px; background: var(--surface); border-radius: var(--radius-lg);
-  border: 1px solid var(--border); transition: border-color 0.2s;
+  border: 1px solid var(--border); transition: all 0.2s;
 }
-.welcome-card:hover { border-color: var(--primary); }
+.welcome-card:hover {
+  border-color: var(--border-hover);
+  transform: none;
+  box-shadow: none;
+}
 .card-icon {
   display: inline-block; font-size: var(--font-xs); font-weight: 700;
-  padding: 2px var(--space-sm); border-radius: var(--radius-sm); color: var(--surface); margin-bottom: var(--space-xs);
+  padding: 2px var(--space-sm); border-radius: var(--radius-sm); color: var(--color-primary); margin-bottom: var(--space-xs);
 }
-.sql-icon { background: var(--color-warning); }
-.py-icon { background: var(--primary); }
-.chart-icon, .report-icon { background: var(--color-success); font-size: var(--font-md); padding: 2px var(--space-xs); }
+.sql-icon { color: var(--color-primary); }
+.py-icon { color: var(--color-primary); }
+.chart-icon, .report-icon { color: var(--color-primary); font-size: var(--font-md); padding: 2px var(--space-xs); }
 .card-title { font-size: var(--font-md); font-weight: 600; color: var(--text-regular); margin-bottom: 2px; }
 .card-desc { font-size: var(--font-sm); color: var(--text-muted); }
 
@@ -676,9 +939,15 @@ defineExpose({ sendMessage, clearMessages, messages, updateChartOption, pendingC
   border-radius: var(--radius-lg); font-size: var(--font-md); color: var(--text-secondary); margin-bottom: var(--space-sm);
   cursor: pointer; transition: all 0.2s;
 }
-.example-item:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-light); transform: translateY(-1px); box-shadow: var(--shadow-sm); }
+.example-item:hover {
+  border-color: var(--border-hover);
+  color: var(--color-primary);
+  background: var(--surface-hover);
+  transform: none;
+  box-shadow: none;
+}
 .example-item.disabled { opacity: 0.5; cursor: not-allowed; }
-.example-item.disabled:hover { border-color: var(--border); color: var(--text-secondary); background: var(--surface); }
+.example-item.disabled:hover { border-color: var(--border); color: var(--text-secondary); background: var(--surface); transform: none; }
 
 .input-area {
   padding: var(--space-lg) var(--space-xl); background: var(--surface);
@@ -704,4 +973,81 @@ defineExpose({ sendMessage, clearMessages, messages, updateChartOption, pendingC
   margin-left: auto;
 }
 .trace-btn:hover { background: var(--hover); border-color: var(--primary); color: var(--primary); }
+
+/* 场景化样式 */
+.main-area.scenario-mode {
+  transition: background 0.3s ease;
+}
+
+.scenario-icon {
+  margin-right: var(--space-sm);
+  font-size: var(--font-xl);
+}
+
+.welcome-avatar {
+  margin-bottom: var(--space-xl);
+  display: flex;
+  justify-content: center;
+}
+
+.avatar-circle {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: none;
+  animation: none;
+}
+
+.avatar-emoji {
+  font-size: 40px;
+}
+
+/* 动画已移除 */
+
+.welcome-description {
+  font-size: var(--font-md);
+  color: var(--text-secondary);
+  margin-bottom: var(--space-2xl);
+  max-width: 600px;
+  margin-left: auto;
+  margin-right: auto;
+  line-height: 1.6;
+}
+
+.welcome-card {
+  transition: all 0.2s ease;
+}
+
+.welcome-card:hover {
+  transform: none;
+  box-shadow: none;
+  border-color: var(--border-hover);
+}
+
+.card-icon {
+  font-size: var(--font-lg);
+  padding: 4px var(--space-sm);
+  background: transparent;
+}
+
+/* 场景模式下的消息气泡美化 - 动画已移除 */
+.scenario-mode .welcome {
+  animation: none;
+}
+
+/* 场景化示例问题 */
+.example-item {
+  transition: all 0.2s ease;
+}
+
+.scenario-mode .example-item {
+  border-left: 3px solid transparent;
+}
+
+.scenario-mode .example-item:hover {
+  border-left-color: var(--primary);
+}
 </style>

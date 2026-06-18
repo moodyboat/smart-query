@@ -35,7 +35,7 @@ stop_service() {
     fi
 }
 
-stop_service "backend" 8080
+stop_service "backend" 9000
 stop_service "frontend" 5173
 
 echo ""

@@ -20,6 +20,13 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.io.IOException;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -33,6 +40,7 @@ public class MiningModelController {
 
     private final MiningModelMapper miningModelMapper;
     private final ModelExecutionMapper modelExecutionMapper;
+    private final com.smartquery.python.PythonCircuitBreaker circuitBreaker;
 
     @org.springframework.beans.factory.annotation.Value("${smart-query.mining.train-poll-interval-ms:2000}")
     private int trainPollIntervalMs;
@@ -119,12 +127,200 @@ public class MiningModelController {
         return Result.ok();
     }
 
+    /**
+     * 强制删除模型（绕过所有状态检查，用于清理幽灵模型）
+     */
+    @DeleteMapping("/{id}/force")
+    public Result<Void> forceDelete(@PathVariable Long id) {
+        MiningModel model = miningModelMapper.selectById(id);
+        if (model == null) {
+            throw new BusinessException("模型不存在: " + id);
+        }
+
+        // 记录强制删除操作
+        log.warn("[FORCE-DELETE] 强制删除模型: id={}, name={}, status={}, path={}",
+            model.getId(), model.getName(), model.getStatus(), model.getModelPath());
+
+        // 强制逻辑删除，不检查任何状态
+        miningModelMapper.update(null,
+            new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<MiningModel>()
+                .eq(MiningModel::getId, id)
+                .set(MiningModel::getDeleted, 1));
+
+        return Result.ok();
+    }
+
     @PostMapping("/{id}/train")
     public Result<MiningModel> train(@PathVariable Long id) {
         if (!rateLimiter.tryAcquire("train", rateTrain)) {
             throw new BusinessException(429, "训练请求过于频繁，请稍后重试");
         }
         return Result.ok(miningService.trainModel(id, "manual"));
+    }
+
+    /**
+     * 训练进度流式接口 (SSE)
+     * 提供训练过程中的实时步骤更新
+     */
+    @GetMapping(value = "/{id}/train-stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter trainStream(@PathVariable Long id) {
+        SseEmitter emitter = new SseEmitter(statusStreamTimeoutMs);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+
+        executor.execute(() -> {
+            try {
+                MiningModel model = miningModelMapper.selectById(id);
+                if (model == null || Integer.valueOf(1).equals(model.getDeleted())) {
+                    emitter.send(SseEmitter.event()
+                        .name("error")
+                        .data("{\"message\": \"模型不存在: " + id + "\"}"));
+                    emitter.complete();
+                    return;
+                }
+
+                // 发送训练开始事件
+                log.info("[TRAIN-STREAM] 开始模型训练流: modelId={}, model={}", id, model.getName());
+                emitter.send(SseEmitter.event()
+                    .name("start")
+                    .data("{\"modelId\": " + id + ", \"model\": \"" + model.getName() + "\"}"));
+
+                // 轮询模型状态，直到训练完成或失败
+                int pollCount = 0;
+                int maxPolls = (int) (statusStreamTimeoutMs / trainPollIntervalMs);
+
+                while (pollCount < maxPolls) {
+                    Thread.sleep(trainPollIntervalMs);
+
+                    MiningModel currentModel = miningModelMapper.selectById(id);
+                    String status = currentModel.getStatus();
+
+                    // 如果模型状态不是training，说明训练已经结束（成功或失败）
+                    if (!"training".equals(status)) {
+                        // 根据最终状态发送完成事件
+                        if ("trained".equals(status)) {
+                            Map<String, Object> metrics = parseMetrics(currentModel.getMetrics());
+                            log.info("[TRAIN-STREAM] 模型训练已完成: modelId={}, metrics={}", id, metrics);
+                            emitter.send(SseEmitter.event()
+                                .name("complete")
+                                .data("{\"success\": true, \"metrics\": " +
+                                    new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(metrics) + "}"));
+                        } else if ("failed".equals(status)) {
+                            log.error("[TRAIN-STREAM] 模型训练失败: modelId={}", id);
+                            emitter.send(SseEmitter.event()
+                                .name("error")
+                                .data("{\"message\": \"模型训练失败，请检查日志\"}"));
+                        }
+                        emitter.complete();
+                        return;
+                    }
+
+                    // 根据训练时间估算当前步骤
+                    TrainingStep step = estimateTrainingStep(currentModel, pollCount);
+                    if (step != null) {
+                        emitter.send(SseEmitter.event()
+                            .name("step")
+                            .data(String.format("{\"stepId\": \"%s\", \"label\": \"%s\", \"progress\": %d}",
+                                step.getId(), step.getLabel(), step.getProgress())));
+                    }
+
+                    pollCount++;
+                }
+
+                // 超时
+                emitter.send(SseEmitter.event()
+                    .name("timeout")
+                    .data("{\"message\": \"训练超时\"}"));
+                emitter.complete();
+
+            } catch (Exception e) {
+                log.error("[TRAIN-STREAM] Error streaming training progress for model {}", id, e);
+                try {
+                    emitter.send(SseEmitter.event()
+                        .name("error")
+                        .data("{\"message\": \"服务器错误: " + e.getMessage() + "\"}"));
+                } catch (IOException ioException) {
+                    log.error("[TRAIN-STREAM] Error sending error event", ioException);
+                }
+                emitter.completeWithError(e);
+            } finally {
+                executor.shutdown();
+            }
+        });
+
+        return emitter;
+    }
+
+    /**
+     * 根据模型状态返回对应的训练步骤
+     */
+    private TrainingStep getTrainingStep(String status, MiningModel model) {
+        if (model == null) return null;
+
+        return switch (status) {
+            case "training" -> new TrainingStep("model_training", "模型训练中", 50);
+            case "trained" -> new TrainingStep("model_evaluation", "模型评估完成", 100);
+            case "failed" -> new TrainingStep("error", "训练失败", 0);
+            default -> new TrainingStep("preparing", "准备中", 10);
+        };
+    }
+
+    /**
+     * 根据训练轮次估算当前步骤
+     */
+    private TrainingStep estimateTrainingStep(MiningModel model, int pollCount) {
+        // 改进的步骤估算逻辑：基于训练时间动态计算
+        // 假设各阶段大致耗时：数据加载(10%) -> 预处理(20%) -> 特征工程(25%) -> 分割(15%) -> 训练(25%) -> 评估(5%)
+
+        int progress = Math.min(95, pollCount * 2); // 每次轮询增加2%，最高95%
+
+        if (progress < 10) {
+            return new TrainingStep("data_loading", "数据加载中", progress);
+        } else if (progress < 30) {
+            return new TrainingStep("data_preprocessing", "数据预处理中", progress);
+        } else if (progress < 55) {
+            return new TrainingStep("feature_engineering", "特征工程中", progress);
+        } else if (progress < 70) {
+            return new TrainingStep("train_test_split", "数据分割中", progress);
+        } else if (progress < 90) {
+            return new TrainingStep("model_training", "模型训练中", progress);
+        } else {
+            return new TrainingStep("model_evaluation", "模型评估中", progress);
+        }
+    }
+
+    /**
+     * 解析模型指标
+     */
+    private Map<String, Object> parseMetrics(String metricsJson) {
+        try {
+            if (metricsJson == null || metricsJson.isEmpty()) {
+                return Map.of();
+            }
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            return mapper.readValue(metricsJson, Map.class);
+        } catch (Exception e) {
+            log.error("[METRICS] Error parsing metrics: {}", metricsJson, e);
+            return Map.of("error", "无法解析指标");
+        }
+    }
+
+    /**
+     * 训练步骤记录类
+     */
+    private static class TrainingStep {
+        private final String id;
+        private final String label;
+        private final int progress;
+
+        public TrainingStep(String id, String label, int progress) {
+            this.id = id;
+            this.label = label;
+            this.progress = progress;
+        }
+
+        public String getId() { return id; }
+        public String getLabel() { return label; }
+        public int getProgress() { return progress; }
     }
 
     @PostMapping("/{id}/publish")
@@ -264,6 +460,30 @@ public class MiningModelController {
             throw new BusinessException("模型不存在: " + id);
         }
         return Result.ok(eventLogger.getConversationTrace(model.getConversationId()));
+    }
+
+    /**
+     * 重置 Python 熔断器状态
+     */
+    @PostMapping("/admin/reset-circuit-breaker")
+    public Result<Map<String, Object>> resetCircuitBreaker() {
+        circuitBreaker.reset();
+        return Result.ok(Map.of(
+            "message", "熔断器已重置",
+            "state", circuitBreaker.getState(),
+            "failures", circuitBreaker.getConsecutiveFailures()
+        ));
+    }
+
+    /**
+     * 获取熔断器状态
+     */
+    @GetMapping("/admin/circuit-breaker-status")
+    public Result<Map<String, Object>> getCircuitBreakerStatus() {
+        return Result.ok(Map.of(
+            "state", circuitBreaker.getState(),
+            "failures", circuitBreaker.getConsecutiveFailures()
+        ));
     }
 
     private final ExecutorService sseExecutor = Executors.newFixedThreadPool(20, r -> {

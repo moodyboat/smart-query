@@ -2,12 +2,15 @@ package com.smartquery.controller;
 
 import com.smartquery.common.Result;
 import com.smartquery.datasource.DataSourceManager;
+import com.smartquery.dto.DataSourceUsageStats;
 import com.smartquery.entity.DataSource;
 import com.smartquery.mapper.DataSourceMapper;
+import com.smartquery.service.DataSourceUsageService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/datasource")
@@ -16,6 +19,7 @@ public class DataSourceController {
 
     private final DataSourceMapper dataSourceMapper;
     private final DataSourceManager dataSourceManager;
+    private final DataSourceUsageService usageService;
 
     @org.springframework.beans.factory.annotation.Value("${spring.datasource.url}")
     private String systemDatasourceUrl;
@@ -81,6 +85,12 @@ public class DataSourceController {
     public Result<Boolean> testConnection(@PathVariable Long id) {
         boolean ok = dataSourceManager.testConnection(id);
         return Result.ok(ok);
+    }
+
+    @PostMapping("/{id}/test-detailed")
+    public Result<Map<String, Object>> testConnectionDetailed(@PathVariable Long id) {
+        Map<String, Object> result = dataSourceManager.testConnectionDetailed(id);
+        return Result.ok(result);
     }
 
     @GetMapping("/{id}/tables")
@@ -189,5 +199,18 @@ public class DataSourceController {
             "totalCount", totalCount != null ? totalCount : 0,
             "columnStats", columnStats
         ));
+    }
+
+    @GetMapping("/stats/usage")
+    public Result<List<DataSourceUsageStats>> getUsageStats(
+            @RequestParam(defaultValue = "weekly") String timeRange) {
+        return Result.ok(usageService.getUsageStats(timeRange));
+    }
+
+    @GetMapping("/stats/most-used")
+    public Result<List<DataSource>> getMostUsed(
+            @RequestParam(defaultValue = "5") int limit,
+            @RequestParam(defaultValue = "weekly") String timeRange) {
+        return Result.ok(usageService.getMostUsedDataSources(limit, timeRange));
     }
 }

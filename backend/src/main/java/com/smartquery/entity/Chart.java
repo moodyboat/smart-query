@@ -17,6 +17,7 @@ public class Chart {
     private String title;
     private String chartType;
     private String echartsOption;
+    private String imagePath; // 存储实际图表图片的路径
     private Long dataSourceId;
     private String baseSql;
     private String filterBindings;

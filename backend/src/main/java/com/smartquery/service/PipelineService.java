@@ -783,7 +783,7 @@ public class PipelineService {
             sb.append("        y = np.log1p(y.clip(lower=0)); print('[INFO] Target log-transformed (user-configured)')\n");
         } else {
             sb.append("    # Auto-detect: log transform for skewed regression targets\n");
-            sb.append("    if str(X.dtype) != 'object' and len(y.unique()) > 20:\n");
+            sb.append("    if str(y.dtype) != 'object' and len(y.unique()) > 20:\n");
             sb.append("        _skew = float(y.skew()) if hasattr(y, 'skew') else 0\n");
             sb.append("        if _skew > 1.5: y = np.log1p(y.clip(lower=0)); print(f'[INFO] Target log-transformed (skew={_skew:.1f})')\n");
         }
@@ -970,9 +970,9 @@ public class PipelineService {
         sb.append("    importance = {}\n    try:\n        if hasattr(clf, 'feature_importances_'): importance = dict(zip(X.columns, [round(float(v), 4) for v in clf.feature_importances_]))\n");
         sb.append("        elif hasattr(clf, 'coef_'): importance = dict(zip(X.columns, [round(float(v), 4) for v in (clf.coef_[0] if len(clf.coef_.shape) > 1 else clf.coef_)]))\n");
         sb.append("    except: pass\n\n");
-        sb.append("    import joblib\n    os.makedirs('").append(modelWorkspace).append("', exist_ok=True)\n");
-        sb.append("    joblib.dump(clf, '").append(modelPath).append("')\n");
-        sb.append("    _preproc_path = '").append(modelPath.replace(".pkl", "_preprocessors.pkl")).append("'\n");
+        sb.append("    import joblib\n    _model_dir = r'").append(modelWorkspace).append("'\n    os.makedirs(_model_dir, exist_ok=True)\n");
+        sb.append("    _model_path = r'").append(modelPath).append("'\n    joblib.dump(clf, _model_path)\n");
+        sb.append("    _preproc_path = r'").append(modelPath.replace(".pkl", "_preprocessors.pkl")).append("'\n");
         sb.append("    joblib.dump({'encoders': _encoders, 'scaler': _scaler, 'target_encoder': _y_le, 'feature_cols': list(X.columns), 'encoding': _enc, 'scaling': _sc}, _preproc_path)\n\n");
         sb.append("    result = {'status': 'success', 'metrics': metrics, 'feature_importance': importance, 'train_size': len(X_train_df), 'test_size': len(X_test_df), 'feature_count': len(X.columns), 'model_type': _model_type, 'algorithm': '").append(cfg.algorithm).append("'}\n");
         sb.append("    print('[NODE_PROGRESS] {\"nodeType\": \"training\", \"status\": \"completed\", \"model_type\": _model_type}')\n");
@@ -985,8 +985,8 @@ public class PipelineService {
         sb.append("    if hasattr(clf, 'inertia_'): metrics['inertia'] = round(float(clf.inertia_), 4)\n");
         sb.append("    if hasattr(clf, 'labels_'): metrics['n_clusters'] = len(set(clf.labels_))\n");
         sb.append("    print(f'[INFO] Clustering done, metrics: {metrics}')\n");
-        sb.append("    import joblib\n    os.makedirs('").append(modelWorkspace).append("', exist_ok=True)\n");
-        sb.append("    joblib.dump(clf, '").append(modelPath).append("')\n\n");
+        sb.append("    import joblib\n    _model_dir = r'").append(modelWorkspace).append("'\n    os.makedirs(_model_dir, exist_ok=True)\n");
+        sb.append("    _model_path = r'").append(modelPath).append("'\n    joblib.dump(clf, _model_path)\n\n");
         sb.append("    result = {'status': 'success', 'metrics': metrics, 'feature_count': len(X.columns), 'train_size': len(X), 'test_size': 0, 'model_type': 'clustering', 'algorithm': '").append(cfg.algorithm).append("'}\n");
         sb.append("    print('[NODE_PROGRESS] {\"nodeType\": \"training\", \"status\": \"completed\", \"model_type\": \"clustering\"}')\n");
     }

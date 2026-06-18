@@ -180,10 +180,10 @@
                     <summary class="section-sql-toggle">查看 SQL</summary>
                     <pre class="section-sql-code">{{ sec.sql_used || sec.sql }}</pre>
                   </details>
-                  <div v-if="(sec.chart_id || sec.chartId) && resolveChartForReport(sec.chart_id || sec.chartId)" class="report-chart">
+                  <div v-if="(sec.chart_id || sec.chartId) && resolveChartForReportSection(sec)" class="report-chart">
                     <EChartsRenderer
-                      :title="resolveChartForReport(sec.chart_id || sec.chartId).title"
-                      :option="resolveChartForReport(sec.chart_id || sec.chartId).echartsOption"
+                      :title="resolveChartForReportSection(sec).title"
+                      :option="resolveChartForReportSection(sec).echartsOption"
                     />
                   </div>
                 </div>
@@ -453,19 +453,97 @@ function buildOptionFromRows(resp, filterResult) {
   return opt
 }
 
-function resolveChartForReport(chartId) {
-  if (!chartId) return null
-  const chart = props.pendingCharts[chartId]
-  if (!chart) return null
-  return { title: chart.title, echartsOption: chart.echartsOption }
+// 优先使用 section 中嵌入的图表数据，fallback 到 pendingCharts
+function resolveChartForReportSection(section) {
+  // 首先尝试使用嵌入的图表数据
+  if (section.chartOption && section.chartTitle) {
+    try {
+      let echartsOption = section.chartOption
+      // 处理可能的嵌套 JSON 字符串（双重序列化）
+      if (typeof echartsOption === 'string') {
+        // 尝试解析，如果解析结果还是字符串，再次解析
+        let parsed = JSON.parse(echartsOption)
+        let depth = 0
+        while (typeof parsed === 'string' && depth < 3) {
+          parsed = JSON.parse(parsed)
+          depth++
+        }
+        echartsOption = parsed
+      }
+
+      return {
+        title: section.chartTitle,
+        echartsOption: echartsOption
+      }
+    } catch (e) {
+      console.warn('Failed to parse embedded chart option:', e, section.chartOption)
+    }
+  }
+
+  // Fallback: 从 pendingCharts 中查找
+  const chartId = section.chart_id || section.chartId
+  if (chartId && props.pendingCharts[chartId]) {
+    const chart = props.pendingCharts[chartId]
+    try {
+      // 处理 pendingCharts 中可能的嵌套 JSON 字符串
+      let echartsOption = chart.echartsOption
+      if (typeof echartsOption === 'string') {
+        let parsed = JSON.parse(echartsOption)
+        let depth = 0
+        while (typeof parsed === 'string' && depth < 3) {
+          parsed = JSON.parse(parsed)
+          depth++
+        }
+        echartsOption = parsed
+      }
+
+      return {
+        title: chart.title || section.chartTitle,
+        echartsOption: echartsOption
+      }
+    } catch (e) {
+      console.warn('Failed to parse chart option from pendingCharts:', e, chart.echartsOption)
+    }
+  }
+
+  return null
 }
 
 function resolveChartOption(block) {
   const chartId = block.result?.chartId
   if (chartId && props.pendingCharts[chartId]?.echartsOption) {
-    return props.pendingCharts[chartId].echartsOption
+    return parseChartOption(props.pendingCharts[chartId].echartsOption)
   }
-  return block.result?.echartsOption
+  // 处理 block.result 中的 echartsOption
+  if (block.result?.echartsOption) {
+    return parseChartOption(block.result.echartsOption)
+  }
+  return {}
+}
+
+// 解析图表配置，处理可能的嵌套 JSON 字符串
+function parseChartOption(option) {
+  if (!option) return {}
+
+  let echartsOption = option
+  // 处理可能的嵌套 JSON 字符串（双重序列化）
+  if (typeof echartsOption === 'string') {
+    try {
+      // 尝试解析，如果解析结果还是字符串，再次解析
+      let parsed = JSON.parse(echartsOption)
+      let depth = 0
+      while (typeof parsed === 'string' && depth < 3) {
+        parsed = JSON.parse(parsed)
+        depth++
+      }
+      echartsOption = parsed
+    } catch (e) {
+      console.warn('Failed to parse chart option:', e, option)
+      return {}
+    }
+  }
+
+  return echartsOption
 }
 
 function renderTextBlock(block, blockIndex) {

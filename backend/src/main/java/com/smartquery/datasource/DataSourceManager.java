@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -60,7 +61,7 @@ public class DataSourceManager {
     }
 
     /**
-     * 测试连接
+     * 测试连接（简单版本）
      */
     public boolean testConnection(Long dataSourceId) {
         try {
@@ -71,6 +72,85 @@ public class DataSourceManager {
             log.warn("[DATASOURCE] test connection failed: id={}, error={}", dataSourceId, e.getMessage());
             return false;
         }
+    }
+
+    /**
+     * 测试连接并返回详细信息
+     */
+    public Map<String, Object> testConnectionDetailed(Long dataSourceId) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        long startTime = System.currentTimeMillis();
+
+        try {
+            JdbcTemplate jdbc = getJdbcTemplate(dataSourceId);
+
+            // 测试基本连接
+            jdbc.queryForObject("SELECT 1", Integer.class);
+            long latency = System.currentTimeMillis() - startTime;
+            result.put("success", true);
+            result.put("latencyMs", latency);
+            result.put("message", "连接成功");
+
+            // 获取数据库版本
+            try {
+                String version = jdbc.queryForObject("SELECT VERSION()", String.class);
+                result.put("databaseVersion", version);
+            } catch (Exception e) {
+                result.put("databaseVersion", "Unknown");
+            }
+
+            // 获取当前数据库/模式
+            try {
+                String currentDb = jdbc.queryForObject("SELECT DATABASE()", String.class);
+                result.put("currentSchema", currentDb);
+            } catch (Exception e) {
+                try {
+                    String currentDb = jdbc.queryForObject("SELECT CURRENT_SCHEMA()", String.class);
+                    result.put("currentSchema", currentDb);
+                } catch (Exception ex) {
+                    result.put("currentSchema", "Unknown");
+                }
+            }
+
+            // 测试权限
+            Map<String, Object> permissions = new LinkedHashMap<>();
+            try {
+                jdbc.queryForObject("SELECT 1", Integer.class);
+                permissions.put("canSelect", true);
+            } catch (Exception e) {
+                permissions.put("canSelect", false);
+            }
+
+            try {
+                jdbc.queryForList("SHOW TABLES LIMIT 1");
+                permissions.put("canShow", true);
+            } catch (Exception e) {
+                permissions.put("canShow", false);
+            }
+
+            try {
+                jdbc.queryForObject("DESCRIBE sq_conversation", String.class);
+                permissions.put("canDescribe", true);
+            } catch (Exception e) {
+                permissions.put("canDescribe", false);
+            }
+
+            try {
+                jdbc.queryForList("EXPLAIN SELECT 1");
+                permissions.put("canExplain", true);
+            } catch (Exception e) {
+                permissions.put("canExplain", false);
+            }
+
+            result.put("permissions", permissions);
+
+        } catch (Exception e) {
+            result.put("success", false);
+            result.put("message", "连接失败: " + e.getMessage());
+            result.put("latencyMs", System.currentTimeMillis() - startTime);
+        }
+
+        return result;
     }
 
     private JdbcTemplate createJdbcTemplate(Long dataSourceId) {

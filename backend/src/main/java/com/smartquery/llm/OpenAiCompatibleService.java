@@ -81,6 +81,19 @@ public class OpenAiCompatibleService implements LlmService {
 
         for (int attempt = 0; attempt <= maxRetries; attempt++) {
             try {
+                // 验证 API key 配置（只在第一次尝试时检查，避免重复日志）
+                if (attempt == 0 && (config.getApiKey() == null || config.getApiKey().isBlank())) {
+                    String errorMsg = String.format("LLM API key 未配置，请检查配置文件或环境变量 (model=%s)", model);
+                    log.error("[LLM] {}", errorMsg);
+                    throw new RuntimeException(errorMsg);
+                }
+
+                // 验证 messages 格式，避免非法格式导致 API 调用失败
+                if (!validateMessages(messages)) {
+                    log.error("[LLM] Invalid messages format, skipping attempt {}", attempt);
+                    break;
+                }
+
                 Map<String, Object> body = new LinkedHashMap<>();
                 body.put("model", config.getApiKey() != null && !config.getApiKey().isEmpty() ? model : config.getModelCode());
                 body.put("messages", messages);
@@ -113,7 +126,17 @@ public class OpenAiCompatibleService implements LlmService {
                         Thread.sleep(delay);
                         continue;
                     }
-                    throw new RuntimeException("LLM API error after " + maxRetries + " retries: " + response.statusCode());
+                    throw new RuntimeException("LLM API error after " + maxRetries + " retries: status=" + response.statusCode());
+                }
+
+                if (response.statusCode() != 200) {
+                    String errorBody = new String(response.body().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+                    // 4xx 错误不重试，直接失败
+                    if (response.statusCode() >= 400 && response.statusCode() < 500) {
+                        log.error("[LLM] client error {} (not retryable): {}", response.statusCode(), errorBody);
+                        throw new RuntimeException("LLM API client error: " + response.statusCode() + " " + errorBody);
+                    }
+                    throw new RuntimeException("LLM API error: " + response.statusCode() + " " + errorBody);
                 }
 
                 if (response.statusCode() != 200) {
@@ -129,7 +152,8 @@ public class OpenAiCompatibleService implements LlmService {
                 if (attempt == maxRetries) {
                     throw new RuntimeException("LLM call failed after " + maxRetries + " retries", e);
                 }
-                log.warn("[LLM] attempt {} failed: {}", attempt, e.getMessage());
+                log.warn("[LLM] attempt {} failed: {} - {}", attempt, e.getClass().getSimpleName(), e.getMessage());
+                log.debug("[LLM] exception details:", e);
             }
         }
         return List.of();
@@ -244,16 +268,99 @@ public class OpenAiCompatibleService implements LlmService {
     @org.springframework.beans.factory.annotation.Value("${smart-query.llm.default-max-tokens:4096}")
     private int defaultMaxTokens;
 
+    @org.springframework.beans.factory.annotation.Value("${smart-query.llm.models.glm-5.1.api-key:}")
+    private String glm51ApiKey;
+
+    @org.springframework.beans.factory.annotation.Value("${smart-query.llm.models.glm-4.api-key:}")
+    private String glm4ApiKey;
+
+    @org.springframework.beans.factory.annotation.Value("${smart-query.llm.models.glm-5.1.api-url:https://open.bigmodel.cn/api/coding/paas/v4/chat/completions}")
+    private String glm51ApiUrl;
+
+    @org.springframework.beans.factory.annotation.Value("${smart-query.llm.models.glm-4.api-url:https://open.bigmodel.cn/api/coding/paas/v4/chat/completions}")
+    private String glm4ApiUrl;
+
     private LlmConfigEntity getDefaultConfig(String model) {
         LlmConfigEntity config = new LlmConfigEntity();
         config.setModelCode(model);
-        String apiUrl = System.getenv("LLM_API_URL");
-        String apiKey = System.getenv("LLM_API_KEY");
-        config.setApiUrl(apiUrl != null ? apiUrl : defaultApiUrl);
-        config.setApiKey(apiKey != null ? apiKey : "");
-        config.setMaxTokens(defaultMaxTokens);
+
+        // 根据模型代码选择对应的配置
+        String apiUrl = null;
+        String apiKey = null;
+        int maxTokens = defaultMaxTokens;
+
+        switch (model) {
+            case "glm-5.1":
+                apiUrl = glm51ApiUrl;
+                apiKey = glm51ApiKey;
+                maxTokens = 8192;
+                break;
+            case "glm-4":
+                apiUrl = glm4ApiUrl;
+                apiKey = glm4ApiKey;
+                maxTokens = 4096;
+                break;
+            default:
+                // 使用环境变量作为最后回退
+                apiUrl = System.getenv("LLM_API_URL");
+                apiKey = System.getenv("LLM_API_KEY");
+        }
+
+        // 如果仍然为空，使用默认值
+        if (apiUrl == null || apiUrl.isBlank()) {
+            apiUrl = defaultApiUrl;
+        }
+        if (apiKey == null) {
+            apiKey = "";
+        }
+
+        config.setApiUrl(apiUrl);
+        config.setApiKey(apiKey);
+        config.setMaxTokens(maxTokens);
         config.setTemperature(java.math.BigDecimal.valueOf(0.1));
+
+        log.debug("[LLM] getDefaultConfig for model={}, apiUrl={}, hasApiKey={}", model, apiUrl, !apiKey.isBlank());
+
         return config;
+    }
+
+    /**
+     * 验证 messages 格式，避免非法格式导致 API 调用失败
+     */
+    private boolean validateMessages(List<Map<String, Object>> messages) {
+        if (messages == null || messages.isEmpty()) {
+            log.warn("[LLM] messages is null or empty");
+            return false;
+        }
+
+        for (Map<String, Object> msg : messages) {
+            if (msg == null) {
+                log.warn("[LLM] message is null");
+                return false;
+            }
+
+            String role = (String) msg.get("role");
+            if (role == null || (!role.equals("system") && !role.equals("user") &&
+                !role.equals("assistant") && !role.equals("tool"))) {
+                log.warn("[LLM] invalid role: {}", role);
+                return false;
+            }
+
+            // tool 角色必须有 tool_call_id
+            if ("tool".equals(role) && msg.get("tool_call_id") == null) {
+                log.warn("[LLM] tool message missing tool_call_id");
+                return false;
+            }
+
+            // 检查 content 是否为异常长的字符串（可能是错误注入）
+            Object content = msg.get("content");
+            if (content instanceof String && ((String) content).length() > 50000) {
+                log.warn("[LLM] content too long: {} chars", ((String) content).length());
+                return false;
+            }
+        }
+
+        return true;
     }
 
     @Override

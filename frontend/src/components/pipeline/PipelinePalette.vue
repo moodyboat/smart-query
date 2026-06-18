@@ -2,44 +2,87 @@
   <div class="algorithm-palette">
     <div class="palette-title">算法库</div>
     <div v-for="group in algorithmGroups" :key="group.category" class="palette-group">
-      <div class="palette-group-title">{{ group.category }}</div>
-      <div
-        v-for="algo in group.algorithms"
-        :key="algo.algorithmId"
-        class="palette-card"
-        draggable="true"
-        @dragstart="$emit('paletteDragStart', $event, algo)"
-      >
-        <span class="palette-icon">{{ algo.icon || '🤖' }}</span>
-        <div class="palette-info">
-          <span class="palette-name">{{ algo.name }}</span>
-          <span class="palette-types">{{ modelTypeNames(algo.modelTypes) }}</span>
+      <div class="palette-group-title" @click="toggleGroup(group.category)">
+        <span>{{ group.category }}</span>
+        <span class="expand-icon" :class="{ expanded: isGroupExpanded(group.category) }">▼</span>
+      </div>
+      <div v-show="isGroupExpanded(group.category)" class="palette-content">
+        <div
+          v-for="algo in group.algorithms"
+          :key="algo.algorithmId"
+          class="palette-card"
+          draggable="true"
+          @dragstart="$emit('paletteDragStart', $event, algo)"
+        >
+          <span class="palette-icon">{{ algo.icon || '🤖' }}</span>
+          <div class="palette-info">
+            <span class="palette-name">{{ algo.name }}</span>
+            <span class="palette-types">{{ modelTypeNames(algo.modelTypes) }}</span>
+          </div>
         </div>
       </div>
     </div>
     <div class="palette-group">
-      <div class="palette-group-title">基础节点</div>
-      <div
-        v-for="node in baseNodes"
-        :key="node.type"
-        class="palette-card"
-        draggable="true"
-        @dragstart="$emit('paletteDragStart', $event, null, node.type)"
-      >
-        <span class="palette-icon">{{ node.icon }}</span>
-        <span class="palette-name">{{ node.name }}</span>
+      <div class="palette-group-title" @click="toggleBaseNodes">
+        <span>基础节点</span>
+        <span class="expand-icon" :class="{ expanded: baseNodesExpanded }">▼</span>
+      </div>
+      <div v-show="baseNodesExpanded" class="palette-content">
+        <div
+          v-for="node in baseNodes"
+          :key="node.type"
+          class="palette-card"
+          draggable="true"
+          @dragstart="$emit('paletteDragStart', $event, null, node.type)"
+        >
+          <span class="palette-icon">{{ node.icon }}</span>
+          <span class="palette-name">{{ node.name }}</span>
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-defineProps({
+import { ref, reactive } from 'vue'
+
+const props = defineProps({
   algorithmGroups: { type: Array, default: () => [] },
   modelTypeNames: { type: Function, required: true }
 })
 
 defineEmits(['paletteDragStart'])
+
+// 每个算法组的展开状态
+const groupStates = reactive({})
+
+// 基础节点展开状态
+const baseNodesExpanded = ref(true)
+
+// 初始化所有组为展开状态
+const initializeGroups = () => {
+  props.algorithmGroups.forEach(group => {
+    if (!(group.category in groupStates)) {
+      groupStates[group.category] = true
+    }
+  })
+}
+
+// 监听 algorithmGroups 变化
+import { watch } from 'vue'
+watch(() => props.algorithmGroups, initializeGroups, { immediate: true })
+
+const isGroupExpanded = (category) => {
+  return groupStates[category] !== false // 默认展开
+}
+
+const toggleGroup = (category) => {
+  groupStates[category] = !groupStates[category]
+}
+
+const toggleBaseNodes = () => {
+  baseNodesExpanded.value = !baseNodesExpanded.value
+}
 
 const baseNodes = [
   { type: 'data_source', icon: '📥', name: '数据接入' },
@@ -75,6 +118,47 @@ const baseNodes = [
   padding: var(--space-xs);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s;
+  border-radius: var(--radius-sm);
+}
+
+.palette-group-title:hover {
+  background: var(--hover);
+}
+
+.palette-group-title > span:first-child {
+  flex: 1;
+}
+
+.expand-icon {
+  font-size: 10px;
+  transition: transform 0.2s ease;
+  padding: 4px;
+  margin-left: 4px;
+}
+
+.expand-icon.expanded {
+  transform: rotate(180deg);
+}
+
+.palette-content {
+  animation: slideDown 0.2s ease;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .palette-card {

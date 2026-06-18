@@ -111,6 +111,22 @@ public class QueryEngine {
         BooleanSupplier abortChecker,
         Consumer<ReActEvent> eventConsumer
     ) {
+        submitMessageStreaming(conversationId, userMessage, dataSourceId, model, null, null, abortChecker, eventConsumer);
+    }
+
+    /**
+     * 流式输出: 每产生一个事件立即回调，用于 SSE 实时推送（支持场景）
+     */
+    public void submitMessageStreaming(
+        Long conversationId,
+        String userMessage,
+        Long dataSourceId,
+        String model,
+        String scenarioCode,
+        Map<String, Object> scenarioVariables,
+        BooleanSupplier abortChecker,
+        Consumer<ReActEvent> eventConsumer
+    ) {
         String traceId = queryTracer.startTrace(conversationId, userMessage);
         long startTime = System.currentTimeMillis();
 
@@ -160,7 +176,7 @@ public class QueryEngine {
 
         try {
             reActEngine.runReActLoopStreaming(
-                conversationId, model, dataSourceId, userMessage, history, abortChecker, wrappingConsumer);
+                conversationId, model, dataSourceId, userMessage, history, scenarioCode, scenarioVariables, abortChecker, wrappingConsumer);
         } catch (Exception e) {
             log.error("[QUERY] ReAct loop failed: {}", e.getMessage(), e);
             eventConsumer.accept(new ReActEvent.Error("处理失败", e.getMessage()));

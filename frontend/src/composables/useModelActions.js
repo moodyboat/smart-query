@@ -6,7 +6,7 @@ import {
   updateModelSchedule, updateMiningModel,
   fetchMiningModel, fetchDataSourceTables,
   fetchModelPredictions, previewResultTable,
-  deleteMiningModel, validateMiningModel
+  deleteMiningModel, forceDeleteMiningModel, validateMiningModel
 } from '../api'
 import { MODEL_STATUS, TRAINING_SAFETY_TIMEOUT_MS } from '../constants'
 import { parsedMetrics, formatMetricName } from './useModelDetail'
@@ -223,15 +223,56 @@ export function useModelActions(mining) {
   }
 
   async function handleDelete(id, name, showDetail, detailModel) {
+    const model = mining.models.find(m => m.id === id)
+    if (!model) return
+
+    // 检查是否为幽灵模型或特殊状态
+    const isGhostModel = model.status === 'failed' ||
+                         (model.modelPath && !model.modelPath.includes('C:\\Users\\lenovo')) ||
+                         (model.modelPath && model.modelPath.includes('/Users/gonghang')) ||
+                         (model.modelPath && model.modelPath.includes('/tmp/smartquery-workspace'))
+
+    const isPublished = model.status === 'published'
+    const isTraining = model.status === 'training'
+
+    let confirmMessage = `确定删除模型「${name}」吗？`
+    let useForceDelete = false
+
+    if (isGhostModel) {
+      confirmMessage += `\n\n👻 这是一个幽灵模型（文件丢失或状态异常），将使用强制删除。`
+      useForceDelete = true
+    } else if (isPublished) {
+      confirmMessage += `\n\n⚠️ 这是已发布模型，需要使用强制删除。`
+      useForceDelete = true
+    } else if (isTraining) {
+      confirmMessage += `\n\n⚠️ 这是训练中的模型，需要使用强制删除。`
+      useForceDelete = true
+    } else {
+      confirmMessage += `此操作不可撤销。`
+    }
+
     try {
-      await ElMessageBox.confirm(`确定删除模型「${name}」？此操作不可撤销。`, '删除模型', {
-        confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning'
+      await ElMessageBox.confirm(confirmMessage, '删除模型', {
+        confirmButtonText: useForceDelete ? '强制删除' : '删除',
+        cancelButtonText: '取消',
+        type: useForceDelete ? 'error' : 'warning'
       })
-      await deleteMiningModel(id)
+
+      if (useForceDelete) {
+        await forceDeleteMiningModel(id)
+        ElMessage.success('已强制删除')
+      } else {
+        await deleteMiningModel(id)
+        ElMessage.success('已删除')
+      }
+
       mining.removeModel(id)
       if (detailModel?.value?.id === id) showDetail.value = false
-      ElMessage.success('已删除')
-    } catch { /* cancelled */ }
+    } catch (error) {
+      if (error !== 'cancel') {
+        ElMessage.error('删除失败: ' + (error.message || '未知错误'))
+      }
+    }
   }
 
   function openSchedule(model) {

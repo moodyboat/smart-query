@@ -10,7 +10,12 @@
       <p>没有匹配「{{ modelSearch }}」的模型</p>
     </div>
     <div v-else class="model-grid">
-      <div v-for="model in filteredModels" :key="model.id" class="model-card" @click="$emit('select', model)">
+      <div v-for="model in filteredModels" :key="model.id" :class="['model-card', { 'selected': selectedModels.has(model.id) }]" @click="$emit('select', model)">
+        <!-- 批量选择复选框 -->
+        <div class="model-checkbox" @click.stop>
+          <el-checkbox :model-value="selectedModels.has(model.id)" @change="handleSelectChange(model.id, $event)"></el-checkbox>
+        </div>
+
         <div class="model-card-header">
           <div class="model-card-title">
             <span class="model-type-icon">{{ modelTypeIcon(model.modelType) }}</span>
@@ -80,7 +85,7 @@
 <script setup>
 import { MODEL_STATUS } from '../../constants'
 
-defineProps({
+const props = defineProps({
   models: { type: Array, default: () => [] },
   filteredModels: { type: Array, default: () => [] },
   loading: { type: Boolean, default: false },
@@ -102,14 +107,19 @@ defineProps({
   formatMetricName: { type: Function, required: true },
   formatMetricValue: { type: Function, required: true },
   needsSync: { type: Function, required: true },
-  MODEL_STATUS: { type: Object, default: () => MODEL_STATUS }
+  MODEL_STATUS: { type: Object, default: () => MODEL_STATUS },
+  selectedModels: { type: Set, default: () => new Set() }
 })
 
-defineEmits([
+const emit = defineEmits([
   'select', 'train', 'editModel', 'publish', 'offline',
-  'predict', 'batchPredict', 'actionCmd', 'goToPipeline',
-  'handleSyncPipeline', 'search'
+  'predict', 'batchPredict', 'actionCmd', 'goToPipeline', 'handleSyncPipeline',
+  'updateSelection'
 ])
+
+function handleSelectChange(modelId, checked) {
+  emit('updateSelection', modelId, checked)
+}
 </script>
 
 <style scoped>
@@ -127,9 +137,15 @@ defineEmits([
 .model-card {
   background: var(--surface); border-radius: var(--radius-lg); border: 1px solid var(--border);
   padding: var(--space-lg); cursor: pointer; transition: all 0.2s;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04); position: relative;
+}
+.model-card.selected {
+  border-color: var(--primary); border-width: 2px; background: var(--primary-light, #e6f7ff);
 }
 .model-card:hover { border-color: var(--primary); box-shadow: 0 4px 12px rgba(0,0,0,0.08); transform: translateY(-1px); }
+.model-checkbox {
+  position: absolute; top: var(--space-md); left: var(--space-md); z-index: 10;
+}
 .model-card-header {
   display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-sm);
 }

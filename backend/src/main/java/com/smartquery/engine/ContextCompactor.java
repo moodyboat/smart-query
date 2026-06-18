@@ -293,6 +293,7 @@ public class ContextCompactor {
             }
         } catch (Exception e) {
             log.warn("[COMPACT] LLM summarization failed, falling back to truncation: {}", e.getMessage());
+            log.debug("[COMPACT] summarization exception:", e);
         }
 
         // 降级: 使用截断摘要
@@ -301,16 +302,22 @@ public class ContextCompactor {
 
     private String callLlmForSummary(String rawContent) {
         if (!llmService.isAvailable(summarizationModel)) {
+            log.debug("[COMPACT] summarization model {} not available", summarizationModel);
             return null;
         }
 
-        String userContent = "对话历史:\n" + truncate(rawContent, llmSummaryInputLimit);
-        List<Map<String, String>> messages = List.of(
-            Map.of("role", "system", "content", SUMMARIZATION_PROMPT),
-            Map.of("role", "user", "content", userContent)
-        );
+        try {
+            String userContent = "对话历史:\n" + truncate(rawContent, llmSummaryInputLimit);
+            List<Map<String, String>> messages = List.of(
+                Map.of("role", "system", "content", SUMMARIZATION_PROMPT),
+                Map.of("role", "user", "content", userContent)
+            );
 
-        return llmService.chat(summarizationModel, messages);
+            return llmService.chat(summarizationModel, messages);
+        } catch (Exception e) {
+            log.warn("[COMPACT] LLM summarization call failed: {}", e.getMessage());
+            return null;
+        }
     }
 
     private String extractRawContent(List<Map<String, Object>> messages) {

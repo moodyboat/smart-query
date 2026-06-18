@@ -5,6 +5,8 @@ set -e
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BACKEND_DIR="$PROJECT_DIR/backend"
+MAVEN_HOME="$PROJECT_DIR/tools/apache-maven-3.9.16"
+export PATH="$MAVEN_HOME/bin:$PATH"
 FRONTEND_DIR="$PROJECT_DIR/frontend"
 LOG_DIR="$PROJECT_DIR/logs"
 
@@ -23,8 +25,8 @@ check_port() {
 
 # 启动后端
 start_backend() {
-    echo "[1/2] 启动后端 (Spring Boot :8080)..."
-    check_port 8080
+    echo "[1/2] 启动后端 (Spring Boot :9000)..."
+    check_port 9000
     cd "$BACKEND_DIR"
     nohup mvn spring-boot:run -q > "$LOG_DIR/backend.log" 2>&1 &
     BACKEND_PID=$!
@@ -34,7 +36,7 @@ start_backend() {
     # 等待后端就绪
     echo "  等待后端启动..."
     for i in $(seq 1 30); do
-        if curl -s http://localhost:8080/api/v1/datasources >/dev/null 2>&1; then
+        if curl -s http://localhost:9000/api/v1/conversation >/dev/null 2>&1; then
             echo "  后端已就绪 ✓"
             return 0
         fi
@@ -80,7 +82,7 @@ start_frontend
 echo ""
 echo "=== 启动完成 ==="
 echo "  前端: http://localhost:5173"
-echo "  后端: http://localhost:8080"
+echo "  后端: http://localhost:9000"
 echo "  日志: $LOG_DIR/"
 echo ""
 echo "停止服务: ./stop.sh"

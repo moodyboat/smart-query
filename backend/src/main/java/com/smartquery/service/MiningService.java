@@ -945,7 +945,7 @@ public class MiningService {
         sb.append("fi = {}\nif hasattr(clf, 'feature_importances_'): fi = dict(zip(X_train.columns, [round(float(v), 4) for v in clf.feature_importances_]))\n");
         sb.append("elif hasattr(clf, 'coef_'): fi = dict(zip(X_train.columns, [round(float(v), 4) for v in clf.coef_.flatten()]))\n\n");
 
-        sb.append("_workspace = '").append(modelWorkspace).append("'\nos.makedirs(_workspace, exist_ok=True)\n");
+        sb.append("_workspace = r'").append(modelWorkspace).append("'\nos.makedirs(_workspace, exist_ok=True)\n");
         sb.append("_model_path = os.path.join(_workspace, 'model_").append(model.getId()).append("_v' + clf.__class__.__name__ + '.pkl')\n");
         sb.append("joblib.dump(clf, _model_path)\n");
         sb.append("_preproc_path = os.path.join(_workspace, 'model_").append(model.getId()).append("_preprocessors.pkl')\n");

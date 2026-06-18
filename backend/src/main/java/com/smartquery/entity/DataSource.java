@@ -19,6 +19,7 @@ public class DataSource extends BaseEntity {
     private String password;
     private String extraConfig;
     private Integer status;
+    private Boolean forQuestionAnswering;
 
     @TableField(exist = false)
     private Boolean system;

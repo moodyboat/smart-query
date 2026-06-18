@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API测试页面</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .test-card {
+            background: white;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .test-title {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #333;
+        }
+        .test-result {
+            margin-top: 10px;
+            padding: 10px;
+            background: #f9f9f9;
+            border-radius: 4px;
+        }
+        .success {
+            color: #67c23a;
+        }
+        .error {
+            color: #f56c6c;
+        }
+        .data-preview {
+            background: #f0f0f0;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        button {
+            background: #409eff;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        button:hover {
+            background: #66b1ff;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔍 前端组件API测试</h1>
+    <p>当前前端地址: <strong>http://localhost:5177</strong></p>
+
+    <div class="test-card">
+        <div class="test-title">1. 测试场景API</div>
+        <button onclick="testScenarios()">测试场景API</button>
+        <div id="scenario-result" class="test-result"></div>
+    </div>
+
+    <div class="test-card">
+        <div class="test-title">2. 测试提示词API</div>
+        <button onclick="testPrompts()">测试提示词API</button>
+        <div id="prompt-result" class="test-result"></div>
+    </div>
+
+    <div class="test-card">
+        <div class="test-title">3. 测试元数据API</div>
+        <button onclick="testMetadata()">测试元数据API</button>
+        <div id="metadata-result" class="test-result"></div>
+    </div>
+
+    <div class="test-card">
+        <div class="test-title">4. 测试完整数据格式</div>
+        <button onclick="testFullData()">测试完整数据</button>
+        <div id="full-result" class="test-result"></div>
+    </div>
+
+    <script>
+        async function testScenarios() {
+            const resultDiv = document.getElementById('scenario-result');
+            try {
+                const response = await fetch('/api/v1/scenarios');
+                const data = await response.json();
+
+                if (data.code === 200 && data.data) {
+                    resultDiv.innerHTML = `
+                        <div class="success">✓ 场景API正常</div>
+                        <div>场景数量: ${data.data.length}</div>
+                        <div class="data-preview">${JSON.stringify(data.data[0], null, 2)}</div>
+                    `;
+                } else {
+                    resultDiv.innerHTML = `<div class="error">✗ 场景API响应异常</div>`;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `<div class="error">✗ 场景API调用失败: ${error.message}</div>`;
+            }
+        }
+
+        async function testPrompts() {
+            const resultDiv = document.getElementById('prompt-result');
+            try {
+                const response = await fetch('/api/v1/prompt-templates/scenario/1');
+                const data = await response.json();
+
+                if (data.code === 200 && data.data) {
+                    resultDiv.innerHTML = `
+                        <div class="success">✓ 提示词API正常</div>
+                        <div>提示词数量: ${data.data.length}</div>
+                        <div>第一个提示词: ${data.data[0].name}</div>
+                        <div class="data-preview">${data.data[0].content.substring(0, 100)}...</div>
+                    `;
+                } else {
+                    resultDiv.innerHTML = `<div class="error">✗ 提示词API响应异常</div>`;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `<div class="error">✗ 提示词API调用失败: ${error.message}</div>`;
+            }
+        }
+
+        async function testMetadata() {
+            const resultDiv = document.getElementById('metadata-result');
+            try {
+                const response = await fetch('/api/v1/metadata/type/business_term');
+                const data = await response.json();
+
+                if (data.code === 200) {
+                    resultDiv.innerHTML = `
+                        <div class="success">✓ 元数据API正常</div>
+                        <div>业务术语数量: ${data.data.length}</div>
+                    `;
+                } else {
+                    resultDiv.innerHTML = `<div class="error">✗ 元数据API响应异常</div>`;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `<div class="error">✗ 元数据API调用失败: ${error.message}</div>`;
+            }
+        }
+
+        async function testFullData() {
+            const resultDiv = document.getElementById('full-result');
+            try {
+                const [scenariosResp, promptsResp] = await Promise.all([
+                    fetch('/api/v1/scenarios'),
+                    fetch('/api/v1/prompt-templates/scenario/1')
+                ]);
+
+                const scenarios = await scenariosResp.json();
+                const prompts = await promptsResp.json();
+
+                resultDiv.innerHTML = `
+                    <div class="success">✓ 所有API正常</div>
+                    <div>场景数量: ${scenarios.data.length}</div>
+                    <div>提示词数量: ${prompts.data.length}</div>
+                    <div class="data-preview">
+场景数据结构:
+${JSON.stringify(scenarios.data[0], null, 2).substring(0, 200)}...
+
+提示词数据结构:
+${JSON.stringify(prompts.data[0], null, 2).substring(0, 200)}...
+                    </div>
+                `;
+            } catch (error) {
+                resultDiv.innerHTML = `<div class="error">✗ API调用失败: ${error.message}</div>`;
+            }
+        }
+
+        // 页面加载时自动测试
+        window.onload = function() {
+            console.log('测试页面已加载，前端地址: http://localhost:5177');
+        };
+    </script>
+</body>
+</html>

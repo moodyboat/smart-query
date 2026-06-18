@@ -60,7 +60,8 @@ public class ChatController {
         @RequestParam Long conversationId,
         @RequestBody Map<String, String> body,
         @RequestParam(required = false) Long dataSourceId,
-        @RequestParam(defaultValue = "") String model
+        @RequestParam(defaultValue = "") String model,
+        @RequestParam(defaultValue = "") String scenario
     ) {
         var rateResult = rateLimiter.tryAcquireWithInfo("chat:" + conversationId, chatRateLimit);
         if (!rateResult.allowed()) {
@@ -82,7 +83,7 @@ public class ChatController {
             emitter.complete();
             return emitter;
         }
-        return chat(conversationId, message, dataSourceId, model.isBlank() ? defaultModel : model);
+        return chat(conversationId, message, dataSourceId, model.isBlank() ? defaultModel : model, scenario);
     }
 
     @GetMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -90,7 +91,8 @@ public class ChatController {
         @RequestParam Long conversationId,
         @RequestParam String message,
         @RequestParam(required = false) Long dataSourceId,
-        @RequestParam(defaultValue = "") String model
+        @RequestParam(defaultValue = "") String model,
+        @RequestParam(defaultValue = "") String scenario
     ) {
         // Per-conversation lock: reject concurrent requests to the same conversation
         String resolvedModel = model.isBlank() ? defaultModel : model;
@@ -144,7 +146,7 @@ public class ChatController {
             sessionManager.register(conversationId, finalDataSourceId, null);
             try {
                 queryEngine.submitMessageStreaming(
-                    conversationId, message, finalDataSourceId, resolvedModel,
+                    conversationId, message, finalDataSourceId, resolvedModel, scenario, null,
                     aborted::get,
                     event -> {
                         if (aborted.get()) return;

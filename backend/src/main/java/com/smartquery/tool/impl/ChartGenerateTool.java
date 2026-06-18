@@ -4,17 +4,31 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartquery.entity.Chart;
 import com.smartquery.mapper.ChartMapper;
 import com.smartquery.tool.*;
+import com.smartquery.service.ChartImageService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class ChartGenerateTool implements LlmTool {
 
     private final ChartMapper chartMapper;
     private final ObjectMapper objectMapper;
+    private final ChartImageService chartImageService;
+
+    @Value("${smart-query.chart.storage.path:./charts}")
+    private String chartStoragePath;
 
     @Override
     public String getName() { return "generate_chart"; }
@@ -75,6 +89,14 @@ public class ChartGenerateTool implements LlmTool {
             }
             chartMapper.insert(chart);
 
+            // 生成并保存图表图片
+            String imagePath = saveChartImage(chart.getId(), optionJson);
+            if (imagePath != null) {
+                chart.setImagePath(imagePath);
+                chartMapper.updateById(chart);
+                log.info("[CHART-GENERATE] 图表图片已保存: chartId={}, path={}", chart.getId(), imagePath);
+            }
+
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("chartId", chart.getId());
             result.put("chartType", chartType);
@@ -88,6 +110,43 @@ public class ChartGenerateTool implements LlmTool {
             return ToolResult.ok(getName(), output, System.currentTimeMillis() - start);
         } catch (Exception e) {
             return ToolResult.error(getName(), "图表生成错误: " + e.getMessage(), System.currentTimeMillis() - start);
+        }
+    }
+
+    /**
+     * 保存图表图片到文件系统
+     */
+    private String saveChartImage(Long chartId, String echartsOption) {
+        try {
+            // 生成图片字节数组
+            byte[] imageBytes = chartImageService.convertEchartsToImage(echartsOption);
+            if (imageBytes == null || imageBytes.length == 0) {
+                log.warn("[CHART-GENERATE] 图片生成失败: chartId={}", chartId);
+                return null;
+            }
+
+            // 创建存储目录
+            Path storageDir = Paths.get(chartStoragePath);
+            if (!Files.exists(storageDir)) {
+                Files.createDirectories(storageDir);
+                log.info("[CHART-GENERATE] 创建图表存储目录: {}", storageDir.toAbsolutePath());
+            }
+
+            // 生成文件名（使用时间戳和图表ID）
+            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+            String fileName = String.format("chart_%d_%s.png", chartId, timestamp);
+            Path imagePath = storageDir.resolve(fileName);
+
+            // 保存图片文件
+            Files.write(imagePath, imageBytes);
+            log.info("[CHART-GENERATE] 图片文件已保存: {}", imagePath.toAbsolutePath());
+
+            // 返回相对路径
+            return fileName;
+
+        } catch (Exception e) {
+            log.error("[CHART-GENERATE] 保存图片失败: chartId={}", chartId, e);
+            return null;
         }
     }
 
