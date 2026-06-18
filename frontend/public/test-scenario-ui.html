@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>场景化界面预览</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            color: #333;
+        }
+        .scenario-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+        .scenario-card {
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            transition: transform 0.2s;
+        }
+        .scenario-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 16px rgba(0,0,0,0.15);
+        }
+        .scenario-header {
+            padding: 20px;
+            color: white;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .scenario-icon {
+            font-size: 32px;
+        }
+        .scenario-title {
+            font-size: 20px;
+            font-weight: 600;
+        }
+        .scenario-subtitle {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+        .scenario-body {
+            padding: 20px;
+            background: white;
+        }
+        .scenario-description {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 15px;
+            line-height: 1.5;
+        }
+        .capabilities {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .capability-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            color: #555;
+        }
+        .capability-icon {
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 10px;
+            font-weight: bold;
+        }
+        .examples {
+            background: #f8f9fa;
+            padding: 12px;
+            border-radius: 8px;
+        }
+        .examples-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+        }
+        .example-item {
+            font-size: 12px;
+            color: #666;
+            padding: 4px 0;
+            border-bottom: 1px solid #e9ecef;
+        }
+        .example-item:last-child {
+            border-bottom: none;
+        }
+        .test-section {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .test-section h2 {
+            margin-bottom: 15px;
+            color: #333;
+        }
+        .test-controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+        button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        }
+        .test-preview {
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .preview-header {
+            padding: 15px 20px;
+            color: white;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            transition: background 0.3s ease;
+        }
+        .preview-content {
+            padding: 20px;
+            background: white;
+            min-height: 200px;
+        }
+        .preview-avatar {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .avatar-circle {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            margin: 0 auto 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 30px;
+            color: white;
+        }
+        .preview-title {
+            text-align: center;
+            font-size: 18px;
+            margin-bottom: 8px;
+            color: #333;
+        }
+        .preview-subtitle {
+            text-align: center;
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎨 场景化界面预览</h1>
+
+        <div class="scenario-grid" id="scenarioGrid"></div>
+
+        <div class="test-section">
+            <h2>🧪 实时预览测试</h2>
+            <div class="test-controls">
+                <button onclick="testScenario('general')">通用查询</button>
+                <button onclick="testScenario('sales_analysis')">销售分析</button>
+                <button onclick="testScenario('user_analysis')">用户分析</button>
+                <button onclick="testScenario('financial_analysis')">财务分析</button>
+                <button onclick="testScenario('operations_monitoring')">运营监控</button>
+                <button onclick="testScenario('data_mining')">数据挖掘</button>
+            </div>
+            <div class="test-preview">
+                <div class="preview-header" id="previewHeader">
+                    <span class="scenario-icon">🔍</span>
+                    <span class="scenario-title">智能数据分析助手</span>
+                </div>
+                <div class="preview-content" id="previewContent">
+                    <div class="preview-avatar">
+                        <div class="avatar-circle" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%)">
+                            🔍
+                        </div>
+                    </div>
+                    <div class="preview-title">欢迎使用智能问数</div>
+                    <div class="preview-subtitle">不只是查询 — 我可以帮你做完整的数据分析</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const scenarios = {
+            general: {
+                name: '通用查询',
+                icon: '🔍',
+                subtitle: '通用的数据查询和分析场景',
+                description: '专业的数据分析师助手，帮助用户通过自然语言查询数据库并进行数据分析。',
+                gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                capabilities: [
+                    { icon: 'SQL', color: '#E6A23C', title: '智能查询' },
+                    { icon: 'Py', color: '#409EFF', title: '数据挖掘' },
+                    { icon: '📊', color: '#67C23A', title: '可视化' },
+                    { icon: '📋', color: '#F56C6C', title: '分析报告' }
+                ],
+                examples: [
+                    '各区域销售额对比，生成柱状图',
+                    '用Python分析客户流失原因',
+                    '建一个员工薪资分类预测模型'
+                ]
+            },
+            sales_analysis: {
+                name: '销售分析',
+                icon: '📈',
+                subtitle: '专注于帮助企业洞察销售趋势、识别机会和风险',
+                description: '销售数据分析专家，可以帮助你进行销售趋势分析、商品排行分析、客户行为分析等。',
+                gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)',
+                capabilities: [
+                    { icon: '📊', color: '#67C23A', title: '销售趋势分析' },
+                    { icon: '🏆', color: '#E6A23C', title: '商品ABC分析' },
+                    { icon: '👥', color: '#409EFF', title: '客户行为分析' },
+                    { icon: '🗺️', color: '#F56C6C', title: '区域销售对比' }
+                ],
+                examples: [
+                    '分析最近30天销售趋势，识别TOP3畅销产品',
+                    '对比各区域销售额，找出增长最快的大区',
+                    '按商品品类分析销售额和利润率'
+                ]
+            },
+            user_analysis: {
+                name: '用户分析',
+                icon: '👥',
+                subtitle: '专注于用户行为洞察、用户画像和用户增长',
+                description: '用户分析专家，可以帮助你进行用户画像分析、生命周期分析、行为路径分析等。',
+                gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                capabilities: [
+                    { icon: '👤', color: '#409EFF', title: '用户画像分析' },
+                    { icon: '🔄', color: '#67C23A', title: '生命周期分析' },
+                    { icon: '🎯', color: '#E6A23C', title: '行为路径分析' },
+                    { icon: '💰', color: '#F56C6C', title: '用户价值分析' }
+                ],
+                examples: [
+                    '分析DAU和MAU的变化趋势，找出流失原因',
+                    '计算次日留存和7日留存，评估用户粘性',
+                    '用RFM模型对用户进行分群和精细化运营'
+                ]
+            },
+            financial_analysis: {
+                name: '财务分析',
+                icon: '💰',
+                subtitle: '专注于企业财务数据分析和经营决策支持',
+                description: '财务分析专家，可以帮助你进行财务报表分析、财务比率分析、成本费用分析等。',
+                gradient: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
+                capabilities: [
+                    { icon: '📊', color: '#E6A23C', title: '财务报表分析' },
+                    { icon: '📈', color: '#67C23A', title: '财务比率分析' },
+                    { icon: '💵', color: '#409EFF', title: '成本费用分析' },
+                    { icon: '⚠️', color: '#F56C6C', title: '财务风险预警' }
+                ],
+                examples: [
+                    '分析本季度财务报表，计算关键财务比率',
+                    '对比今年与去年的利润表，分析收入增长驱动因素',
+                    '评估公司的偿债能力和财务风险'
+                ]
+            },
+            operations_monitoring: {
+                name: '运营监控',
+                icon: '📡',
+                subtitle: '专注于实时监控业务指标、发现异常和及时预警',
+                description: '运营监控专家，可以帮助你进行实时指标监控、异常检测、业务漏斗监控等。',
+                gradient: 'linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%)',
+                capabilities: [
+                    { icon: '📊', color: '#F56C6C', title: '实时指标监控' },
+                    { icon: '🔔', color: '#E6A23C', title: '异常检测预警' },
+                    { icon: '🔄', color: '#67C23A', title: '业务漏斗监控' },
+                    { icon: '🖥️', color: '#409EFF', title: '系统健康监控' }
+                ],
+                examples: [
+                    '监控今日DAU和订单量，发现异常波动',
+                    '分析注册到支付的转化漏斗，找出流失环节',
+                    '检查系统性能指标，发现性能瓶颈'
+                ]
+            },
+            data_mining: {
+                name: '数据挖掘',
+                icon: '🧠',
+                subtitle: '专注于机器学习模型训练、预测和发现数据规律',
+                description: '数据挖掘专家，可以帮助你进行数据探索、特征工程、模型训练、预测分析等。',
+                gradient: 'linear-gradient(135deg, #434343 0%, #000000 100%)',
+                capabilities: [
+                    { icon: '🔍', color: '#909399', title: '数据探索分析' },
+                    { icon: '⚙️', color: '#409EFF', title: '特征工程' },
+                    { icon: '🤖', color: '#67C23A', title: '模型训练评估' },
+                    { icon: '📈', color: '#E6A23C', title: '预测和解释' }
+                ],
+                examples: [
+                    '探索销售数据的特征分布和相关性',
+                    '构建客户流失预测模型，评估准确率',
+                    '用K-means对用户进行聚类分析'
+                ]
+            }
+        };
+
+        // 渲染场景卡片
+        function renderScenarioCards() {
+            const grid = document.getElementById('scenarioGrid');
+            grid.innerHTML = '';
+
+            Object.values(scenarios).forEach(scenario => {
+                const card = document.createElement('div');
+                card.className = 'scenario-card';
+
+                const capabilitiesHTML = scenario.capabilities.map(cap => `
+                    <div class="capability-item">
+                        <div class="capability-icon" style="background: ${cap.color}">${cap.icon}</div>
+                        <span>${cap.title}</span>
+                    </div>
+                `).join('');
+
+                const examplesHTML = scenario.examples.slice(0, 3).map(ex => `
+                    <div class="example-item">${ex}</div>
+                `).join('');
+
+                card.innerHTML = `
+                    <div class="scenario-header" style="background: ${scenario.gradient}">
+                        <span class="scenario-icon">${scenario.icon}</span>
+                        <div>
+                            <div class="scenario-title">${scenario.name}</div>
+                            <div class="scenario-subtitle">${scenario.subtitle}</div>
+                        </div>
+                    </div>
+                    <div class="scenario-body">
+                        <div class="scenario-description">${scenario.description}</div>
+                        <div class="capabilities">${capabilitiesHTML}</div>
+                        <div class="examples">
+                            <div class="examples-title">示例问题</div>
+                            ${examplesHTML}
+                        </div>
+                    </div>
+                `;
+
+                grid.appendChild(card);
+            });
+        }
+
+        // 测试特定场景
+        function testScenario(code) {
+            const scenario = scenarios[code];
+            const header = document.getElementById('previewHeader');
+            const content = document.getElementById('previewContent');
+
+            header.style.background = scenario.gradient;
+            header.innerHTML = `
+                <span class="scenario-icon">${scenario.icon}</span>
+                <span class="scenario-title">${scenario.name}专家</span>
+            `;
+
+            content.innerHTML = `
+                <div class="preview-avatar">
+                    <div class="avatar-circle" style="background: ${scenario.gradient}">
+                        ${scenario.icon}
+                    </div>
+                </div>
+                <div class="preview-title">${scenario.name}专家</div>
+                <div class="preview-subtitle">${scenario.subtitle}</div>
+                <div style="text-align: center; color: #666; font-size: 14px; max-width: 400px; margin: 0 auto;">
+                    ${scenario.description}
+                </div>
+            `;
+        }
+
+        // 初始化
+        renderScenarioCards();
+    </script>
+</body>
+</html>

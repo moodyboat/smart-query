@@ -12,15 +12,6 @@ frontend/dist/
 # ECharts SSR renderer (Node) — restore with: cd backend/tools/echarts-ssr && npm install
 backend/tools/echarts-ssr/node_modules/
 
-# 误入工作区的无关项目与解压垃圾（不提交）
-/指标引擎.zip
-/指标引擎/
-/__MACOSX/
-鏅鸿兘闂暟/
-指标引擎*.bat
-指标引擎*.md
-使用IDEA启动指标引擎.bat
-
 # 根目录测试产物（不提交）
 /test_*.docx
 /test_*.py
@@ -47,8 +38,8 @@ Thumbs.db
 .env
 *.env.local
 
-# Screenshots (test artifacts)
-screenshots/
+# Screenshots (test artifacts, root only)
+/screenshots/
 
 # Temp
 *.log

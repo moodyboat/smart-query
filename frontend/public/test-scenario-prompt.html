@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>场景提示词测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .success {
+            background-color: #d4edda;
+            border-color: #c3e6cb;
+        }
+        .error {
+            background-color: #f8d7da;
+            border-color: #f5c6cb;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        pre {
+            background-color: #f5f5f5;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>场景提示词API测试</h1>
+
+    <div class="test-section">
+        <h3>测试所有场景的提示词API</h3>
+        <button onclick="testAllScenarios()">测试所有场景</button>
+        <div id="results"></div>
+    </div>
+
+    <div class="test-section">
+        <h3>手动测试特定场景</h3>
+        <select id="scenarioSelect">
+            <option value="general">通用查询</option>
+            <option value="sales_analysis">销售分析</option>
+            <option value="user_analysis">用户分析</option>
+            <option value="financial_analysis">财务分析</option>
+            <option value="operations_monitoring">运营监控</option>
+            <option value="data_mining">数据挖掘</option>
+        </select>
+        <button onclick="testScenario()">测试该场景</button>
+        <div id="manualResult"></div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:9000/api/v1';
+
+        async function testScenario() {
+            const scenarioCode = document.getElementById('scenarioSelect').value;
+            const resultDiv = document.getElementById('manualResult');
+            resultDiv.innerHTML = '<p>正在测试...</p>';
+
+            try {
+                const response = await fetch(`${API_BASE}/scenarios/code/${scenarioCode}/prompt`);
+                const data = await response.json();
+
+                if (data.code === 200 && data.data) {
+                    resultDiv.innerHTML = `
+                        <div class="test-section success">
+                            <h4>✓ 成功获取 ${scenarioCode} 提示词</h4>
+                            <p>提示词长度: ${data.data.length} 字符</p>
+                            <details>
+                                <summary>查看完整提示词</summary>
+                                <pre>${data.data}</pre>
+                            </details>
+                        </div>
+                    `;
+                } else {
+                    resultDiv.innerHTML = `
+                        <div class="test-section error">
+                            <h4>✗ 获取失败</h4>
+                            <p>响应: ${JSON.stringify(data)}</p>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="test-section error">
+                        <h4>✗ 网络错误</h4>
+                        <p>${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        async function testAllScenarios() {
+            const scenarios = ['general', 'sales_analysis', 'user_analysis', 'financial_analysis', 'operations_monitoring', 'data_mining'];
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '<p>正在测试所有场景...</p>';
+
+            const results = [];
+            for (const scenarioCode of scenarios) {
+                try {
+                    const response = await fetch(`${API_BASE}/scenarios/code/${scenarioCode}/prompt`);
+                    const data = await response.json();
+
+                    if (data.code === 200 && data.data) {
+                        results.push(`<p>✓ ${scenarioCode}: 成功 (${data.data.length} 字符)</p>`);
+                    } else {
+                        results.push(`<p>✗ ${scenarioCode}: 失败 - ${JSON.stringify(data)}</p>`);
+                    }
+                } catch (error) {
+                    results.push(`<p>✗ ${scenarioCode}: 网络错误 - ${error.message}</p>`);
+                }
+            }
+
+            resultsDiv.innerHTML = `<div class="test-section ${results.every(r => r.startsWith('✓')) ? 'success' : 'error'}">
+                <h4>测试结果</h4>
+                ${results.join('')}
+            </div>`;
+        }
+    </script>
+</body>
+</html>
