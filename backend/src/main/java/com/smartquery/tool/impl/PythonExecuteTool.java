@@ -20,7 +20,7 @@ public class PythonExecuteTool implements LlmTool {
     private final PythonExecutor pythonExecutor;
     private final PythonExecutionMapper pythonExecutionMapper;
 
-    @org.springframework.beans.factory.annotation.Value("${python-tool.default-timeout-ms:60000}")
+    @org.springframework.beans.factory.annotation.Value("${smart-query.python.default-timeout-ms:60000}")
     private int defaultTimeoutMs;
 
     @Override
@@ -28,7 +28,7 @@ public class PythonExecuteTool implements LlmTool {
 
     @Override
     public String getDescription() {
-        return "执行 Python 代码进行数据分析和挖掘。已预装 pandas, numpy, matplotlib, scipy, scikit-learn, sqlalchemy。数据库连接已自动注入为变量 `engine`。";
+        return "执行 Python 代码进行数据分析和挖掘。已预装 pandas, numpy, matplotlib, scikit-learn, sqlalchemy。数据库连接已自动注入为变量 `engine`。";
     }
 
     @Override

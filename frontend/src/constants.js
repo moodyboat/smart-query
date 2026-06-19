@@ -3,6 +3,20 @@ export const LONG_RUNNING_TIMEOUT_MS = 600_000
 export const SSE_SAFETY_TIMEOUT_MS = 300_000
 export const TRAINING_SAFETY_TIMEOUT_MS = 300_000
 
+// 路由路径
+export const ROUTES = Object.freeze({
+  LOGIN: '/login',
+  HOME: '/home',
+  WORKSPACE: '/workspace',
+  USER_MANAGEMENT: '/admin/users',
+})
+
+// 鉴权本地存储键
+export const AUTH_STORAGE_KEYS = Object.freeze({
+  TOKEN: 'sq_token',
+  USER: 'sq_user',
+})
+
 export const DEFAULT_MODEL_TYPE = 'classification'
 export const DEFAULT_ALGORITHM = 'random_forest'
 

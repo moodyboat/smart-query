@@ -5,6 +5,7 @@ import com.smartquery.common.ModelStatus;
 import com.smartquery.common.NodeType;
 import com.smartquery.datasource.DataSourceManager;
 import com.smartquery.entity.*;
+import com.smartquery.util.DbUrlUtil;
 import com.smartquery.logging.ConversationEventLogger;
 import com.smartquery.logging.DiagnosticsTimer;
 import com.smartquery.mapper.*;
@@ -127,7 +128,7 @@ public class PipelineService {
             throw new IllegalStateException("源表 '" + cfg.sourceTable + "' 不存在或无法访问: " + e.getMessage());
         }
 
-        String dbUrl = buildSqlalchemyUrl(ds);
+        String dbUrl = DbUrlUtil.buildSqlalchemyUrl(ds);
         String algoBlock = buildAlgorithmBlock(cfg.algorithm);
         String modelFilename = "pipeline_" + pipelineId + "_v" + cfg.algorithm + ".pkl";
         String modelPath = modelWorkspace + "/" + modelFilename;
@@ -278,7 +279,7 @@ public class PipelineService {
             throw new IllegalStateException("源表 '" + cfg.sourceTable + "' 不存在或无法访问: " + e.getMessage());
         }
 
-        String dbUrl = buildSqlalchemyUrl(ds);
+        String dbUrl = DbUrlUtil.buildSqlalchemyUrl(ds);
         String algoBlock = buildAlgorithmBlock(cfg.algorithm);
         String modelFilename = "pipeline_" + pipelineId + "_v" + cfg.algorithm + ".pkl";
         String modelPath = modelWorkspace + "/" + modelFilename;
@@ -1135,7 +1136,7 @@ public class PipelineService {
         DataSource ds = dataSourceMapper.selectById(pipeline.getDataSourceId());
         if (ds == null) throw new IllegalStateException("数据源不存在");
 
-        return buildPreviewScript(buildSqlalchemyUrl(ds), cfg, nodeType);
+        return buildPreviewScript(DbUrlUtil.buildSqlalchemyUrl(ds), cfg, nodeType);
     }
 
     @SuppressWarnings("unchecked")
@@ -1173,7 +1174,7 @@ public class PipelineService {
         DataSource ds = dataSourceMapper.selectById(pipeline.getDataSourceId());
         if (ds == null) throw new IllegalStateException("数据源不存在");
 
-        String script = buildPreviewScript(buildSqlalchemyUrl(ds), cfg, NodeType.PREPROCESSING);
+        String script = buildPreviewScript(DbUrlUtil.buildSqlalchemyUrl(ds), cfg, NodeType.PREPROCESSING);
 
         try {
             PythonResult pr = pythonExecutor.execute(script, pipeline.getDataSourceId(), previewTimeoutMs);
@@ -1206,7 +1207,7 @@ public class PipelineService {
         DataSource ds = dataSourceMapper.selectById(pipeline.getDataSourceId());
         if (ds == null) throw new IllegalStateException("数据源不存在");
 
-        String dbUrl = buildSqlalchemyUrl(ds);
+        String dbUrl = DbUrlUtil.buildSqlalchemyUrl(ds);
         String algoBlock = buildAlgorithmBlock(cfg.algorithm);
         String modelPath = modelWorkspace + "/pipeline_" + pipelineId + ".pkl";
         String fullScript = buildPipelineScript(dbUrl, cfg, algoBlock, modelPath);
@@ -1511,17 +1512,6 @@ public class PipelineService {
             sb.append(line).append("\n");
         }
         return sb.toString().trim();
-    }
-
-    private String buildSqlalchemyUrl(DataSource ds) {
-        String user = URLEncoder.encode(ds.getUsername(), StandardCharsets.UTF_8);
-        String pass = URLEncoder.encode(ds.getPassword(), StandardCharsets.UTF_8);
-        String type = ds.getType() != null ? ds.getType() : "mysql";
-        String driver = switch (type) {
-            case "postgresql" -> "postgresql+psycopg2";
-            default -> "mysql+pymysql";
-        };
-        return "%s://%s:%s@%s:%d/%s".formatted(driver, user, pass, ds.getHost(), ds.getPort(), ds.getDatabaseName());
     }
 
     private Map<String, Object> parseResultMarker(String stdout, String marker) {

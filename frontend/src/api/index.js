@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
-import { DEFAULT_TIMEOUT_MS, PREDICTION_RECORD_LIMIT, PREVIEW_ROW_LIMIT } from '../constants.js'
+import { AUTH_STORAGE_KEYS, DEFAULT_TIMEOUT_MS, PREDICTION_RECORD_LIMIT, PREVIEW_ROW_LIMIT, ROUTES } from '../constants.js'
 
 export const METRIC_NAMES = {
   accuracy: '准确率', precision: '精确率', recall: '召回率', f1: 'F1',
@@ -20,6 +20,15 @@ export const API_BASE = '/api/v1'
 const api = axios.create({
   baseURL: API_BASE,
   timeout: DEFAULT_TIMEOUT_MS
+})
+
+// 请求拦截器：注入 JWT
+api.interceptors.request.use(config => {
+  const token = localStorage.getItem(AUTH_STORAGE_KEYS.TOKEN)
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
 })
 
 api.interceptors.response.use(
@@ -52,9 +61,24 @@ api.interceptors.response.use(
         errorMsg = responseData
       }
 
+      // 401：登录接口=凭据错误（仅提示）；其它接口=会话失效（清 token 跳登录）
+      if (status === 401) {
+        const reqUrl = error.config?.url || ''
+        if (reqUrl.includes('/auth/login')) {
+          ElMessage.error(errorMsg || '用户名或密码错误')
+        } else {
+          localStorage.removeItem(AUTH_STORAGE_KEYS.TOKEN)
+          localStorage.removeItem(AUTH_STORAGE_KEYS.USER)
+          ElMessage.error(errorMsg || '登录已失效，请重新登录')
+          if (window.location.pathname !== ROUTES.LOGIN) {
+            setTimeout(() => { window.location.href = ROUTES.LOGIN }, 400)
+          }
+        }
+        return Promise.reject(error)
+      }
+
       const msgs = {
         400: errorMsg || '请求参数错误',
-        401: '请先登录',
         403: '没有操作权限',
         404: '请求的资源不存在',
         409: errorMsg || '操作冲突',
@@ -170,6 +194,11 @@ export function buildChatUrl(conversationId, dataSourceId, scenario = null) {
   let url = `${API_BASE}/chat?conversationId=${conversationId}&dataSourceId=${dataSourceId}`
   if (scenario) {
     url += `&scenario=${scenario}`
+  }
+  // EventSource 无法设置请求头，通过 ?token= 携带 JWT（后端 AuthInterceptor 支持）
+  const token = localStorage.getItem(AUTH_STORAGE_KEYS.TOKEN)
+  if (token) {
+    url += `&token=${encodeURIComponent(token)}`
   }
   return url
 }
@@ -392,6 +421,54 @@ export async function fetchAdminSessions() {
 
 // Word Report APIs
 export async function downloadWordReport(conversationId, title) {
-  const url = `/word-report/download/conversation/${conversationId}${title ? '?title=' + encodeURIComponent(title) : ''}`
+  const params = []
+  if (title) params.push('title=' + encodeURIComponent(title))
+  const token = localStorage.getItem(AUTH_STORAGE_KEYS.TOKEN)
+  if (token) params.push('token=' + encodeURIComponent(token))
+  const url = `/word-report/download/conversation/${conversationId}${params.length ? '?' + params.join('&') : ''}`
   window.open(`${API_BASE}${url}`, '_blank')
+}
+
+// ===== 鉴权 API =====
+export async function login(username, password) {
+  const { data } = await api.post('/auth/login', { username, password })
+  return data.data
+}
+
+export async function fetchCurrentUser() {
+  const { data } = await api.get('/auth/me')
+  return data.data
+}
+
+export async function logout() {
+  await api.post('/auth/logout')
+}
+
+// ===== 用户管理（admin） =====
+export async function fetchUsers(keyword) {
+  const params = keyword ? `?keyword=${encodeURIComponent(keyword)}` : ''
+  const { data } = await api.get(`/users${params}`)
+  return data.data
+}
+
+export async function createUser(user) {
+  const { data } = await api.post('/users', user)
+  return data.data
+}
+
+export async function updateUser(id, updates) {
+  const { data } = await api.put(`/users/${id}`, updates)
+  return data.data
+}
+
+export async function resetUserPassword(id, newPassword) {
+  await api.put(`/users/${id}/password`, { newPassword })
+}
+
+export async function deleteUser(id) {
+  await api.delete(`/users/${id}`)
+}
+
+export async function changeMyPassword(oldPassword, newPassword) {
+  await api.post('/auth/password', { oldPassword, newPassword })
 }

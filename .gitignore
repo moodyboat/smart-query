@@ -5,6 +5,9 @@ backend/logs/
 *.jar
 *.war
 
+# 国产数据库厂商 JDBC 驱动（信创/私有化）：pom 以 system scope 引用，必须入库
+!backend/lib/*.jar
+
 # Frontend
 frontend/node_modules/
 frontend/dist/
@@ -49,3 +52,4 @@ Thumbs.db
 # Runtime
 logs/
 tmp/
+.gstack/

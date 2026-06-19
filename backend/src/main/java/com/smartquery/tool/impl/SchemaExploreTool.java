@@ -49,6 +49,9 @@ public class SchemaExploreTool implements LlmTool {
     public ToolResult execute(Map<String, Object> input, ToolExecutionContext context) {
         long start = System.currentTimeMillis();
         String action = (String) input.get("action");
+        if (action == null || action.isBlank()) {
+            action = "list_tables";  // 默认列所有表（避免 switch(null) NPE）
+        }
         Long dsId = input.get("data_source_id") != null
             ? ((Number) input.get("data_source_id")).longValue()
             : context.dataSourceId();

@@ -150,3 +150,7 @@
 ### 轮次 22（2026-06-19）
 - **box-shadow 评估**：写死 10 处，但 4 处是 `none` + 6 处值分散且与 `--shadow-sm/md/lg` 不精确对应（如 `0 1px 2px` vs `--shadow-sm` 的 `0 1px 3px`）——强行映射会改变视觉。**保留**（不过度优化）。
 - **自主优化空间彻底穷尽**：UI 变量（颜色/font-size/border-radius/padding）+ 前后端常量（MODEL/PIPELINE/EXECUTION/BLOCK/NODE_TYPES/NodeType/ModelStatus/AppState）+ DRY（typeOrder/isGhostModel）+ 构建（drop console）+ 过度降级排查（健康）均已完成。剩余仅决策依赖项（多用户鉴权、isGhostModel 后端接口、git 提交）。
+
+### 轮次 23（2026-06-19）
+- **后端状态字符串全扫描**：QueryEngine:235 `setStatus("success")` 清晰可改 EXEC_SUCCESS，但仅 1 处、为核心引擎、需新增 import——价值小不动（避免过度）；ReportGenerateTool:115 `report.setStatus("completed")` 套 `PIPELINE_COMPLETED` 命名不符（report≠pipeline）；MiningPredictionService/QueryTracer/ModelTaskExecutor 的 `"status":"success/failed"` 是**日志/事件 payload 字段**，语义非实体状态，强套 ModelStatus 命名误导。
+- 结论：后端状态字符串散落仅 ~7 处且多数语义模糊，**不做强行统一**（避免为统一而套不准命名）。自主优化彻底穷尽，已提交（29228a6）。

@@ -28,29 +28,17 @@ public class CoordinatorIntegration {
     /**
      * 检查用户消息是否需要任务协调
      *
+     * <p>已停用：真实的多算法对比由 {@code MiningModelTool} 的 {@code compare} action 实现——
+     * 它要求 source_table + target_column，调用 {@code MiningService.trainModel} 真实训练并产出真实指标。
+     * 此前本协调器路径仅从自然语言提取算法名（无数据源/目标列上下文），返回 {@code Math.random()} 假数据
+     * 并注入 LLM 上下文（见 {@link com.smartquery.coordinator.executor.ModelTaskExecutor}），既造假又可能与
+     * 真实工具竞争。停用后让 LLM 走 {@code mining_model.compare} 真实路径。
+     * 相关死代码（extractTasks / extractModelComparisonTasks / ModelTaskExecutor）待后续清理或真实重写。
+     *
      * @param userMessage 用户消息
-     * @return 是否需要协调
+     * @return 恒为 false（协调器对比路径已停用）
      */
     public boolean needsCoordination(String userMessage) {
-        if (userMessage == null || userMessage.isEmpty()) {
-            return false;
-        }
-
-        // 检测关键词和模式
-        String[] coordinationKeywords = {
-            "对比.*模型", "比较.*模型", "对比.*算法", "比较.*算法",
-            "分别.*训练", "同时.*训练", "并行.*训练",
-            "对比.*和.*", "比较.*和.*", "与.*对比", "与.*比较"
-        };
-
-        for (String keyword : coordinationKeywords) {
-            if (Pattern.compile(keyword).matcher(userMessage).find()) {
-                log.info("[COORDINATOR-INTEGRATION] Detected coordination keyword: {} in message: {}",
-                         keyword, userMessage);
-                return true;
-            }
-        }
-
         return false;
     }
 

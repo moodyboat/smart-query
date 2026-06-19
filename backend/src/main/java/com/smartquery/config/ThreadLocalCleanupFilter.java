@@ -1,5 +1,6 @@
 package com.smartquery.config;
 
+import com.smartquery.common.UserContextHolder;
 import com.smartquery.engine.ConversationContextHolder;
 import jakarta.servlet.*;
 import jakarta.servlet.http.HttpServletRequest;
@@ -21,6 +22,7 @@ public class ThreadLocalCleanupFilter implements Filter {
             chain.doFilter(request, response);
         } finally {
             ConversationContextHolder.clear();
+            UserContextHolder.clear();
         }
     }
 }

@@ -21,7 +21,6 @@
         <java.version>17</java.version>
         <lombok.version>1.18.46</lombok.version>
         <mybatis-plus.version>3.5.6</mybatis-plus.version>
-        <docker-java.version>3.3.4</docker-java.version>
     </properties>
 
     <dependencies>
@@ -32,19 +31,31 @@
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-webflux</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
+
+        <!-- 鉴权：BCrypt 密码编码（仅 crypto，不引入完整 Spring Security 过滤链） -->
         <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-data-redis</artifactId>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-crypto</artifactId>
+        </dependency>
+        <!-- JWT (jjwt 0.12.x) -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+            <version>0.12.6</version>
         </dependency>
         <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-cache</artifactId>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <version>0.12.6</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <version>0.12.6</version>
+            <scope>runtime</scope>
         </dependency>
 
         <!-- MyBatis-Plus -->
@@ -61,38 +72,29 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- 国产数据库 JDBC 驱动（信创/私有化部署：达梦 DM8、GBase 8a）。
+             厂商驱动不在 Maven 中央仓库，以 system scope 引入 lib/ 下 jar；
+             spring-boot-maven-plugin 已设 includeSystemScope=true，会打进 fat jar。
+             驱动类：dm.jdbc.driver.DmDriver / com.gbase.jdbc.Driver（见 entity/DataSource.java）。 -->
+        <dependency>
+            <groupId>com.dm</groupId>
+            <artifactId>DmJdbcDriver</artifactId>
+            <version>8</version>
+            <scope>system</scope>
+            <systemPath>${project.basedir}/lib/DmJdbcDriver8.jar</systemPath>
+        </dependency>
+        <dependency>
+            <groupId>com.gbase</groupId>
+            <artifactId>gbase-connector-java</artifactId>
+            <version>8.3.81.53</version>
+            <scope>system</scope>
+            <systemPath>${project.basedir}/lib/gbase-connector-java-8.3.81.53.jar</systemPath>
+        </dependency>
+
         <!-- JDBC -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-jdbc</artifactId>
-        </dependency>
-
-        <!-- Flyway -->
-        <dependency>
-            <groupId>org.flywaydb</groupId>
-            <artifactId>flyway-core</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.flywaydb</groupId>
-            <artifactId>flyway-mysql</artifactId>
-        </dependency>
-
-        <!-- Docker Java Client (for Python sandbox) -->
-        <dependency>
-            <groupId>com.github.docker-java</groupId>
-            <artifactId>docker-java-core</artifactId>
-            <version>${docker-java.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>com.github.docker-java</groupId>
-            <artifactId>docker-java-transport-httpclient5</artifactId>
-            <version>${docker-java.version}</version>
-        </dependency>
-
-        <!-- HTTP Client (for LLM API calls) -->
-        <dependency>
-            <groupId>org.apache.httpcomponents.client5</groupId>
-            <artifactId>httpclient5</artifactId>
         </dependency>
 
         <!-- JSON -->
@@ -105,25 +107,12 @@
             <artifactId>jackson-datatype-jsr310</artifactId>
         </dependency>
 
-        <!-- Caffeine Cache -->
-        <dependency>
-            <groupId>com.github.ben-manes.caffeine</groupId>
-            <artifactId>caffeine</artifactId>
-        </dependency>
-
         <!-- Apache POI for Word Document Generation -->
         <dependency>
             <groupId>org.apache.poi</groupId>
             <artifactId>poi-ooxml</artifactId>
             <version>5.2.5</version>
         </dependency>
-        <!-- Apache Commons Compress for POI compatibility -->
-        <dependency>
-            <groupId>org.apache.commons</groupId>
-            <artifactId>commons-compress</artifactId>
-            <version>1.26.0</version>
-        </dependency>
-
         <!-- Apache Batik for SVG -> PNG conversion (ECharts SSR SVG output) -->
         <dependency>
             <groupId>org.apache.xmlgraphics</groupId>
@@ -161,11 +150,6 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
-        <dependency>
-            <groupId>io.projectreactor</groupId>
-            <artifactId>reactor-test</artifactId>
-            <scope>test</scope>
-        </dependency>
     </dependencies>
 
     <build>
@@ -187,6 +171,7 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <configuration>
+                    <includeSystemScope>true</includeSystemScope>
                     <excludes>
                         <exclude>
                             <groupId>org.projectlombok</groupId>

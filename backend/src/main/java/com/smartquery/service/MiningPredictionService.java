@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartquery.common.ModelStatus;
 import com.smartquery.datasource.DataSourceManager;
 import com.smartquery.entity.DataSource;
+import com.smartquery.util.DbUrlUtil;
 import com.smartquery.entity.MiningModel;
 import com.smartquery.entity.PredictionResult;
 import com.smartquery.logging.ConversationEventLogger;
@@ -264,7 +265,7 @@ public class MiningPredictionService {
     @SuppressWarnings("unchecked")
     private String buildPredictionScript(MiningModel model, List<Map<String, Object>> inputRows, String saveTable) {
         DataSource ds = dataSourceMapper.selectById(model.getDataSourceId());
-        String dbUrl = ds != null ? buildSqlalchemyUrl(ds) : "";
+        String dbUrl = ds != null ? DbUrlUtil.buildSqlalchemyUrl(ds) : "";
 
         StringBuilder sb = new StringBuilder();
         sb.append("import pandas as pd\nimport numpy as np\nimport json\nimport joblib\nimport os\n\n");
@@ -303,7 +304,7 @@ public class MiningPredictionService {
 
     private String buildBatchPredictionScript(MiningModel model, String inputTable, String resultTable, String filterOverride) {
         DataSource ds = dataSourceMapper.selectById(model.getDataSourceId());
-        String dbUrl = ds != null ? buildSqlalchemyUrl(ds) : "";
+        String dbUrl = ds != null ? DbUrlUtil.buildSqlalchemyUrl(ds) : "";
 
         StringBuilder sb = new StringBuilder();
         sb.append("import pandas as pd\nimport numpy as np\nimport json\nimport joblib\nimport os\n");
@@ -388,17 +389,6 @@ public class MiningPredictionService {
         sb.append("    num_cols = ").append(varName).append(".select_dtypes(include=['number']).columns.tolist()\n    if num_cols: ").append(varName).append("[num_cols] = StandardScaler().fit_transform(").append(varName).append("[num_cols])\n");
         sb.append("elif _sc == 'minmax':\n    from sklearn.preprocessing import MinMaxScaler\n");
         sb.append("    num_cols = ").append(varName).append(".select_dtypes(include=['number']).columns.tolist()\n    if num_cols: ").append(varName).append("[num_cols] = MinMaxScaler().fit_transform(").append(varName).append("[num_cols])\n\n");
-    }
-
-    private String buildSqlalchemyUrl(DataSource ds) {
-        String user = URLEncoder.encode(ds.getUsername(), StandardCharsets.UTF_8);
-        String pass = URLEncoder.encode(ds.getPassword(), StandardCharsets.UTF_8);
-        String type = ds.getType() != null ? ds.getType().toLowerCase() : "mysql";
-        String driver = switch (type) {
-            case "postgresql" -> "postgresql+psycopg2";
-            default -> "mysql+pymysql";
-        };
-        return "%s://%s:%s@%s:%d/%s".formatted(driver, user, pass, ds.getHost(), ds.getPort(), ds.getDatabaseName());
     }
 
     private Map<String, Object> parseResultMarker(String stdout, String marker) {

@@ -94,6 +94,24 @@
     </div>
 
     <div class="sidebar-footer">
+      <div class="user-bar">
+        <div class="user-info">
+          <el-avatar :size="28" class="user-avatar">{{ avatarText }}</el-avatar>
+          <span class="user-name" :title="userStore.displayName">{{ userStore.displayName }}</span>
+        </div>
+        <div class="user-actions">
+          <el-tooltip content="返回首页" placement="top">
+            <el-button text circle @click="$emit('goHome')">
+              <el-icon><HomeFilled /></el-icon>
+            </el-button>
+          </el-tooltip>
+          <el-tooltip content="退出登录" placement="top">
+            <el-button text circle @click="$emit('logout')">
+              <el-icon><SwitchButton /></el-icon>
+            </el-button>
+          </el-tooltip>
+        </div>
+      </div>
       <el-button style="width: 100%; margin-bottom: var(--space-sm)" @click="$emit('openPromptManager')">
         <el-icon><EditPen /></el-icon> 提示词管理
       </el-button>
@@ -115,9 +133,13 @@
 
 <script setup>
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
-import { Plus, DataAnalysis, DataLine, TrendCharts, EditPen, Setting, Delete } from '@element-plus/icons-vue'
+import { Plus, DataAnalysis, DataLine, TrendCharts, EditPen, Setting, Delete, HomeFilled, SwitchButton } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { fetchConversations, fetchDataSources, createConversation, deleteConversation, renameConversation, batchDeleteConversations } from '../api'
+import { useUserStore } from '../stores/user'
+
+const userStore = useUserStore()
+const avatarText = computed(() => (userStore.displayName || 'U').charAt(0).toUpperCase())
 
 const conversations = ref([])
 const dataSources = ref([])
@@ -132,7 +154,7 @@ const editInput = ref(null)
 const batchMode = ref(false)
 const selectedConversations = ref({})
 
-const emit = defineEmits(['selectConversation', 'conversationCreated', 'conversationDeleted', 'dataSourceChanged', 'openMining', 'openDataSource', 'openPromptManager'])
+const emit = defineEmits(['selectConversation', 'conversationCreated', 'conversationDeleted', 'dataSourceChanged', 'openMining', 'openDataSource', 'openPromptManager', 'goHome', 'logout'])
 
 const filteredConversations = computed(() => {
   if (!searchQuery.value.trim()) return conversations.value
@@ -403,5 +425,38 @@ defineExpose({ setCurrentConversation, getSelectedDataSourceId, conversations, r
 .sidebar-footer {
   padding: var(--space-md);
   border-top: 1px solid var(--border);
+}
+.user-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-xs) var(--space-sm);
+  margin-bottom: var(--space-sm);
+  border-radius: var(--radius-md);
+  background: var(--bg, #f9f9fb);
+}
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+.user-avatar {
+  flex-shrink: 0;
+  background: var(--primary, #409eff);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+.user-name {
+  font-size: var(--font-sm);
+  color: var(--text-regular);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.user-actions {
+  display: flex;
+  gap: 2px;
 }
 </style>

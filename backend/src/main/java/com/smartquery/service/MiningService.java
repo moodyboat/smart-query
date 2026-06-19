@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartquery.common.ModelStatus;
 import com.smartquery.datasource.DataSourceManager;
 import com.smartquery.entity.*;
+import com.smartquery.util.DbUrlUtil;
 import com.smartquery.logging.ConversationEventLogger;
 import com.smartquery.logging.DiagnosticsTimer;
 import com.smartquery.mapper.*;
@@ -746,7 +747,7 @@ public class MiningService {
         if (model.getTemporalColumn() != null) com.smartquery.common.IdentifierValidator.validateColumnName(model.getTemporalColumn());
 
         DataSource ds = dataSourceMapper.selectById(model.getDataSourceId());
-        String dbUrl = ds != null ? buildSqlalchemyUrl(ds) : "";
+        String dbUrl = ds != null ? DbUrlUtil.buildSqlalchemyUrl(ds) : "";
 
         String resolvedFilter = inputFilter;
         if (resolvedFilter == null && model.getPredictInputFilter() != null && !model.getPredictInputFilter().isBlank()) {
@@ -1264,17 +1265,6 @@ public class MiningService {
         if (dataType == null) return false;
         return Set.of("int", "bigint", "tinyint", "smallint", "mediumint", "float", "double", "decimal", "numeric", "real")
             .contains(dataType.toLowerCase());
-    }
-
-    private String buildSqlalchemyUrl(DataSource ds) {
-        String user = URLEncoder.encode(ds.getUsername(), StandardCharsets.UTF_8);
-        String pass = URLEncoder.encode(ds.getPassword(), StandardCharsets.UTF_8);
-        String type = ds.getType() != null ? ds.getType() : "mysql";
-        String driver = switch (type) {
-            case "postgresql" -> "postgresql+psycopg2";
-            default -> "mysql+pymysql";
-        };
-        return "%s://%s:%s@%s:%d/%s".formatted(driver, user, pass, ds.getHost(), ds.getPort(), ds.getDatabaseName());
     }
 
     private Map<String, Object> parseTrainingOutput(String stdout) { return parseResultMarker(stdout, "[TRAIN_RESULT]"); }

@@ -6,10 +6,10 @@
 
 ## 技术栈
 
-- **Backend**: Spring Boot 3.4.1 + Java 17 + MyBatis-Plus + Redis + Flyway
+- **Backend**: Spring Boot 3.4.1 + Java 17 + MyBatis-Plus + JWT 鉴权（无 Redis/Flyway：Redis starter 已移除未用、项目未用 Flyway，schema 靠 `db-export` seed dump + 运行时 `DataSeeder`）
 - **Frontend**: Vue 3 + Vite 8 + Element Plus + ECharts + Pinia
 - **Database**: MySQL 8.0 (smart_query 系统库 + smart_query_sample 示例库)
-- **Python**: 系统 python3 进程模式执行（非 Docker）
+- **Python**: `execution-mode` 可配（默认 `process` 系统进程；`docker` 模式 `${smart-query.python.docker-image}` 可配）。
 - **Node**: ECharts SSR 图表渲染（`backend/tools/echarts-ssr`）
 - **LLM**: GLM-5.1 (默认), GPT-4o, DeepSeek, Ollama
 
@@ -87,7 +87,7 @@ frontend/src/
 - 后端端口: `9000`，前端: `5173`
 - LLM 默认模型: `glm-5.1`，API Key 通过 `GLM_API_KEY` 环境变量覆盖
 - MySQL 密码通过 `MYSQL_PASSWORD` 环境变量覆盖，默认 `900110`
-- Python 执行模式: `process`（系统进程）
+- Python 执行模式: `process`（默认）/ `docker`（`smart-query.python.execution-mode`；注意 docker 模式有死配置，见「已知问题」）
 - ECharts SSR: `smart-query.echarts.*`（node-command / script-path / 超时 / 尺寸）
 - ReAct 引擎最大轮次: 15
 - SQL 安全模式: 仅允许 SELECT/SHOW/DESCRIBE/EXPLAIN
@@ -129,8 +129,20 @@ Flyway 管理数据库版本，迁移文件在 `backend/src/main/resources/db/mi
 ## 开发注意事项
 
 - 前端 Vite 开发服务器代理 `/api` → `localhost:9000`
-- Python 工作目录: `/tmp/smartquery-workspace/`
+- Python 工作目录: `smart-query.python.workspace-base` 可配（当前默认 `C:/temp/smartquery-workspace`，部署需改 Linux 路径）
 - 模型文件保存为 `.pkl` 格式
 - 所有 API 响应使用统一信封格式: `{ success, data, message }`
 - 实体使用 MyBatis-Plus 逻辑删除 (`deleted` 字段)
 - 文档见 `docs/`（`guides/` 使用指南，`archive/` 历史归档，根 `README.md` 入口）
+
+## 已知问题（2026-06-19 代码核查，均有 file:line 证据）
+
+- **[安全·紧急] GLM API Key 泄露**：`application.yml:74,79` 把真实可用的 GLM key 作为 `${GLM_API_KEY:9c82...}` 默认值硬编码并提交进仓库。需立即在智谱控制台轮换，并从 git 历史清除。
+- **[已修复·2026-06-19] 零鉴权**：已建成 JWT 鉴权体系（`config/JwtUtil` HS256 + `config/AuthInterceptor` 拦截 `/api/**` + `entity/User`/`sq_user` 表 + `controller/AuthController` login/me/logout + `controller/UserController` 用户管理）。CORS 仍开放（`WebConfig`）。详见 `docs/DEPENDENCY_AUDIT.md`。
+- **[安全] 凭据明文**：MySQL 密码默认 `900110`（`application.yml:14` + `create_test_training_data.py:22`）；动态数据源密码在 DB 表明文存储、读取时直传 Hikari（`DataSourceManager:161-180`）。
+- **[已修复·2026-06-19] Python docker 镜像/超时死配置**：`PythonExecutor:62,68` 现读 `smart-query.python.execution-mode` / `smart-query.python.docker-image`（与 yml 一致，可配）；`PythonExecuteTool:23` 超时 key 已由 `python-tool.*` 改为 `smart-query.python.default-timeout-ms`（与 yml 对齐，配置可达）。
+- **[已修复·2026-06-19] 协调器对比假数据**：原 `CoordinatorIntegration`+`coordinator/executor/ModelTaskExecutor` 用正则拦截「对比 X 和 Y 模型」并返回 `Math.random()` 假指标注入 LLM 上下文。已停用：`CoordinatorIntegration.needsCoordination` 恒返回 false，`ModelTaskExecutor` 改为诚实失败（不再造数据）。真实多算法对比走 `MiningModelTool` 的 `compare` action（需 `source_table`+`target_column`，调 `MiningService.trainModel`）。死代码（extractTasks/coordinate/ModelTaskExecutor）清理待办。
+- **[部署] 容器化已落地，CI 仍缺**：已有 `backend/Dockerfile`（Node20+JRE17）、`frontend/Dockerfile`（nginx）、`docker-compose.yml`（mysql/redis/backend/frontend + python 执行镜像）、`scripts/`（build/airpack）、`docs/guides/DEPLOYMENT.md`、`.env.example`。仍缺 CI（`.github/workflows`）。开发模式 `start.sh` = `mvn spring-boot:run` + `npm run dev`。系统库迁移到达梦见下文「系统库迁移」条与 `docs/DEPENDENCY_AUDIT.md`。
+- **[双源] 算法注册**：`mining/AlgorithmRegistry` 硬编码 9 种算法，与 DB `AlgorithmService` 双源，新增算法易漏改。
+- **[双轨] 任务协调**：`coordinator/`（`DefaultTaskCoordinator` + `TaskDagExecutor`）与 `engine/Coordinator` + `AgentTaskExecutor` 是两套并行的 DAG 编排机制。
+- **[待核实] ReAct 最大轮次**：CLAUDE.md 旧值记为 15，代码 `ReActEngine` 实际常量需复核（agent 报告为 20）。
