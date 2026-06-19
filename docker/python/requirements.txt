@@ -1,0 +1,11 @@
+# 挖掘/预测/特征工程/execute_python 动态脚本依赖。
+# 锁定主版本上限以保证构建可复现、避免破坏性变更；以 process 模式实测跑通的版本为下限锚点。
+numpy>=1.26,<2
+pandas>=2.0,<3
+scikit-learn>=1.3,<2
+xgboost>=1.7,<2
+lightgbm>=4.0,<5
+matplotlib>=3.7,<4
+pymysql>=1.1,<2
+sqlalchemy>=2.0,<3
+joblib>=1.2,<2
