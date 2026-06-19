@@ -51,14 +51,14 @@
           <el-select :model-value="batchInputTable" @update:model-value="$emit('update:batchInputTable', $event)" placeholder="选择要预测的数据表" style="width: 100%" :teleported="false" filterable>
             <el-option v-for="t in batchTableOptions" :key="t.name" :label="t.name" :value="t.name">
               <span>{{ t.name }}</span>
-              <span style="float: right; color: var(--text-muted); font-size: 12px">{{ t.rows }}行</span>
+              <span style="float: right; color: var(--text-muted); font-size: var(--font-sm)">{{ t.rows }}行</span>
             </el-option>
           </el-select>
-          <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px">该表必须包含模型训练时的特征列</div>
+          <div style="font-size: var(--font-sm); color: var(--text-muted); margin-top: 4px">该表必须包含模型训练时的特征列</div>
         </el-form-item>
         <el-form-item label="结果表">
           <el-input :model-value="batchResultTable" @update:model-value="$emit('update:batchResultTable', $event)" placeholder="留空则自动生成表名" />
-          <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px">
+          <div style="font-size: var(--font-sm); color: var(--text-muted); margin-top: 4px">
             结果表包含原始数据 + prediction列 + prediction_proba列
           </div>
         </el-form-item>
@@ -70,7 +70,7 @@
             <strong>{{ batchPredictResult.saved_to }}</strong>
           </template>
         </el-alert>
-        <div style="font-size: 13px; color: var(--text-secondary)">
+        <div style="font-size: var(--font-md); color: var(--text-secondary)">
           结果表列: {{ (batchPredictResult.columns || []).join(', ') }}
         </div>
         <el-button size="small" type="primary" plain style="margin-top: 8px"
@@ -82,7 +82,7 @@
             <el-table-column type="index" label="#" width="40" />
             <el-table-column v-for="col in resultPreviewColumns" :key="col" :prop="col" :label="col" show-overflow-tooltip />
           </el-table>
-          <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px">仅展示前10行</div>
+          <div style="font-size: var(--font-xs); color: var(--text-muted); margin-top: 4px">仅展示前10行</div>
         </div>
       </div>
     </div>
@@ -107,7 +107,7 @@
         </el-table-column>
         <el-table-column prop="inputData" label="输入数据">
           <template #default="{ row }">
-            <span style="font-size: 12px">{{ truncateStr(row.inputData, 80) }}</span>
+            <span style="font-size: var(--font-sm)">{{ truncateStr(row.inputData, 80) }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="resultTable" label="结果表" width="140">

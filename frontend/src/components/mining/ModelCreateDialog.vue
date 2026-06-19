@@ -17,8 +17,8 @@
           @change="$emit('tableChange', $event)" filterable>
           <el-option v-for="t in tableOptions" :key="t.name" :label="t.comment ? `${t.name} (${t.comment})` : t.name" :value="t.name">
             <span>{{ t.name }}</span>
-            <span v-if="t.comment" style="color: var(--text-muted); margin-left: 8px; font-size: 12px">{{ t.comment }}</span>
-            <span style="float: right; color: var(--text-muted); font-size: 12px">{{ t.rows }}行</span>
+            <span v-if="t.comment" style="color: var(--text-muted); margin-left: 8px; font-size: var(--font-sm)">{{ t.comment }}</span>
+            <span style="float: right; color: var(--text-muted); font-size: var(--font-sm)">{{ t.rows }}行</span>
           </el-option>
         </el-select>
       </el-form-item>
@@ -54,7 +54,7 @@
           :teleported="false" :disabled="!columnOptions.length" clearable filterable>
           <el-option v-for="col in columnOptions" :key="col.name" :label="col.name" :value="col.name">
             <span>{{ col.name }}</span>
-            <span style="color: var(--text-muted); margin-left: 8px; font-size: 12px">{{ col.type }}</span>
+            <span style="color: var(--text-muted); margin-left: 8px; font-size: var(--font-sm)">{{ col.type }}</span>
           </el-option>
         </el-select>
       </el-form-item>
@@ -157,6 +157,6 @@ function updatePreprocessing(field, value) {
   border-radius: var(--radius-md); padding: var(--space-sm);
 }
 .col-name { font-size: var(--font-sm); }
-.col-type { font-size: 11px; color: var(--text-muted); margin-left: 4px; }
-.selected-count { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+.col-type { font-size: var(--font-xs); color: var(--text-muted); margin-left: 4px; }
+.selected-count { font-size: var(--font-sm); color: var(--text-muted); margin-top: 4px; }
 </style>

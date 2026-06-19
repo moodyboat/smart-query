@@ -2,6 +2,7 @@ package com.smartquery.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartquery.common.ModelStatus;
+import com.smartquery.common.NodeType;
 import com.smartquery.datasource.DataSourceManager;
 import com.smartquery.entity.*;
 import com.smartquery.logging.ConversationEventLogger;
@@ -24,6 +25,10 @@ import java.util.*;
 @Service
 @RequiredArgsConstructor
 public class PipelineService {
+
+    /** Pipeline 节点类型的标准顺序（排序/校验共用） */
+    private static final List<String> NODE_TYPE_ORDER = List.of(
+        NodeType.DATA_SOURCE, NodeType.PREPROCESSING, NodeType.FILL_MISSING, NodeType.FEATURE_ENGINEERING, NodeType.TRAINING, NodeType.EVALUATION, NodeType.OUTPUT);
 
     @Value("${smart-query.mining.workspace:${user.home}/smartquery-models}")
     private String modelWorkspace;
@@ -92,7 +97,7 @@ public class PipelineService {
         }
 
         // Sort nodes by type order
-        List<String> typeOrder = List.of("data_source", "preprocessing", "fill_missing", "feature_engineering", "training", "evaluation", "output");
+        List<String> typeOrder = NODE_TYPE_ORDER;
         nodes.sort((a, b) -> {
             int ia = typeOrder.indexOf(a.get("type"));
             int ib = typeOrder.indexOf(b.get("type"));
@@ -246,7 +251,7 @@ public class PipelineService {
             throw new IllegalStateException("流水线没有节点");
         }
 
-        List<String> typeOrder = List.of("data_source", "preprocessing", "fill_missing", "feature_engineering", "training", "evaluation", "output");
+        List<String> typeOrder = NODE_TYPE_ORDER;
         nodes.sort((a, b) -> {
             int ia = typeOrder.indexOf(a.get("type"));
             int ib = typeOrder.indexOf(b.get("type"));
@@ -419,7 +424,7 @@ public class PipelineService {
             Map<String, Object> config = (Map<String, Object>) node.getOrDefault("config", Map.of());
 
             switch (type) {
-                case "data_source" -> {
+                case NodeType.DATA_SOURCE -> {
                     String table = strVal(config.get("table"));
                     if (table == null || table.isBlank()) errors.add("数据源节点 [" + id + "] 未配置表名");
                     else {
@@ -435,25 +440,25 @@ public class PipelineService {
                         }
                     }
                 }
-                case "feature_engineering" -> {
+                case NodeType.FEATURE_ENGINEERING -> {
                     if (config.get("featureColumns") == null) warnings.add("特征工程节点 [" + id + "] 未配置特征列（将自动选择）");
                     if (strVal(config.get("targetColumn")) == null) warnings.add("特征工程节点 [" + id + "] 未配置目标列");
                 }
-                case "training" -> {
+                case NodeType.TRAINING -> {
                     String algo = strVal(config.get("algorithm"));
                     if (algo == null || algo.isBlank()) errors.add("训练节点 [" + id + "] 未配置算法");
                     else if (algorithmService.getByAlgorithmId(algo) == null) errors.add("算法 '" + algo + "' 不存在");
                     if (strVal(config.get("modelType")) == null) errors.add("训练节点 [" + id + "] 未配置模型类型");
                 }
-                case "output" -> {
+                case NodeType.OUTPUT -> {
                     String table = strVal(config.get("table"));
                     if (table == null || table.isBlank()) warnings.add("输出节点 [" + id + "] 未配置目标表");
                 }
             }
         }
 
-        if (!nodeTypes.contains("data_source")) errors.add("缺少数据源节点");
-        if (!nodeTypes.contains("training")) errors.add("缺少训练节点");
+        if (!nodeTypes.contains(NodeType.DATA_SOURCE)) errors.add("缺少数据源节点");
+        if (!nodeTypes.contains(NodeType.TRAINING)) errors.add("缺少训练节点");
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("valid", errors.isEmpty());
@@ -506,11 +511,11 @@ public class PipelineService {
             Map<String, Object> config = (Map<String, Object>) node.getOrDefault("config", Map.of());
 
             switch (type) {
-                case "data_source" -> {
+                case NodeType.DATA_SOURCE -> {
                     sourceTable = strVal(config.get("table"));
                     filter = strVal(config.get("filter"));
                 }
-                case "preprocessing" -> {
+                case NodeType.PREPROCESSING -> {
                     String hm = strVal(config.get("handleMissing"));
                     if (hm != null && !"none".equals(hm)) preprocessing.put("handleMissing", hm);
                     String enc = strVal(config.get("encoding"));
@@ -522,14 +527,14 @@ public class PipelineService {
                         preprocessing.put("columnStrategies", colStrats);
                     }
                 }
-                case "fill_missing" -> {
+                case NodeType.FILL_MISSING -> {
                     preprocessing.put("fillMissingStrategy", strVal(config.getOrDefault("strategy", "auto")));
                     Object fillCols = config.get("columns");
                     if (fillCols instanceof List && !((List<?>) fillCols).isEmpty()) {
                         preprocessing.put("fillMissingColumns", fillCols);
                     }
                 }
-                case "feature_engineering" -> {
+                case NodeType.FEATURE_ENGINEERING -> {
                     Object fc = config.get("featureColumns");
                     if (fc instanceof List) featureColumns = (List<String>) fc;
                     else if (fc instanceof String s && !s.isBlank()) {
@@ -542,19 +547,19 @@ public class PipelineService {
                     Object tp = config.get("targetPreprocessing");
                     if (tp instanceof Map) targetPreprocessing = (Map<String, Object>) tp;
                 }
-                case "training" -> {
+                case NodeType.TRAINING -> {
                     modelType = strVal(config.get("modelType"));
                     algorithm = strVal(config.get("algorithm"));
                     Object hp = config.getOrDefault("hyperparams", config.get("hyperparameters"));
                     if (hp instanceof Map) hyperparams = (Map<String, Object>) hp;
                 }
-                case "evaluation" -> {
+                case NodeType.EVALUATION -> {
                     if (config.get("testSize") != null) { double ts = ((Number) config.get("testSize")).doubleValue(); testSize = ts > 1 ? ts / 100.0 : ts; }
                     if (config.get("cvFold") != null) cvFold = ((Number) config.get("cvFold")).intValue();
                     if (config.get("validationMode") != null) validationMode = strVal(config.get("validationMode"));
                     if (config.get("temporalColumn") != null) temporalColumn = strVal(config.get("temporalColumn"));
                 }
-                case "output" -> {
+                case NodeType.OUTPUT -> {
                     outputTable = strVal(config.get("table"));
                     if (config.get("autoCreate") != null) outputAutoCreate = Boolean.TRUE.equals(config.get("autoCreate"));
                     outputMode = strVal(config.getOrDefault("mode", "append"));
@@ -584,7 +589,7 @@ public class PipelineService {
             String type = String.valueOf(node.get("type"));
             types.add(type);
             Map<String, Object> config = (Map<String, Object>) node.getOrDefault("config", Map.of());
-            if ("data_source".equals(type)) {
+            if (NodeType.DATA_SOURCE.equals(type)) {
                 String table = strVal(config.get("table"));
                 if (table != null && dataSourceId != null) {
                     DataSource ds = dataSourceMapper.selectById(dataSourceId);
@@ -597,13 +602,13 @@ public class PipelineService {
                     }
                 }
             }
-            if ("training".equals(type)) {
+            if (NodeType.TRAINING.equals(type)) {
                 String algo = strVal(config.get("algorithm"));
                 if (algo != null && algorithmService.getByAlgorithmId(algo) == null) errors.add("算法 '" + algo + "' 不存在");
             }
         }
-        if (!types.contains("data_source")) errors.add("缺少数据源节点");
-        if (!types.contains("training")) errors.add("缺少训练节点");
+        if (!types.contains(NodeType.DATA_SOURCE)) errors.add("缺少数据源节点");
+        if (!types.contains(NodeType.TRAINING)) errors.add("缺少训练节点");
         return Map.of("valid", errors.isEmpty(), "errors", errors);
     }
 
@@ -1149,7 +1154,7 @@ public class PipelineService {
         // Find preprocessing node
         int prepIdx = -1;
         for (int i = 0; i < nodes.size(); i++) {
-            if ("preprocessing".equals(nodes.get(i).get("type"))) {
+            if (NodeType.PREPROCESSING.equals(nodes.get(i).get("type"))) {
                 prepIdx = i;
                 break;
             }
@@ -1168,7 +1173,7 @@ public class PipelineService {
         DataSource ds = dataSourceMapper.selectById(pipeline.getDataSourceId());
         if (ds == null) throw new IllegalStateException("数据源不存在");
 
-        String script = buildPreviewScript(buildSqlalchemyUrl(ds), cfg, "preprocessing");
+        String script = buildPreviewScript(buildSqlalchemyUrl(ds), cfg, NodeType.PREPROCESSING);
 
         try {
             PythonResult pr = pythonExecutor.execute(script, pipeline.getDataSourceId(), previewTimeoutMs);
@@ -1218,9 +1223,9 @@ public class PipelineService {
         String currentType = null;
         StringBuilder currentCode = new StringBuilder();
         Map<String, String> titleMap = Map.of(
-            "data_source", "数据接入", "preprocessing", "数据预处理",
-            "fill_missing", "填充缺失值", "feature_engineering", "特征工程",
-            "training", "模型训练与评估", "output", "输出写入"
+            NodeType.DATA_SOURCE, "数据接入", NodeType.PREPROCESSING, "数据预处理",
+            NodeType.FILL_MISSING, "填充缺失值", NodeType.FEATURE_ENGINEERING, "特征工程",
+            NodeType.TRAINING, "模型训练与评估", NodeType.OUTPUT, "输出写入"
         );
 
         for (String line : lines) {
@@ -1294,9 +1299,9 @@ public class PipelineService {
         }
 
         // Only apply preprocessing for non-data_source nodes
-        if (!"data_source".equals(nodeType)) {
+        if (!NodeType.DATA_SOURCE.equals(nodeType)) {
             // Capture nulls BEFORE preprocessing for before/after comparison
-            if ("preprocessing".equals(nodeType) || "fill_missing".equals(nodeType)) {
+            if (NodeType.PREPROCESSING.equals(nodeType) || NodeType.FILL_MISSING.equals(nodeType)) {
                 sb.append("_before_nulls = {c: int(df[c].isnull().sum()) for c in df.columns}\n");
                 sb.append("_before_rows = len(df)\n");
             }
@@ -1304,12 +1309,12 @@ public class PipelineService {
         }
 
         switch (nodeType) {
-            case "data_source" -> appendDataSourcePreview(sb, cfg);
-            case "preprocessing" -> appendPreprocessingPreview(sb, cfg, "preprocessing");
-            case "fill_missing" -> appendPreprocessingPreview(sb, cfg, "fill_missing");
-            case "feature_engineering" -> appendFeaturePreview(sb, cfg);
-            case "training", "evaluation" -> appendTrainingPreview(sb, cfg);
-            case "output" -> appendOutputPreview(sb, cfg);
+            case NodeType.DATA_SOURCE -> appendDataSourcePreview(sb, cfg);
+            case NodeType.PREPROCESSING -> appendPreprocessingPreview(sb, cfg, NodeType.PREPROCESSING);
+            case NodeType.FILL_MISSING -> appendPreprocessingPreview(sb, cfg, NodeType.FILL_MISSING);
+            case NodeType.FEATURE_ENGINEERING -> appendFeaturePreview(sb, cfg);
+            case NodeType.TRAINING, NodeType.EVALUATION -> appendTrainingPreview(sb, cfg);
+            case NodeType.OUTPUT -> appendOutputPreview(sb, cfg);
             default -> appendDataSourcePreview(sb, cfg);
         }
 

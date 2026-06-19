@@ -5,6 +5,7 @@ import com.smartquery.llm.LlmService;
 import com.smartquery.mapper.ChatMessageMapper;
 import com.smartquery.mapper.ChartMapper;
 import com.smartquery.entity.Chart;
+import com.smartquery.store.AppState;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -324,7 +325,7 @@ public class ReportSummaryService {
      * 获取默认模型
      */
     private String getDefaultModel() {
-        return "glm-5.1";
+        return AppState.DEFAULT_MODEL;
     }
 
     /**

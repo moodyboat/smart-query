@@ -3,6 +3,10 @@ import vue from '@vitejs/plugin-vue'
 
 export default defineConfig({
   plugins: [vue()],
+  // 生产构建移除 console.log（保留 error/warn 错误日志），开发环境不影响
+  esbuild: {
+    pure: ['console.log']
+  },
   server: {
     port: 5173,
     proxy: {
@@ -26,7 +30,7 @@ export default defineConfig({
             }
           });
           proxy.on('error', (err, req, res) => {
-            console.log('[VITE-PROXY] SSE 代理错误:', err.message);
+            console.error('[VITE-PROXY] SSE 代理错误:', err.message);
             if (!res.headersSent) {
               res.writeHead(500, { 'Content-Type': 'text/plain' });
               res.end('代理服务器错误');

@@ -138,7 +138,7 @@ const baseNodes = [
 .expand-icon {
   font-size: 10px;
   transition: transform 0.2s ease;
-  padding: 4px;
+  padding: var(--space-xs);
   margin-left: 4px;
 }
 
@@ -175,7 +175,7 @@ const baseNodes = [
 .palette-card:hover { background: var(--hover); }
 .palette-card:active { cursor: grabbing; }
 
-.palette-icon { font-size: 18px; }
+.palette-icon { font-size: var(--font-2xl); }
 
 .palette-info {
   display: flex;

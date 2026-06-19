@@ -195,12 +195,12 @@ function truncate(str, max) {
   padding: 0 4px;
 }
 .trace-summary {
-  font-size: 13px;
+  font-size: var(--font-md);
   color: var(--text-muted);
   margin-bottom: 16px;
 }
 .trace-event {
-  font-size: 13px;
+  font-size: var(--font-md);
 }
 .trace-header {
   display: flex;

@@ -16,6 +16,7 @@ export const MODEL_STATUS = Object.freeze({
   FAILED: 'failed',
   PUBLISHED: 'published',
   OFFLINE: 'offline',
+  QUEUED: 'queued',
 })
 
 export const PIPELINE_STATUS = Object.freeze({
@@ -48,6 +49,14 @@ export const EXECUTION_STATUS = Object.freeze({
   FAILED: 'failed',
   RUNNING: 'running',
   PENDING: 'pending',
+})
+
+// ReAct 对话块执行状态（与 EXECUTION_STATUS 不同：用 error/completed 而非 failed/pending）
+export const BLOCK_STATUS = Object.freeze({
+  RUNNING: 'running',
+  SUCCESS: 'success',
+  ERROR: 'error',
+  COMPLETED: 'completed',
 })
 
 export const NODE_TYPE_LABELS = Object.freeze({

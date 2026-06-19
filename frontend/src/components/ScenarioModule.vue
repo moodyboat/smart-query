@@ -77,7 +77,7 @@ const expandAllModules = () => {
 .scenario-modules-panel {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   border-radius: 12px;
-  padding: 20px;
+  padding: var(--space-xl);
   margin: 0 20px 20px 20px;
   color: white;
   box-shadow: 0 8px 16px rgba(0,0,0,0.2);
@@ -91,7 +91,7 @@ const expandAllModules = () => {
 }
 
 .modules-title {
-  font-size: 18px;
+  font-size: var(--font-2xl);
   font-weight: 600;
 }
 
@@ -104,13 +104,13 @@ const expandAllModules = () => {
 .module-card {
   background: rgba(255, 255, 255, 0.1);
   border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 8px;
-  padding: 12px;
+  border-radius: var(--radius-lg);
+  padding: var(--space-md);
   margin-bottom: 12px;
 }
 
 .module-title {
-  font-size: 16px;
+  font-size: var(--font-xl);
   font-weight: 600;
   margin-bottom: 8px;
   color: #f0f9ff;
@@ -127,7 +127,7 @@ const expandAllModules = () => {
   align-items: flex-start;
   gap: 8px;
   padding: 6px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: all 0.2s;
   background: rgba(255, 255, 255, 0.05);
@@ -139,26 +139,26 @@ const expandAllModules = () => {
 }
 
 .instruction-item:hover {
-  border-left: 2px solid #67c23a;
+  border-left: 2px solid var(--color-success);
 }
 
 .concept-item {
-  border-left: 2px solid #e6a23c;
+  border-left: 2px solid var(--color-warning);
 }
 
 .item-bullet {
-  color: #67c23a;
+  color: var(--color-success);
   font-weight: bold;
 }
 
 .item-star {
-  color: #e6a23c;
+  color: var(--color-warning);
   font-weight: bold;
 }
 
 .item-text {
   flex: 1;
-  font-size: 14px;
+  font-size: var(--font-base);
   line-height: 1.4;
 }
 

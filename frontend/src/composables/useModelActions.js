@@ -10,6 +10,7 @@ import {
 } from '../api'
 import { MODEL_STATUS, TRAINING_SAFETY_TIMEOUT_MS } from '../constants'
 import { parsedMetrics, formatMetricName } from './useModelDetail'
+import { isGhostModel } from '../utils/modelGhost'
 
 const STATUS_LABELS = {
   draft: '草稿', training: '训练中', trained: '已训练', failed: '训练失败',
@@ -226,19 +227,15 @@ export function useModelActions(mining) {
     const model = mining.models.find(m => m.id === id)
     if (!model) return
 
-    // 检查是否为幽灵模型或特殊状态
-    const isGhostModel = model.status === 'failed' ||
-                         (model.modelPath && !model.modelPath.includes('C:\\Users\\lenovo')) ||
-                         (model.modelPath && model.modelPath.includes('/Users/gonghang')) ||
-                         (model.modelPath && model.modelPath.includes('/tmp/smartquery-workspace'))
+    // 幽灵模型判断已抽到 utils/modelGhost.js（消除重复 + 集中硬编码）
 
-    const isPublished = model.status === 'published'
-    const isTraining = model.status === 'training'
+    const isPublished = model.status === MODEL_STATUS.PUBLISHED
+    const isTraining = model.status === MODEL_STATUS.TRAINING
 
     let confirmMessage = `确定删除模型「${name}」吗？`
     let useForceDelete = false
 
-    if (isGhostModel) {
+    if (isGhostModel(model)) {
       confirmMessage += `\n\n👻 这是一个幽灵模型（文件丢失或状态异常），将使用强制删除。`
       useForceDelete = true
     } else if (isPublished) {

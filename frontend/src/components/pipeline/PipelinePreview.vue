@@ -492,11 +492,11 @@ const trainImportanceOption = computed(() => {
 
 .preview-null-grid .pnr-before {
   color: var(--color-warning);
-  font-size: 12px;
+  font-size: var(--font-sm);
 }
 
 .preview-null-grid .pnr-after {
-  font-size: 12px;
+  font-size: var(--font-sm);
 }
 
 .preview-null-grid .pnr-after.resolved {
@@ -504,7 +504,7 @@ const trainImportanceOption = computed(() => {
 }
 
 .preview-null-clean {
-  font-size: 12px;
+  font-size: var(--font-sm);
   color: var(--color-success);
   padding: 4px 0;
 }
@@ -625,7 +625,7 @@ const trainImportanceOption = computed(() => {
 .feat-stat-row {
   padding: 6px 8px;
   border-bottom: 1px solid var(--border);
-  font-size: 12px;
+  font-size: var(--font-sm);
 }
 
 .feat-stat-row.has-warning {
@@ -645,11 +645,11 @@ const trainImportanceOption = computed(() => {
 
 .feat-stat-dtype {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--font-xs);
 }
 
 .feat-stat-null {
-  font-size: 11px;
+  font-size: var(--font-xs);
   color: var(--el-color-success);
 }
 
@@ -659,14 +659,14 @@ const trainImportanceOption = computed(() => {
 
 .feat-stat-corr {
   margin-left: 8px;
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 500;
 }
 
 .feat-stat-detail {
   color: var(--text-secondary);
   margin-top: 2px;
-  font-size: 11px;
+  font-size: var(--font-xs);
 }
 
 /* Script viewer */
@@ -683,10 +683,10 @@ const trainImportanceOption = computed(() => {
 .script-code {
   background: var(--code-bg);
   color: var(--code-fg);
-  padding: 16px;
-  border-radius: 6px;
+  padding: var(--space-lg);
+  border-radius: var(--radius-md);
   overflow-x: auto;
-  font-size: 13px;
+  font-size: var(--font-md);
   line-height: 1.5;
   white-space: pre;
   margin: 0;
@@ -735,7 +735,7 @@ const trainImportanceOption = computed(() => {
 
 .preview-charts-empty {
   text-align: center;
-  padding: 24px;
+  padding: var(--space-2xl);
   color: var(--text-muted);
   font-size: var(--font-sm);
 }

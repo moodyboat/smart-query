@@ -34,8 +34,8 @@
       </div>
       <div class="pipeline-card-actions">
         <el-button size="small" text type="primary" @click.stop="$emit('open', p)">编辑</el-button>
-        <el-button size="small" text type="success" @click.stop="$emit('runFromCard', p)" :disabled="p.status === 'running'">
-          {{ p.status === 'running' ? '运行中' : '运行' }}
+        <el-button size="small" text type="success" @click.stop="$emit('runFromCard', p)" :disabled="p.status === PIPELINE_STATUS.RUNNING">
+          {{ p.status === PIPELINE_STATUS.RUNNING ? '运行中' : '运行' }}
         </el-button>
         <el-button size="small" text type="danger" @click.stop="$emit('delete', p)">删除</el-button>
       </div>
@@ -45,6 +45,7 @@
 
 <script setup>
 import { ref, computed } from 'vue'
+import { PIPELINE_STATUS } from '../../constants'
 
 const props = defineProps({
   pipelines: { type: Array, default: () => [] },

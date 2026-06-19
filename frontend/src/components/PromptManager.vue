@@ -610,18 +610,18 @@ onMounted(() => {
 :deep(.scenario-prompt-dialog .el-message-box__content) {
   white-space: pre-wrap;
   font-family: 'Courier New', monospace;
-  font-size: 14px;
+  font-size: var(--font-base);
   line-height: 1.6;
   max-height: 500px;
   overflow-y: auto;
   background: #f5f7fa;
   padding: 15px;
-  border-radius: 4px;
-  color: #333;
+  border-radius: var(--radius-sm);
+  color: var(--text-regular);
 }
 
 .prompt-manager {
-  padding: 20px;
+  padding: var(--space-xl);
   max-width: 1400px;
   margin: 0 auto;
 }
@@ -638,7 +638,7 @@ onMounted(() => {
   border: none;
   color: var(--color-primary);
   cursor: pointer;
-  font-size: 16px;
+  font-size: var(--font-xl);
   display: flex;
   align-items: center;
   gap: 4px;
@@ -652,7 +652,7 @@ onMounted(() => {
 }
 
 .back-arrow {
-  font-size: 18px;
+  font-size: var(--font-2xl);
 }
 
 .page-title {
@@ -694,7 +694,7 @@ onMounted(() => {
 }
 
 .scenario-info-card :deep(.el-card__body) {
-  padding: 24px;
+  padding: var(--space-2xl);
 }
 
 .scenario-info {
@@ -707,7 +707,7 @@ onMounted(() => {
   background: var(--color-primary-light);
   color: var(--color-primary);
   border-radius: 12px;
-  padding: 16px;
+  padding: var(--space-lg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -722,7 +722,7 @@ onMounted(() => {
 .description {
   margin: 4px 0 12px 0;
   opacity: 0.7;
-  font-size: 14px;
+  font-size: var(--font-base);
   color: var(--text-secondary);
 }
 
@@ -740,7 +740,7 @@ onMounted(() => {
 
 .scenario-actions .el-button {
   height: 44px;
-  font-size: 16px;
+  font-size: var(--font-xl);
   font-weight: 500;
 }
 
@@ -760,7 +760,7 @@ onMounted(() => {
 
 .card-title {
   font-weight: 600;
-  font-size: 16px;
+  font-size: var(--font-xl);
 }
 
 .prompt-detail {
@@ -777,7 +777,7 @@ onMounted(() => {
 
 .detail-header h3 {
   margin: 0;
-  font-size: 18px;
+  font-size: var(--font-2xl);
 }
 
 .tags {
@@ -787,20 +787,20 @@ onMounted(() => {
 
 .detail-section h4 {
   margin: 0 0 12px 0;
-  font-size: 14px;
+  font-size: var(--font-base);
   font-weight: 600;
   color: #606266;
 }
 
 .detail-section p {
   margin: 0;
-  color: #909399;
+  color: var(--color-info);
 }
 
 .content-box {
   background: #f5f7fa;
-  padding: 16px;
-  border-radius: 8px;
+  padding: var(--space-lg);
+  border-radius: var(--radius-lg);
   white-space: pre-wrap;
   line-height: 1.6;
   max-height: 400px;

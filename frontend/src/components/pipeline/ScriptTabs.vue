@@ -97,7 +97,7 @@ function highlightPython(code) {
 }
 
 .script-node-type {
-  font-size: 11px;
+  font-size: var(--font-xs);
   color: var(--text-muted);
   font-family: monospace;
 }
@@ -105,10 +105,10 @@ function highlightPython(code) {
 .script-code {
   background: var(--code-bg);
   color: var(--code-fg);
-  padding: 12px;
+  padding: var(--space-md);
   border-radius: 0;
   overflow-x: auto;
-  font-size: 12px;
+  font-size: var(--font-sm);
   line-height: 1.5;
   white-space: pre;
   margin: 0;

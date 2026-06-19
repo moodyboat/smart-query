@@ -201,7 +201,7 @@ onMounted(() => {
   flex-direction: column;
   height: 100%;
   background: var(--code-bg, #1e1e1e);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
 }
 
@@ -224,14 +224,14 @@ onMounted(() => {
   background: var(--python-color, #3776ab);
   color: white;
   padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 11px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-xs);
   font-weight: 600;
 }
 
 .code-filename {
   color: var(--code-fg, #d4d4d4);
-  font-size: 13px;
+  font-size: var(--font-md);
   font-family: monospace;
 }
 
@@ -246,7 +246,7 @@ onMounted(() => {
   color: var(--primary, #409eff);
   padding: 4px 12px;
   border-radius: 12px;
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 500;
   max-width: 200px;
   overflow: hidden;
@@ -272,7 +272,7 @@ onMounted(() => {
 
 .line-number {
   color: var(--code-line-number, #858585);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
   line-height: var(--line-height, 24px);
   padding-right: 8px;
@@ -302,7 +302,7 @@ onMounted(() => {
   display: flex;
   align-items: flex-start;
   font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
-  font-size: 13px;
+  font-size: var(--font-md);
   line-height: var(--line-height, 24px);
   padding: 0 16px;
   position: relative;
@@ -426,7 +426,7 @@ onMounted(() => {
 
 .steps-title {
   padding: 8px 16px;
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 600;
   color: var(--text-muted);
   text-transform: uppercase;
@@ -435,7 +435,7 @@ onMounted(() => {
 }
 
 .steps-list {
-  padding: 8px;
+  padding: var(--space-sm);
 }
 
 .step-item {
@@ -443,7 +443,7 @@ onMounted(() => {
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: all 0.2s;
   margin-bottom: 2px;
@@ -473,7 +473,7 @@ onMounted(() => {
 
 .completed-icon {
   color: var(--el-color-success, #67c23a);
-  font-size: 14px;
+  font-size: var(--font-base);
   font-weight: bold;
 }
 
@@ -492,7 +492,7 @@ onMounted(() => {
 
 .pending-number {
   color: var(--text-muted, #909399);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 500;
 }
 
@@ -505,7 +505,7 @@ onMounted(() => {
 }
 
 .step-label {
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 500;
   color: var(--text-primary, #303133);
   white-space: nowrap;
@@ -514,7 +514,7 @@ onMounted(() => {
 }
 
 .step-description {
-  font-size: 11px;
+  font-size: var(--font-xs);
   color: var(--text-muted, #909399);
   margin-top: 2px;
   display: block;
@@ -532,7 +532,7 @@ onMounted(() => {
 }
 
 .step-lines {
-  font-size: 11px;
+  font-size: var(--font-xs);
   color: var(--text-muted, #909399);
 }
 

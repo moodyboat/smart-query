@@ -200,7 +200,7 @@ watch(() => props.charts, (newCharts) => {
   align-items: center; border-bottom: 1px solid var(--border-lighter);
 }
 .dashboard-grid {
-  padding: 12px;
+  padding: var(--space-md);
   gap: 12px;
 }
 .grid-2col {
@@ -215,7 +215,7 @@ watch(() => props.charts, (newCharts) => {
   min-width: 0;
 }
 .dashboard-loading {
-  padding: 20px;
+  padding: var(--space-xl);
   text-align: center;
   color: var(--text-muted);
   font-size: var(--font-md);
@@ -225,7 +225,7 @@ watch(() => props.charts, (newCharts) => {
   gap: var(--space-sm);
 }
 .dashboard-error {
-  padding: 20px;
+  padding: var(--space-xl);
   text-align: center;
   color: var(--color-warning);
   font-size: var(--font-md);

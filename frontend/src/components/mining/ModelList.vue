@@ -150,7 +150,7 @@ function handleSelectChange(modelId, checked) {
   display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-sm);
 }
 .model-card-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.model-type-icon { font-size: 16px; flex-shrink: 0; }
+.model-type-icon { font-size: var(--font-xl); flex-shrink: 0; }
 .model-name { font-size: var(--font-lg); font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-card-body { margin-bottom: var(--space-md); }
 .model-desc {

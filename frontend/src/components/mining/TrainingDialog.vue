@@ -753,13 +753,13 @@ onUnmounted(() => {
   background: var(--python-color, #3776ab);
   color: white;
   padding: 4px 12px;
-  border-radius: 4px;
-  font-size: 12px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-sm);
   font-weight: 600;
 }
 
 .training-status {
-  font-size: 14px;
+  font-size: var(--font-base);
   font-weight: 500;
   color: var(--text-primary);
 }
@@ -773,7 +773,7 @@ onUnmounted(() => {
 
 .code-section {
   background: var(--code-bg, #1e1e1e);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -781,7 +781,7 @@ onUnmounted(() => {
 
 .logs-section {
   background: var(--bg-secondary, #f5f7fa);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -797,7 +797,7 @@ onUnmounted(() => {
 }
 
 .logs-title {
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 600;
   color: var(--text-muted);
   text-transform: uppercase;
@@ -811,14 +811,14 @@ onUnmounted(() => {
 .logs-content {
   flex: 1;
   overflow-y: auto;
-  padding: 8px;
+  padding: var(--space-sm);
 }
 
 .logs-empty {
   text-align: center;
   color: var(--text-muted);
   padding: 40px 0;
-  font-size: 14px;
+  font-size: var(--font-base);
 }
 
 .logs-list {
@@ -831,8 +831,8 @@ onUnmounted(() => {
   display: flex;
   gap: 8px;
   padding: 4px 8px;
-  border-radius: 4px;
-  font-size: 12px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-sm);
   font-family: monospace;
 }
 
@@ -862,8 +862,8 @@ onUnmounted(() => {
 
 .training-result {
   background: white;
-  border-radius: 8px;
-  padding: 16px;
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
   border: 1px solid var(--border);
 }
 
@@ -875,7 +875,7 @@ onUnmounted(() => {
 }
 
 .result-title {
-  font-size: 16px;
+  font-size: var(--font-xl);
   font-weight: 600;
   color: var(--text-primary);
 }
@@ -888,29 +888,29 @@ onUnmounted(() => {
 
 .result-metric {
   background: var(--bg-secondary, #f5f7fa);
-  border-radius: 6px;
-  padding: 12px;
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
 .metric-label {
-  font-size: 12px;
+  font-size: var(--font-sm);
   color: var(--text-muted);
 }
 
 .metric-value {
-  font-size: 18px;
+  font-size: var(--font-2xl);
   font-weight: 600;
   color: var(--el-color-success);
 }
 
 .result-error {
   margin-top: 12px;
-  padding: 12px;
+  padding: var(--space-md);
   background: rgba(245, 108, 108, 0.1);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   border-left: 3px solid var(--el-color-danger);
 }
 
@@ -930,12 +930,12 @@ onUnmounted(() => {
 }
 
 .footer-hint {
-  font-size: 13px;
+  font-size: var(--font-md);
   color: var(--text-muted);
 }
 
 .progress-text {
-  font-size: 12px;
+  font-size: var(--font-sm);
   color: var(--text-muted);
 }
 

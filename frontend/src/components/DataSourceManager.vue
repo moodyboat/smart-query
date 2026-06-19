@@ -533,7 +533,7 @@ onMounted(() => {
 
 <style scoped>
 .datasource-manager {
-  padding: 20px;
+  padding: var(--space-xl);
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -590,7 +590,7 @@ onMounted(() => {
 
 .card-title {
   font-weight: 600;
-  font-size: 16px;
+  font-size: var(--font-xl);
 }
 
 .stats-content {
@@ -599,13 +599,13 @@ onMounted(() => {
 
 .stat-item {
   background: var(--el-fill-color-light);
-  padding: 16px;
-  border-radius: 8px;
+  padding: var(--space-lg);
+  border-radius: var(--radius-lg);
   text-align: center;
 }
 
 .stat-label {
-  font-size: 14px;
+  font-size: var(--font-base);
   color: var(--el-text-color-secondary);
   margin-bottom: 8px;
 }
@@ -621,7 +621,7 @@ onMounted(() => {
   display: flex;
   justify-content: center;
   gap: 12px;
-  font-size: 12px;
+  font-size: var(--font-sm);
   color: var(--el-text-color-secondary);
 }
 
@@ -633,7 +633,7 @@ onMounted(() => {
 
 .connection-info {
   font-family: monospace;
-  font-size: 12px;
+  font-size: var(--font-sm);
 }
 
 .w-full {
@@ -641,7 +641,7 @@ onMounted(() => {
 }
 
 .form-item-tip {
-  font-size: 12px;
+  font-size: var(--font-sm);
   color: var(--el-text-color-secondary);
   margin-top: 4px;
 }
@@ -676,7 +676,7 @@ onMounted(() => {
 
 .permissions-section h4 {
   margin-bottom: 10px;
-  font-size: 14px;
+  font-size: var(--font-base);
   font-weight: 600;
 }
 </style>

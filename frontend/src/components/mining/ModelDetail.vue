@@ -41,7 +41,7 @@
             </div>
             <!-- Expanded node params panel -->
             <div v-if="expandedNodeId === node.id" class="node-expand-panel" @click.stop>
-              <NodeParamsEditor :node="node" :model="model" :readonly="model.status === 'training'"
+              <NodeParamsEditor :node="node" :model="model" :readonly="model.status === MODEL_STATUS.TRAINING"
                 @update="onNodeUpdate" />
               <div class="node-expand-actions">
                 <el-button size="small" type="primary" :loading="syncingNode" @click="$emit('syncNodeChanges')">同步并保存</el-button>
@@ -110,12 +110,12 @@
         </div>
       </div>
 
-      <div v-if="model.status === 'published' && (model.predictInputTable || model.predictResultTable || model.scheduleEnabled)" class="detail-section">
+      <div v-if="model.status === MODEL_STATUS.PUBLISHED && (model.predictInputTable || model.predictResultTable || model.scheduleEnabled)" class="detail-section">
         <h4>发布配置</h4>
         <el-descriptions :column="1" border size="small">
           <el-descriptions-item v-if="model.predictInputTable" label="输入表">{{ model.predictInputTable }}</el-descriptions-item>
           <el-descriptions-item v-if="model.predictInputFilter" label="筛选条件">
-            <code style="font-size: 12px">{{ model.predictInputFilter }}</code>
+            <code style="font-size: var(--font-sm)">{{ model.predictInputFilter }}</code>
           </el-descriptions-item>
           <el-descriptions-item v-if="model.predictResultTable" label="结果表">{{ model.predictResultTable }}</el-descriptions-item>
           <el-descriptions-item label="定时调度">
@@ -160,13 +160,13 @@
       <div class="detail-actions">
         <el-button size="small" type="primary" :loading="trainingId === model.id"
           @click="$emit('train', model.id)">
-          {{ model.status === 'training' ? '训练中...' : '训练' }}
+          {{ model.status === MODEL_STATUS.TRAINING ? '训练中...' : '训练' }}
         </el-button>
-        <el-button v-if="model.status === 'trained' || model.status === 'offline'" size="small" type="success"
+        <el-button v-if="model.status === MODEL_STATUS.TRAINED || model.status === MODEL_STATUS.OFFLINE" size="small" type="success"
           @click="$emit('publish', model.id)">发布</el-button>
-        <el-button v-if="model.status === 'published'" size="small" type="warning"
+        <el-button v-if="model.status === MODEL_STATUS.PUBLISHED" size="small" type="warning"
           @click="$emit('offline', model.id)">下线</el-button>
-        <el-button v-if="model.status === 'published' || model.status === 'trained'" size="small" type="primary"
+        <el-button v-if="model.status === MODEL_STATUS.PUBLISHED || model.status === MODEL_STATUS.TRAINED" size="small" type="primary"
           @click="$emit('predict', model)">预测</el-button>
         <el-button size="small" @click="$emit('edit', model)">编辑</el-button>
         <el-button size="small" @click="$emit('tuneParams', model)">调参</el-button>
@@ -258,7 +258,7 @@ function formatScheduleCron(cron) {
 .status-published { background: var(--primary-light); color: var(--primary); }
 .status-offline { background: var(--border-light); color: var(--text-muted); }
 .detail-section { margin-top: var(--space-lg); }
-.overfitting-warning { padding: 8px 12px; border-radius: 6px; margin-bottom: 8px; font-size: 13px; background: var(--el-color-warning-light-9); color: var(--el-color-warning-dark-2); border: 1px solid var(--el-color-warning-light-7); }
+.overfitting-warning { padding: 8px 12px; border-radius: var(--radius-md); margin-bottom: 8px; font-size: var(--font-md); background: var(--el-color-warning-light-9); color: var(--el-color-warning-dark-2); border: 1px solid var(--el-color-warning-light-7); }
 .detail-section h4 {
   font-size: var(--font-base); font-weight: 600; color: var(--text-primary);
   margin-bottom: var(--space-sm); padding-bottom: var(--space-xs);
@@ -272,22 +272,22 @@ function formatScheduleCron(cron) {
 .mini-flow-node {
   display: flex; flex-direction: column; align-items: center; gap: 2px;
   background: var(--bg-secondary); border: 1px solid var(--border-light);
-  border-radius: 6px; padding: 6px 8px; min-width: 60px; max-width: 80px;
+  border-radius: var(--radius-md); padding: 6px 8px; min-width: 60px; max-width: 80px;
   text-align: center; flex-shrink: 0; cursor: pointer; transition: all 0.15s;
 }
 .mini-flow-node:hover { border-color: var(--primary); background: var(--primary-light); }
 .mini-flow-node.expanded { border-color: var(--primary); background: var(--primary-light); box-shadow: 0 0 0 2px var(--primary-light); }
 .mini-flow-node-header { display: flex; align-items: center; gap: 2px; }
-.mini-flow-icon { font-size: 16px; }
+.mini-flow-icon { font-size: var(--font-xl); }
 .mini-flow-title { font-size: 10px; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 70px; }
 .mini-flow-detail { font-size: 9px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 70px; }
 .node-status-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
 .node-status-dot.configured { background: var(--el-color-success); }
 .node-status-dot.unconfigured { background: var(--el-color-danger); }
-.mini-flow-arrow { color: var(--text-muted); font-size: 12px; margin-top: 14px; flex-shrink: 0; }
+.mini-flow-arrow { color: var(--text-muted); font-size: var(--font-sm); margin-top: 14px; flex-shrink: 0; }
 .node-expand-panel {
-  width: 100%; margin: 4px 0; padding: 12px; background: var(--bg-secondary);
-  border: 1px solid var(--border); border-radius: 8px; order: 999;
+  width: 100%; margin: 4px 0; padding: var(--space-md); background: var(--bg-secondary);
+  border: 1px solid var(--border); border-radius: var(--radius-lg); order: 999;
   animation: slideDown 0.2s ease;
 }
 .node-expand-actions { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); text-align: right; }
@@ -302,15 +302,15 @@ function formatScheduleCron(cron) {
 .importance-list { display: flex; flex-direction: column; gap: var(--space-xs); }
 .importance-bar { display: flex; align-items: center; gap: var(--space-sm); }
 .imp-label { width: 100px; font-size: var(--font-sm); color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.imp-track { flex: 1; height: 8px; background: var(--border-light); border-radius: 4px; overflow: hidden; }
-.imp-fill { height: 100%; background: var(--primary); border-radius: 4px; transition: width 0.3s; }
+.imp-track { flex: 1; height: 8px; background: var(--border-light); border-radius: var(--radius-sm); overflow: hidden; }
+.imp-fill { height: 100%; background: var(--primary); border-radius: var(--radius-sm); transition: width 0.3s; }
 .imp-value { width: 40px; font-size: var(--font-sm); color: var(--text-muted); text-align: right; }
 .validation-info { display: flex; flex-direction: column; gap: 6px; }
 .val-item { display: flex; justify-content: space-between; font-size: var(--font-sm); }
 .val-label { color: var(--text-secondary); }
 .val-value { font-weight: 600; color: var(--text-primary); }
 .val-scores { display: flex; flex-wrap: wrap; gap: 4px; }
-.score-chip { font-size: 11px; background: var(--primary-light); color: var(--primary); padding: 1px 6px; border-radius: var(--radius-sm); }
+.score-chip { font-size: var(--font-xs); background: var(--primary-light); color: var(--primary); padding: 1px 6px; border-radius: var(--radius-sm); }
 .execution-list { display: flex; flex-direction: column; gap: var(--space-xs); }
 .execution-item {
   padding: var(--space-xs) var(--space-sm); background: var(--border-lighter);
@@ -319,13 +319,13 @@ function formatScheduleCron(cron) {
 .exec-row-main { display: flex; align-items: center; gap: var(--space-sm); }
 .exec-failed-row { flex-direction: column; align-items: stretch; }
 .exec-error {
-  margin-top: 4px; padding: 4px 8px; font-size: 11px; color: var(--color-danger);
-  background: rgba(245, 108, 108, 0.08); border-radius: 4px;
+  margin-top: 4px; padding: 4px 8px; font-size: var(--font-xs); color: var(--color-danger);
+  background: rgba(245, 108, 108, 0.08); border-radius: var(--radius-sm);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .exec-metrics { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .exec-metric-chip {
-  font-size: 11px; padding: 1px 6px; border-radius: var(--radius-sm);
+  font-size: var(--font-xs); padding: 1px 6px; border-radius: var(--radius-sm);
   background: var(--color-success-light); color: var(--color-success); font-weight: 500;
 }
 .exec-status { font-weight: 500; }

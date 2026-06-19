@@ -195,16 +195,16 @@ public class MiningModelController {
                     String status = currentModel.getStatus();
 
                     // 如果模型状态不是training，说明训练已经结束（成功或失败）
-                    if (!"training".equals(status)) {
+                    if (!ModelStatus.TRAINING.equals(status)) {
                         // 根据最终状态发送完成事件
-                        if ("trained".equals(status)) {
+                        if (ModelStatus.TRAINED.equals(status)) {
                             Map<String, Object> metrics = parseMetrics(currentModel.getMetrics());
                             log.info("[TRAIN-STREAM] 模型训练已完成: modelId={}, metrics={}", id, metrics);
                             emitter.send(SseEmitter.event()
                                 .name("complete")
                                 .data("{\"success\": true, \"metrics\": " +
                                     new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(metrics) + "}"));
-                        } else if ("failed".equals(status)) {
+                        } else if (ModelStatus.FAILED.equals(status)) {
                             log.error("[TRAIN-STREAM] 模型训练失败: modelId={}", id);
                             emitter.send(SseEmitter.event()
                                 .name("error")
@@ -257,9 +257,9 @@ public class MiningModelController {
         if (model == null) return null;
 
         return switch (status) {
-            case "training" -> new TrainingStep("model_training", "模型训练中", 50);
-            case "trained" -> new TrainingStep("model_evaluation", "模型评估完成", 100);
-            case "failed" -> new TrainingStep("error", "训练失败", 0);
+            case ModelStatus.TRAINING -> new TrainingStep("model_training", "模型训练中", 50);
+            case ModelStatus.TRAINED -> new TrainingStep("model_evaluation", "模型评估完成", 100);
+            case ModelStatus.FAILED -> new TrainingStep("error", "训练失败", 0);
             default -> new TrainingStep("preparing", "准备中", 10);
         };
     }

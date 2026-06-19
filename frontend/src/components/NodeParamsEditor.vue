@@ -91,7 +91,7 @@
       </el-form>
     </template>
 
-    <template v-if="node.type === 'training'">
+    <template v-if="node.type === NODE_TYPES.TRAINING">
       <el-form label-width="80px" size="small">
         <el-form-item label="算法">
           <span>{{ algorithmLabel(node.config?.algorithm) || node.config?.algorithm }}</span>
@@ -170,6 +170,7 @@ import { computed, ref } from 'vue'
 import { useAlgorithms } from '../composables/useAlgorithms.js'
 import { METRIC_NAMES } from '../api'
 import { fetchTablePreview, fetchTableColumns } from '../api'
+import { NODE_TYPES } from '../constants'
 
 const props = defineProps({
   node: { type: Object, required: true },
@@ -304,17 +305,17 @@ function updateParam(key, value) {
 <style scoped>
 .node-params-editor { padding: 4px 0; }
 .param-row { margin-bottom: 8px; }
-.param-label { display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: 4px; }
+.param-label { display: block; font-size: var(--font-md); color: var(--text-secondary); margin-bottom: 4px; }
 .node-metrics { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--border); }
-.node-metrics-title { font-size: 13px; font-weight: 500; margin-bottom: 6px; }
-.node-metric-chip { display: inline-block; font-size: 12px; padding: 2px 8px; margin: 2px; border-radius: 4px; background: var(--el-color-success-light-9); color: var(--el-color-success); }
+.node-metrics-title { font-size: var(--font-md); font-weight: 500; margin-bottom: 6px; }
+.node-metric-chip { display: inline-block; font-size: var(--font-sm); padding: 2px 8px; margin: 2px; border-radius: var(--radius-sm); background: var(--el-color-success-light-9); color: var(--el-color-success); }
 
 .preview-section { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
 .preview-table-wrap { margin-top: 8px; }
-.preview-hint { font-size: 12px; color: var(--text-secondary); margin-top: 4px; text-align: right; }
+.preview-hint { font-size: var(--font-sm); color: var(--text-secondary); margin-top: 4px; text-align: right; }
 
 .column-strategies { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
-.column-strategies-header { font-size: 13px; font-weight: 500; margin-bottom: 8px; color: var(--text-secondary); }
+.column-strategies-header { font-size: var(--font-md); font-weight: 500; margin-bottom: 8px; color: var(--text-secondary); }
 .column-strategy-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.column-name { flex-shrink: 0; width: 100px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-regular); }
+.column-name { flex-shrink: 0; width: 100px; font-size: var(--font-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-regular); }
 </style>

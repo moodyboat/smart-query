@@ -129,7 +129,7 @@ async function refresh() {
   margin-bottom: 20px;
 }
 .stat-section h4 {
-  font-size: 14px;
+  font-size: var(--font-base);
   color: var(--text-primary);
   margin: 0 0 8px 0;
   padding-bottom: 6px;
@@ -149,12 +149,12 @@ async function refresh() {
   border-radius: var(--radius-md);
 }
 .stat-value {
-  font-size: 18px;
+  font-size: var(--font-2xl);
   font-weight: 600;
   color: var(--primary);
 }
 .stat-label {
-  font-size: 12px;
+  font-size: var(--font-sm);
   color: var(--text-muted);
   margin-top: 4px;
 }
@@ -166,7 +166,7 @@ async function refresh() {
   border-bottom: 1px solid var(--border-lighter);
 }
 .model-name {
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 500;
 }
 .model-stats {
@@ -175,14 +175,14 @@ async function refresh() {
   gap: 8px;
 }
 .stat-mini {
-  font-size: 11px;
+  font-size: var(--font-xs);
   color: var(--text-muted);
 }
 .empty-hint {
   text-align: center;
   color: var(--text-muted);
-  font-size: 13px;
-  padding: 12px;
+  font-size: var(--font-md);
+  padding: var(--space-md);
 }
 .stat-actions {
   text-align: center;

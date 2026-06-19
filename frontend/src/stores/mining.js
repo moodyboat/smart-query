@@ -5,6 +5,7 @@ import {
   fetchMiningModels, fetchMiningModel, fetchDataSources,
   trainMiningModel, publishMiningModel, offlineMiningModel
 } from '../api'
+import { MODEL_STATUS } from '../constants'
 
 export const useMiningStore = defineStore('mining', () => {
   const models = ref([])
@@ -19,7 +20,7 @@ export const useMiningStore = defineStore('mining', () => {
   )
 
   const publishedModels = computed(() =>
-    models.value.filter(m => m.status === 'published')
+    models.value.filter(m => m.status === MODEL_STATUS.PUBLISHED)
   )
 
   async function loadModels() {
@@ -32,7 +33,7 @@ export const useMiningStore = defineStore('mining', () => {
       const fetched = ms || []
       if (activeEventSource.value && fetched.length > 0) {
         const watchedId = models.value.find(m =>
-          ['training', 'queued'].includes(m.status)
+          [MODEL_STATUS.TRAINING, MODEL_STATUS.QUEUED].includes(m.status)
         )?.id
         if (watchedId) {
           const watchedModel = models.value.find(m => m.id === watchedId)
@@ -99,7 +100,7 @@ export const useMiningStore = defineStore('mining', () => {
             const updated = { ...models.value[idx], status: data.status, metrics: data.metrics || models.value[idx].metrics }
             models.value[idx] = updated
           }
-          if (['trained', 'failed', 'published'].includes(data.status)) {
+          if ([MODEL_STATUS.TRAINED, MODEL_STATUS.FAILED, MODEL_STATUS.PUBLISHED].includes(data.status)) {
             eventSource.close()
             activeEventSource.value = null
           }

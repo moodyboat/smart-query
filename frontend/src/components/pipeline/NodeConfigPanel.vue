@@ -333,7 +333,7 @@
                   <div class="preview-stat" style="margin-bottom: 4px"><span class="ps-label">特征分布</span></div>
                   <div style="display: flex; flex-wrap: wrap; gap: 8px">
                     <div v-for="h in histogramOptions" :key="h.name" style="flex: 1 1 180px; min-width: 160px">
-                      <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 2px">{{ h.name }}</div>
+                      <div style="font-size: var(--font-xs); color: var(--text-muted); margin-bottom: 2px">{{ h.name }}</div>
                       <div :ref="el => setHistChartRef(h.name, el)" style="height: 120px; width: 100%"></div>
                     </div>
                   </div>
@@ -613,7 +613,7 @@
             >
               <el-option v-for="col in columnOptions" :key="col.name" :label="col.name" :value="col.name" />
             </el-select>
-            <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px">不选则对所有含缺失的列填充</div>
+            <div style="font-size: var(--font-sm); color: var(--text-muted); margin-top: 4px">不选则对所有含缺失的列填充</div>
           </el-form-item>
         </el-form>
       </template>
@@ -938,7 +938,7 @@ function trialMissingBadge(colName) {
 }
 
 .preview-hint {
-  font-size: 12px;
+  font-size: var(--font-sm);
   color: var(--text-muted);
   text-align: right;
   margin-top: 4px;
@@ -960,9 +960,9 @@ function trialMissingBadge(colName) {
 
 .ds-stat-card {
   padding: 6px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-secondary, #f5f7fa);
-  font-size: 12px;
+  font-size: var(--font-sm);
 }
 
 .ds-stat-card.has-nulls {
@@ -985,7 +985,7 @@ function trialMissingBadge(colName) {
 }
 
 .ds-stat-type {
-  font-size: 11px;
+  font-size: var(--font-xs);
   color: var(--text-muted);
 }
 
@@ -995,13 +995,13 @@ function trialMissingBadge(colName) {
 
 .ds-stat-null .text-danger {
   color: var(--el-color-warning);
-  font-size: 11px;
+  font-size: var(--font-xs);
 }
 
 .ds-stat-range {
   margin-top: 2px;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--font-xs);
   line-height: 1.4;
   word-break: break-all;
 }
@@ -1014,7 +1014,7 @@ function trialMissingBadge(colName) {
 }
 
 .col-strategies-header {
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 500;
   margin-bottom: 8px;
   color: var(--text-secondary);
@@ -1030,7 +1030,7 @@ function trialMissingBadge(colName) {
 .col-strategy-name {
   flex-shrink: 0;
   width: 90px;
-  font-size: 12px;
+  font-size: var(--font-sm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1039,7 +1039,7 @@ function trialMissingBadge(colName) {
 .col-strategy-type {
   flex-shrink: 0;
   width: 70px;
-  font-size: 11px;
+  font-size: var(--font-xs);
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1050,7 +1050,7 @@ function trialMissingBadge(colName) {
   flex-shrink: 0;
   font-size: 10px;
   padding: 1px 6px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   white-space: nowrap;
 }
 
@@ -1183,7 +1183,7 @@ function trialMissingBadge(colName) {
 }
 
 .target-pp-hint {
-  font-size: 11px;
+  font-size: var(--font-xs);
   color: var(--text-muted);
   padding-left: 24px;
 }
@@ -1261,7 +1261,7 @@ function trialMissingBadge(colName) {
 }
 
 .fs-corr {
-  font-size: 11px;
+  font-size: var(--font-xs);
 }
 
 .fs-stat {
@@ -1271,7 +1271,7 @@ function trialMissingBadge(colName) {
 }
 .feat-chart-block {
   margin-bottom: 8px;
-  padding: 8px;
+  padding: var(--space-sm);
   background: var(--surface, #fafafa);
   border-radius: var(--radius-md, 6px);
   border: 1px solid var(--border-light, #eee);

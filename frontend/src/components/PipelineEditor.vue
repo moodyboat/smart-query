@@ -62,10 +62,10 @@
       <div v-if="lastRunResult" class="run-results">
         <div class="results-header">
           <span class="results-title">执行结果</span>
-          <el-tag :type="(lastRunResult.status === 'trained' || lastRunResult.status === 'success') ? 'success' : 'danger'" size="small">
-            {{ (lastRunResult.status === 'trained' || lastRunResult.status === 'success') ? '训练成功' : '训练失败' }}
+          <el-tag :type="(lastRunResult.status === MODEL_STATUS.TRAINED || lastRunResult.status === EXECUTION_STATUS.SUCCESS) ? 'success' : 'danger'" size="small">
+            {{ (lastRunResult.status === MODEL_STATUS.TRAINED || lastRunResult.status === EXECUTION_STATUS.SUCCESS) ? '训练成功' : '训练失败' }}
           </el-tag>
-          <span v-if="lastRunResult.modelName" style="font-size:12px;color:var(--text-muted);margin-left:8px">模型: {{ lastRunResult.modelName }} (#{{ lastRunResult.modelId }})</span>
+          <span v-if="lastRunResult.modelName" style="font-size: var(--font-sm);color:var(--text-muted);margin-left:8px">模型: {{ lastRunResult.modelName }} (#{{ lastRunResult.modelId }})</span>
           <el-button size="small" text @click="lastRunResult = null" style="margin-left: auto">关闭</el-button>
         </div>
         <div v-if="lastRunResult.metrics" class="results-metrics">
@@ -192,7 +192,7 @@ import { usePipelineCanvas } from '../composables/usePipelineCanvas.js'
 import { useMissingValueTrial } from '../composables/useMissingValueTrial.js'
 import { usePipelineStream } from '../composables/usePipelineStream.js'
 import { useFeatureCharts } from '../composables/useFeatureCharts.js'
-import { DEFAULT_MODEL_TYPE, DEFAULT_ALGORITHM, NODE_TYPES, NODE_TYPE_LABELS, PIPELINE_STATUS } from '../constants'
+import { DEFAULT_MODEL_TYPE, DEFAULT_ALGORITHM, MODEL_STATUS, EXECUTION_STATUS, NODE_TYPES, NODE_TYPE_LABELS, PIPELINE_STATUS } from '../constants'
 
 import PipelineList from './pipeline/PipelineList.vue'
 import PipelineCanvas from './pipeline/PipelineCanvas.vue'
@@ -280,13 +280,13 @@ const featAnalysis = ref(null)
 
 // Step types
 const stepTypes = [
-  { type: 'data_source', icon: '📥', title: '数据接入', desc: '从数据库读取数据' },
-  { type: 'preprocessing', icon: '🔧', title: '数据预处理', desc: '缺失值处理(含逐列策略)、编码、缩放' },
-  { type: 'fill_missing', icon: '🩹', title: '高级缺失值处理', desc: '按列精细配置缺失值填充（预处理节点的增强版）' },
-  { type: 'feature_engineering', icon: '⚙️', title: '特征工程', desc: '特征选择和目标定义' },
-  { type: 'training', icon: '🧠', title: '模型训练', desc: '选择算法并训练模型' },
-  { type: 'evaluation', icon: '📊', title: '模型评估', desc: '评估指标和验证策略' },
-  { type: 'output', icon: '💾', title: '输出写入', desc: '将预测结果写入数据库表' }
+  { type: NODE_TYPES.DATA_SOURCE, icon: '📥', title: '数据接入', desc: '从数据库读取数据' },
+  { type: NODE_TYPES.PREPROCESSING, icon: '🔧', title: '数据预处理', desc: '缺失值处理(含逐列策略)、编码、缩放' },
+  { type: NODE_TYPES.FILL_MISSING, icon: '🩹', title: '高级缺失值处理', desc: '按列精细配置缺失值填充（预处理节点的增强版）' },
+  { type: NODE_TYPES.FEATURE_ENGINEERING, icon: '⚙️', title: '特征工程', desc: '特征选择和目标定义' },
+  { type: NODE_TYPES.TRAINING, icon: '🧠', title: '模型训练', desc: '选择算法并训练模型' },
+  { type: NODE_TYPES.EVALUATION, icon: '📊', title: '模型评估', desc: '评估指标和验证策略' },
+  { type: NODE_TYPES.OUTPUT, icon: '💾', title: '输出写入', desc: '将预测结果写入数据库表' }
 ]
 
 // Selected node computed
@@ -955,7 +955,7 @@ async function analyzeFeatures() {
       body: JSON.stringify({ nodeId })
     })
     const json = await res.json()
-    if (json.data?.status === 'success') {
+    if (json.data?.status === EXECUTION_STATUS.SUCCESS) {
       featAnalysis.value = json.data
     } else {
       ElMessage.error(json.data?.error || json.message || '分析失败')
@@ -1064,7 +1064,7 @@ async function previewStepLocal(nodeId) {
     await savePipeline()
     const result = await previewStepPipeline(editingPipeline.value.id, nodeId)
     previewResult.value = result
-    if (result.status === 'success') {
+    if (result.status === EXECUTION_STATUS.SUCCESS) {
       ElMessage.success('试运行完成')
     } else {
       ElMessage.warning('试运行出错: ' + (result.error || '未知错误'))

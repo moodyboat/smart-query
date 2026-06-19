@@ -166,20 +166,20 @@
             <el-select v-model="publishConfig.predictInputTable" placeholder="选择预测输入表（可选）" style="width: 100%" :teleported="false" filterable clearable>
               <el-option v-for="t in publishTableOptions" :key="t.name" :label="t.name" :value="t.name">
                 <span>{{ t.name }}</span>
-                <span style="float: right; color: var(--text-muted); font-size: 12px">{{ t.rows }}行</span>
+                <span style="float: right; color: var(--text-muted); font-size: var(--font-sm)">{{ t.rows }}行</span>
               </el-option>
             </el-select>
-            <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px">发布后批量预测的默认输入表</div>
+            <div style="font-size: var(--font-sm); color: var(--text-muted); margin-top: 4px">发布后批量预测的默认输入表</div>
           </el-form-item>
           <el-form-item label="输入筛选条件">
             <el-input v-model="publishConfig.predictInputFilter" placeholder="如: etl_date = '${etl_date}' 或 status = 'active'" />
-            <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px">
+            <div style="font-size: var(--font-sm); color: var(--text-muted); margin-top: 4px">
               支持变量: ${etl_date}、${today}、${yesterday}、${today-N}
             </div>
           </el-form-item>
           <el-form-item label="预测结果表">
             <el-input v-model="publishConfig.predictResultTable" placeholder="如: prediction_results（表不存在时自动创建）" />
-            <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px">留空则每次预测时指定</div>
+            <div style="font-size: var(--font-sm); color: var(--text-muted); margin-top: 4px">留空则每次预测时指定</div>
           </el-form-item>
           <el-divider />
           <el-form-item label="启用定时调度">
@@ -190,7 +190,7 @@
               <el-radio value="train">定期重训</el-radio>
               <el-radio value="predict">定期预测</el-radio>
             </el-radio-group>
-            <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px">
+            <div style="font-size: var(--font-sm); color: var(--text-muted); margin-top: 4px">
               {{ publishConfig.scheduleMode === 'predict' ? '用已发布模型对新数据批量预测，结果写入结果表' : '用最新数据重新训练模型' }}
             </div>
           </el-form-item>
@@ -313,6 +313,7 @@ import { useUIStore } from '../stores/ui'
 import { TRAINING_SAFETY_TIMEOUT_MS, DEFAULT_MODEL_TYPE, DEFAULT_ALGORITHM, PREVIEW_ROW_LIMIT, PREDICTION_RECORD_LIMIT, MODEL_STATUS, MODEL_TYPE, EXECUTION_STATUS, NODE_TYPES, NODE_TYPE_LABELS, STATUS_LABELS, SCHEDULE_INTERVALS, FILTER_VARIABLES } from '../constants'
 import { useModelDetail, pipelineNodeIcon, pipelineNodeTitle, pipelineNodeSummary, isNodeConfigured, parsedMetrics, formatMetricName, formatMetricValue, metricQuality, overfittingWarning } from '../composables/useModelDetail'
 import { useModelActions } from '../composables/useModelActions'
+import { isGhostModel } from '../utils/modelGhost'
 
 const emit = defineEmits(['close'])
 
@@ -647,15 +648,9 @@ async function handleBatchDelete() {
   const selectedModelsList = models.value.filter(m => selectedIds.includes(m.id))
 
   // 检查是否有特殊状态的模型
-  const publishedModels = selectedModelsList.filter(m => m.status === 'published')
-  const trainingModels = selectedModelsList.filter(m => m.status === 'training')
-  const ghostModels = selectedModelsList.filter(m => {
-    // 检查是否为幽灵模型（状态异常或模型文件不存在）
-    return m.status === 'failed' ||
-           (m.modelPath && !m.modelPath.includes('C:\\Users\\lenovo')) ||
-           (m.modelPath && m.modelPath.includes('/Users/gonghang')) ||
-           (m.modelPath && m.modelPath.includes('/tmp/smartquery-workspace'))
-  })
+  const publishedModels = selectedModelsList.filter(m => m.status === MODEL_STATUS.PUBLISHED)
+  const trainingModels = selectedModelsList.filter(m => m.status === MODEL_STATUS.TRAINING)
+  const ghostModels = selectedModelsList.filter(m => isGhostModel(m))
 
   let confirmMessage = `确定要删除选中的 ${selectedIds.length} 个模型吗？此操作不可恢复。`
 
@@ -680,8 +675,8 @@ async function handleBatchDelete() {
     // 分别处理不同类型的模型
     for (const model of selectedModelsList) {
       try {
-        const needsForceDelete = model.status === 'published' ||
-                                model.status === 'training' ||
+        const needsForceDelete = model.status === MODEL_STATUS.PUBLISHED ||
+                                model.status === MODEL_STATUS.TRAINING ||
                                 ghostModels.includes(model)
 
         if (needsForceDelete) {
@@ -927,7 +922,7 @@ async function handleSaveAndTrain() {
       const trained = await trainMiningModel(created.id)
       mining.updateModelInList(trained)
 
-      if (trained.status === 'training') {
+      if (trained.status === MODEL_STATUS.TRAINING) {
         ElMessage.info('训练已启动，正在监听状态...')
         mining.watchModelStatus(created.id)
         await new Promise((resolve) => {
@@ -1047,10 +1042,10 @@ function onDetailTuneParams(model) {
 .mining-tabs :deep(.el-tab-pane) { height: 100%; }
 .tab-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 .toolbar-left { display: flex; align-items: center; gap: 12px; flex: 1; flex-wrap: wrap; }
-.selection-info { display: flex; align-items: center; gap: 8px; background: var(--el-color-danger-light-9); padding: 6px 12px; border-radius: 6px; border: 1px solid var(--el-color-danger-light-5); }
-.selected-count { font-size: 14px; color: var(--el-color-danger); font-weight: 600; }
+.selection-info { display: flex; align-items: center; gap: 8px; background: var(--el-color-danger-light-9); padding: 6px 12px; border-radius: var(--radius-md); border: 1px solid var(--el-color-danger-light-5); }
+.selected-count { font-size: var(--font-base); color: var(--el-color-danger); font-weight: 600; }
 .batch-hint { display: flex; align-items: center; }
-.hint-text { font-size: 12px; color: var(--el-color-info); background: var(--el-color-info-light-9); padding: 4px 10px; border-radius: 4px; }
+.hint-text { font-size: var(--font-sm); color: var(--el-color-info); background: var(--el-color-info-light-9); padding: 4px 10px; border-radius: var(--radius-sm); }
 .mining-header {
   height: 52px; background: var(--surface); border-bottom: 1px solid var(--border);
   display: flex; align-items: center; justify-content: space-between;
@@ -1073,5 +1068,5 @@ function onDetailTuneParams(model) {
 .params-model-name { font-weight: 600; margin-bottom: var(--space-md); color: var(--text-primary); }
 .param-row { display: flex; align-items: center; gap: var(--space-sm); margin-bottom: var(--space-sm); }
 .param-label { width: 160px; font-size: var(--font-sm); color: var(--text-secondary); text-align: right; flex-shrink: 0; }
-.param-hint { display: block; font-size: 11px; color: var(--text-muted); }
+.param-hint { display: block; font-size: var(--font-xs); color: var(--text-muted); }
 </style>

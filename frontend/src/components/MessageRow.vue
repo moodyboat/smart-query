@@ -68,7 +68,7 @@
             <span class="tool-badge python-badge">Python</span>
             <span class="tool-status" :class="block.status">{{ statusLabel(block.status) }}</span>
           </div>
-          <details v-if="block.input?.code" class="code-details" :open="block.status === 'error'">
+          <details v-if="block.input?.code" class="code-details" :open="block.status === BLOCK_STATUS.ERROR">
             <summary class="code-summary">
               <span class="code-toggle-icon">▶</span>
               <span class="code-lang">Python</span>
@@ -119,7 +119,7 @@
             <span class="tool-badge chart-badge">Chart</span>
             <span class="chart-title-inline">{{ block.input?.title || block.result?.title }}</span>
             <button
-              v-if="block.status === 'success'"
+              v-if="block.status === BLOCK_STATUS.SUCCESS"
               class="chart-size-btn"
               @click="toggleChartSize('chart-' + bi)"
             >
@@ -131,7 +131,7 @@
               <EChartsRenderer :title="block.result.title" :option="resolveChartOption(block)" />
             </div>
           </div>
-          <div v-else-if="block.status === 'running'" class="tool-loading">
+          <div v-else-if="block.status === BLOCK_STATUS.RUNNING" class="tool-loading">
             <span class="spinner"></span> 生成图表中...
           </div>
         </div>
@@ -308,13 +308,13 @@
               <div v-html="renderMarkdown(block.result.message)" />
             </div>
           </div>
-          <div v-else-if="block.status === 'running'" class="tool-loading">
+          <div v-else-if="block.status === BLOCK_STATUS.RUNNING" class="tool-loading">
             <span class="spinner"></span> 执行挖掘操作...
           </div>
         </div>
 
         <!-- Generic running indicator for any tool -->
-        <div v-if="block.type === 'tool_use' && block.status === 'running' && !['generate_chart','execute_sql','execute_python','mining_model'].includes(block.name)" class="tool-loading">
+        <div v-if="block.type === 'tool_use' && block.status === BLOCK_STATUS.RUNNING && !['generate_chart','execute_sql','execute_python','mining_model'].includes(block.name)" class="tool-loading">
           <span class="spinner"></span> 执行 {{ block.name }}...
         </div>
       </div>
@@ -347,6 +347,7 @@ import EChartsRenderer from './EChartsRenderer.vue'
 import DashboardRenderer from './DashboardRenderer.vue'
 import DataTable from './DataTable.vue'
 import { rerenderChart, METRIC_NAMES } from '../api'
+import { BLOCK_STATUS } from '../constants'
 
 const props = defineProps({
   msg: { type: Object, required: true },
@@ -759,13 +760,13 @@ function retryPython(code, stderr) {
 .mining-model-card {
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 12px;
+  border-radius: var(--radius-lg);
+  padding: var(--space-md);
   margin-bottom: 8px;
 }
 .mining-model-name {
   font-weight: 600;
-  font-size: 15px;
+  font-size: var(--font-lg);
   color: var(--badge-mining);
 }
 .mining-model-meta {
@@ -779,21 +780,21 @@ function retryPython(code, stderr) {
   border: 1px solid var(--badge-mining);
   color: var(--badge-mining);
   padding: 4px 12px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--font-sm);
   transition: all 0.15s;
 }
 .mining-action-btn:hover { background: var(--badge-mining); color: #fff; }
 .mining-metrics-card {
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 10px;
   margin-bottom: 8px;
 }
 .mining-metrics-title {
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 600;
   color: var(--badge-mining);
   margin-bottom: 6px;
@@ -808,16 +809,16 @@ function retryPython(code, stderr) {
   flex-direction: column;
   align-items: center;
   padding: 4px 10px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--bg-secondary);
   min-width: 60px;
 }
 .mining-metric-item .metric-val {
-  font-size: 16px;
+  font-size: var(--font-xl);
   font-weight: 700;
 }
 .mining-metric-item .metric-key {
-  font-size: 11px;
+  font-size: var(--font-xs);
   color: var(--text-muted);
 }
 .mining-metric-item.metric-good .metric-val { color: var(--color-success); }

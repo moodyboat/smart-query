@@ -43,7 +43,7 @@
 
         <div class="welcome-cards" v-if="scenarioCapabilities.length > 0">
           <div class="welcome-card" v-for="(capability, index) in scenarioCapabilities" :key="index">
-            <div class="card-icon" :style="{ 'background': capability.iconColor || '#409EFF' }">
+            <div class="card-icon" :style="{ 'background': capability.iconColor || 'var(--primary)' }">
               {{ capability.icon }}
             </div>
             <div class="card-title">{{ capability.title }}</div>
@@ -131,7 +131,7 @@ import AdminStatsPanel from './AdminStatsPanel.vue'
 import ScenarioModule from './ScenarioModule.vue'
 import { buildChatUrl, fetchReport, downloadWordReport } from '../api'
 import api from '../api'
-import { SSE_SAFETY_TIMEOUT_MS } from '../constants'
+import { SSE_SAFETY_TIMEOUT_MS, BLOCK_STATUS } from '../constants'
 import { useMiningStore } from '../stores/mining'
 import { useUIStore } from '../stores/ui'
 import { useConversationStore } from '../stores/conversation'
@@ -237,7 +237,7 @@ function findOrCreateToolBlock(assistantMsg, toolName, toolUseId) {
     _id: toolUseId || Math.random().toString(36).slice(2),
     input: {},
     result: null,
-    status: 'running'
+    status: BLOCK_STATUS.RUNNING
   })
   assistantMsg.content.push(block)
   return block
@@ -363,7 +363,7 @@ function handleEvent(evt, assistantMsg) {
     case 'SqlExecuting': {
       const block = findOrCreateToolBlock(assistantMsg, 'execute_sql', 'sql-' + Date.now())
       if (evt.sql && evt.sql !== 'executed') block.input = { sql: evt.sql }
-      block.status = 'running'
+      block.status = BLOCK_STATUS.RUNNING
       assistantMsg.spinnerTip = '执行SQL...'
       stepInfo.current++
       stepInfo.total = Math.max(stepInfo.total, stepInfo.current)
@@ -372,10 +372,10 @@ function handleEvent(evt, assistantMsg) {
 
     case 'Result': {
       const sqlBlocks = assistantMsg.content.filter(b => b.name === 'execute_sql')
-      const targetSql = sqlBlocks.find(b => b.status === 'running') || sqlBlocks[sqlBlocks.length - 1]
+      const targetSql = sqlBlocks.find(b => b.status === BLOCK_STATUS.RUNNING) || sqlBlocks[sqlBlocks.length - 1]
       if (targetSql) {
         targetSql.result = { summary: evt.summary, totalRows: evt.totalRows, rows: evt.data || [], error: evt.error }
-        targetSql.status = evt.error ? 'error' : 'success'
+        targetSql.status = evt.error ? BLOCK_STATUS.ERROR : BLOCK_STATUS.SUCCESS
       }
       break
     }
@@ -383,7 +383,7 @@ function handleEvent(evt, assistantMsg) {
     case 'PythonExecuting': {
       const block = findOrCreateToolBlock(assistantMsg, 'execute_python', 'py-' + Date.now())
       block.input = { code: evt.code }
-      block.status = 'running'
+      block.status = BLOCK_STATUS.RUNNING
       block.result = { stdout: '', stderr: '', exitCode: null, artifacts: [] }
       assistantMsg.spinnerTip = '执行Python...'
       break
@@ -409,7 +409,7 @@ function handleEvent(evt, assistantMsg) {
           exitCode: evt.exitCode,
           artifacts: evt.artifacts
         }
-        lastPy.status = evt.exitCode === 0 ? 'success' : 'error'
+        lastPy.status = evt.exitCode === 0 ? BLOCK_STATUS.SUCCESS : BLOCK_STATUS.ERROR
       }
       break
     }
@@ -422,7 +422,7 @@ function handleEvent(evt, assistantMsg) {
         chartType: evt.chartType,
         echartsOption: evt.echartsOption
       }
-      block.status = 'success'
+      block.status = BLOCK_STATUS.SUCCESS
       pendingCharts[evt.chartId] = { id: evt.chartId, title: evt.title, echartsOption: evt.echartsOption }
       break
     }
@@ -435,7 +435,7 @@ function handleEvent(evt, assistantMsg) {
         layout: evt.layout,
         chartIds: evt.chartIds
       }
-      block.status = 'success'
+      block.status = BLOCK_STATUS.SUCCESS
       break
     }
 
@@ -456,7 +456,7 @@ function handleEvent(evt, assistantMsg) {
         sections: sseSections || [],
         conclusion: evt.conclusion || ''
       }
-      block.status = 'success'
+      block.status = BLOCK_STATUS.SUCCESS
       // Fallback: fetch full report from API if SSE didn't include sections
       if (!sseSections && evt.reportId) {
         fetchReport(evt.reportId).then(report => {
@@ -513,7 +513,7 @@ function handleEvent(evt, assistantMsg) {
         targetType: targetType || null,
         targetId: targetId || null
       }
-      block.status = 'success'
+      block.status = BLOCK_STATUS.SUCCESS
       break
     }
 
@@ -528,7 +528,7 @@ function handleEvent(evt, assistantMsg) {
         message: evt.message,
         details: evt.details
       }
-      block.status = evt.success ? 'success' : 'error'
+      block.status = evt.success ? BLOCK_STATUS.SUCCESS : BLOCK_STATUS.ERROR
       assistantMsg.spinnerTip = '数据挖掘...'
       if (evt.success && evt.modelId) mining.refreshModel(evt.modelId)
       break
@@ -863,7 +863,7 @@ defineExpose({ sendMessage, clearMessages, messages, updateChartOption, pendingC
 :deep(.scenario-prompt-dialog .el-message-box__content) {
   white-space: pre-wrap;
   font-family: monospace;
-  font-size: 14px;
+  font-size: var(--font-base);
   line-height: 1.6;
   max-height: 400px;
   overflow-y: auto;

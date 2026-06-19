@@ -12,7 +12,7 @@
             <el-radio value="train">定期重训</el-radio>
             <el-radio value="predict">定期预测</el-radio>
           </el-radio-group>
-          <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px">
+          <div style="font-size: var(--font-sm); color: var(--text-muted); margin-top: 4px">
             {{ mode === 'predict' ? '用已发布模型对新数据表批量预测，结果写入结果表' : '用最新数据重新训练模型' }}
           </div>
         </el-form-item>
@@ -46,7 +46,7 @@
           </div>
         </el-form-item>
       </el-form>
-      <div v-if="model.lastRunAt" style="margin-top: 8px; font-size: 12px; color: var(--text-muted)">
+      <div v-if="model.lastRunAt" style="margin-top: 8px; font-size: var(--font-sm); color: var(--text-muted)">
         上次运行: {{ new Date(model.lastRunAt).toLocaleString('zh-CN') }}
       </div>
     </div>
@@ -82,7 +82,7 @@ function appendVar(variable) {
 
 <style scoped>
 .var-helper { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; }
-.var-label { font-size: 12px; color: var(--text-muted); }
-.var-chip { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--primary-light); color: var(--primary); cursor: pointer; font-family: monospace; }
+.var-label { font-size: var(--font-sm); color: var(--text-muted); }
+.var-chip { font-size: var(--font-xs); padding: 1px 6px; border-radius: var(--radius-sm); background: var(--primary-light); color: var(--primary); cursor: pointer; font-family: monospace; }
 .var-chip:hover { background: var(--primary); color: #fff; }
 </style>

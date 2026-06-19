@@ -8,6 +8,7 @@ import {
   fetchConversationDashboards,
   fetchConversationTraces
 } from '../api'
+import { BLOCK_STATUS } from '../constants'
 
 export const useConversationStore = defineStore('conversation', () => {
   const currentConvId = ref(null)
@@ -192,10 +193,10 @@ export const useConversationStore = defineStore('conversation', () => {
             name: 'execute_sql',
             _id: 'sql-' + ++historyMsgCounter,
             input: { sql: evt.payload.sql },
-            status: 'running'
+            status: BLOCK_STATUS.RUNNING
           })
         } else if (evt.event === 'sql_result') {
-          const sqlBlock = currentAssistantContent.findLast(b => b.name === 'execute_sql' && b.status === 'running')
+          const sqlBlock = currentAssistantContent.findLast(b => b.name === 'execute_sql' && b.status === BLOCK_STATUS.RUNNING)
           if (sqlBlock) {
             sqlBlock.status = evt.payload?.success !== false ? 'success' : 'error'
             sqlBlock.result = {
