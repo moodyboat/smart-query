@@ -17,6 +17,7 @@ public final class DbUrlUtil {
 
     /**
      * 构造 Python SQLAlchemy 连接 URL（user/pass 做 URLEncoder 编码）。
+     * 业务库类型分支：mysql / postgresql / dm（达梦，需 dmPython 包）/ gbase。
      */
     public static String buildSqlalchemyUrl(DataSource ds) {
         String user = URLEncoder.encode(ds.getUsername(), StandardCharsets.UTF_8);
@@ -24,19 +25,23 @@ public final class DbUrlUtil {
         String type = ds.getType() != null ? ds.getType().toLowerCase() : "mysql";
         String driver = switch (type) {
             case "postgresql" -> "postgresql+psycopg2";
+            case "dm" -> "dm+dmPython";
             default -> "mysql+pymysql";
         };
         return "%s://%s:%s@%s:%d/%s".formatted(driver, user, pass, ds.getHost(), ds.getPort(), ds.getDatabaseName());
     }
 
     /**
-     * 脱敏 URL 中的明文密码（用于日志/脚本预览）。当前覆盖 mysql+pymysql 协议。
-     * TODO（达梦迁移）：DM 接入后扩展正则以覆盖 dm+dmPython:// 等协议。
+     * 脱敏 URL 中的明文密码（用于日志/脚本预览）。
+     * 覆盖 mysql+pymysql / postgresql+psycopg2 / dm+dmPython 协议。
      */
     public static String maskPassword(String text) {
         if (text == null) {
             return null;
         }
-        return text.replaceAll("mysql\\+pymysql://([^:]+):[^@]+@", "mysql+pymysql://$1:***@");
+        return text
+            .replaceAll("mysql\\+pymysql://([^:]+):[^@]+@", "mysql+pymysql://$1:***@")
+            .replaceAll("postgresql\\+psycopg2://([^:]+):[^@]+@", "postgresql+psycopg2://$1:***@")
+            .replaceAll("dm\\+dmPython://([^:]+):[^@]+@", "dm+dmPython://$1:***@");
     }
 }

@@ -37,7 +37,14 @@ services:
       dockerfile: Dockerfile
     ports: ["${BACKEND_HOST_PORT:-9001}:9000"]
     environment:
-      # 连容器内的 mysql / redis（application.yml 已参数化为 ${MYSQL_HOST} / ${REDIS_HOST}）
+      # 系统库（达梦 DM8，独立容器或外部部署）：默认连 host.docker.internal:5236
+      # DM8 已开 COMPATIBLE_MODE=4 + CASE_SENSITIVE=0，schema=SMART_QUERY
+      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL:-jdbc:dm://${DM_HOST:-host.docker.internal}:${DM_PORT:-5236}}
+      SPRING_DATASOURCE_USERNAME: ${DM_USERNAME:-SYSDBA}
+      SPRING_DATASOURCE_PASSWORD: ${DM_PASSWORD:-Dameng123}
+      SPRING_DATASOURCE_DRIVER: dm.jdbc.driver.DmDriver
+      SPRING_DATASOURCE_INIT_SQL: ${DM_SCHEMA:-SET SCHEMA SMART_QUERY}
+      # 业务库（动态数据源示例）：保留 mysql 容器做演示
       MYSQL_HOST: mysql
       MYSQL_PORT: "3306"
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-900110}
@@ -62,7 +69,6 @@ services:
       - sq_artifacts:/tmp/smartquery-artifacts       # 后端 ↔ python 容器共享产物/脚本
       - sq_workspace:/tmp/smartquery-workspace
     depends_on:
-      mysql: { condition: service_healthy }
       redis: { condition: service_healthy }
 
   frontend:

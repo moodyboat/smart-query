@@ -7,18 +7,22 @@ spring:
   application:
     name: smart-query
 
-  # 主数据源 (系统库)
+  # 主数据源 (系统库) — 默认达梦 DM8（信创/私有化部署），可通过环境变量切回 MySQL
+  # DM8 已开 COMPATIBLE_MODE=4（MySQL 兼容）+ CASE_SENSITIVE=0，MyBatis-Plus 语法兼容
+  # schema 通过 SYSDBA 登录后 SET SCHEMA 切换（避免应用账号绑定 schema 的权限管理成本）
   datasource:
-    url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/smart_query?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
-    username: root
-    password: ${MYSQL_PASSWORD:900110}
-    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: ${SPRING_DATASOURCE_URL:jdbc:dm://${DM_HOST:host.docker.internal}:${DM_PORT:5236}}
+    username: ${SPRING_DATASOURCE_USERNAME:SYSDBA}
+    password: ${SPRING_DATASOURCE_PASSWORD:Dameng123}
+    driver-class-name: ${SPRING_DATASOURCE_DRIVER:dm.jdbc.driver.DmDriver}
     hikari:
       maximum-pool-size: 10
       minimum-idle: 5
       connection-timeout: 30000
       idle-timeout: 600000
       max-lifetime: 1800000
+      # DM 用 SYSDBA 连接后切到 SMART_QUERY schema；MySQL 模式下此 SQL 自动忽略（注释安全）
+      connection-init-sql: ${SPRING_DATASOURCE_INIT_SQL:SET SCHEMA SMART_QUERY}
 
   # Jackson
   jackson:
