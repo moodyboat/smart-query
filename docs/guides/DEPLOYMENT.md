@@ -1,6 +1,6 @@
 # 部署指南（Deployment）
 
-> 状态（2026-06-19）：✅ **本地全链路验证通过** —— `docker compose up -d` 后 mysql+redis+backend+frontend 全 Up，**Flyway 16 迁移成功**，API 经 nginx 反代返回统一信封 `{code,message,data}`，`smart_query_sample` 示例数据就绪。镜像：`smart-query-backend`/`-frontend`/`-python`；离线打包 `scripts/airpack.sh`/`airload.sh`。**下一阶段：达梦 DM8 适配**（甲方不能用 MySQL，详见文末路线图）。
+> 状态（2026-06-20）：✅ **达梦 DM8 系统库适配完成 + 本地全链路验证通过** —— 系统库 `smart_query` 现跑在 DM8（`COMPATIBLE_MODE=4` + `CASE_SENSITIVE=0`），后端 Hikari 用 SYSDBA 连接 + `SET SCHEMA SMART_QUERY` 切 schema，14 个核心 API 全部 200（登录/JWT/数据源/算法/挖掘模型/Pipeline/会话/用户），写路径（会话/用户/数据源）disql 直查可见。MySQL 仍保留为业务库示例容器。镜像：`smart-query-backend`/`-frontend`/`-python`；离线打包 `scripts/airpack.sh`/`airload.sh`。**下一阶段：业务库 DM 兼容**（`DictController`/`SchemaExploreTool` 等元数据查询走 `information_schema`，客户业务库若也用 DM 需改 `ALL_TAB_COLUMNS` 路径）。
 
 ## 一、架构
 
@@ -10,9 +10,9 @@
 │                                                              │
 │  frontend(nginx:80)  ──/api/──▶  backend(:9000, JRE17+Node) │
 │   SPA dist + 反代                    │                       │
-│                                      ├─▶ mysql:3306          │
-│                                      │   (smart_query 系统库 │
-│                                      │    Flyway V1-V16 管理;│
+│                                      ├─▶ DM8:5236 (host)    │
+│                                      │   (smart_query 系统库│
+│                                      │    schema;dataSeeder │
 │                                      │    smart_query_sample │
 │                                      │    示例数据)           │
 │                                      ├─▶ redis:6379          │
@@ -119,16 +119,17 @@ docker compose up -d
 | 端口占用 9000/5173/3306 | `docker compose down` 后改 compose 的端口映射。 |
 | 前端能开但问数 500 | 看后端日志 `docker compose logs backend`；多半是 `GLM_API_KEY` 未设或 LLM 不通。 |
 
-## 七、下一阶段路线图：达梦 DM8 适配（甲方交付闸门）
+## 七、已完成：达梦 DM8 系统库适配（2026-06-20）
 
 甲方测试环境：**达梦 DM8（不能用 MySQL）、无网络、要 Redis、要数据挖掘、Docker 可用、DM8 可开 MySQL 兼容模式（`COMPATIBLE_MODE=4`）**。
 
-适配清单（按风险）：
-1. 🔴 **Flyway 11 + 达梦**：Flyway 原生不支持达梦，社区插件（`db-migration-dameng-flyway` / `flyway-dm`）多为老版本，与 Spring Boot 3.4.1 的 Flyway 11 兼容性需实测（拉 DM8 镜像验证）。
-2. 🟡 **DDL 移植**（兼容模式下量减）：`AUTO_INCREMENT`→`IDENTITY`、行内 `COMMENT 'x'`→`COMMENT ON`、去 `ENGINE=/CHARSET=/COLLATE=`、个别类型、`GROUP BY` 设 `GROUP_OPT_FLAG`。
-3. 🟡 **JDBC 驱动**：`DmJdbcDriver18` 不在 Maven Central，手动 vendor jar。
-4. 🟡 **Python 挖掘连达梦**：`PythonExecutor.buildSqlalchemyUrl` 加 DM8 分支 → `dm+dmPython://`，镜像打 dmPython。
-5. 🟡 **动态数据源**：支持达梦类型/驱动，连甲方达梦数据。
-6. 🟢 **NL2SQL 方言**：兼容模式下基本可用，测 LIMIT/GROUP BY 边角。
+完成项（带验证证据）：
+1. ✅ **JDBC 驱动**：`backend/lib/DmJdbcDriver8.jar` + pom `<systemScope>` + `includeSystemScope=true`，fat jar 内 `BOOT-INF/lib/DmJdbcDriver-8.jar` 已就位。
+2. ✅ **数据源切换**：`application.yml` 主数据源全 `${}` 参数化（URL/USER/PASSWORD/DRIVER/INIT_SQL），默认 `jdbc:dm://host:5236` + `SET SCHEMA SMART_QUERY`；docker-compose backend 环境变量同步切 DM。
+3. ✅ **DDL 跨库化**：`DataSeeder` 去 `ON UPDATE CURRENT_TIMESTAMP`/`UNIQUE KEY`/`ENGINE`/`CHARSET`；`DatabaseFixConfig` 抛弃 `INFORMATION_SCHEMA` 改 try ALTER + 容错 `-2116 already exists`。
+4. ✅ **保留字兼容**：DM 把 `MODEL` 当保留字（DM 支持 MODEL clause），`ChatMessage.model` 字段加 `@TableField("\"MODEL\"")`，`ChatMessageMapper` SQL 同步 `"MODEL" AS model`。修后 `chat/history` 从 500 → 返回 26 条消息。
+5. ✅ **Python 挖掘**：`DbUrlUtil.buildSqlalchemyUrl` 加 `dm` 分支（`dm+dmPython://`），脱敏正则同步；`docker/python/requirements.txt` 标注 dmPython 按需启用。
+6. ⏸️ **未做（按需）**：业务库元数据查询 `information_schema` 兼容（`DictController`/`DataSourceController`/`MetadataConfigController`/`SchemaExploreTool`/`MiningPredictionService`/`PipelineService`），客户业务库若也用 DM 才需要。
 
-> 详见记忆 `deployment-containerization` 与 `CLAUDE.md`「已知问题」节。
+> DM8 实例独立容器（`smartquery-dm8`），不在 docker-compose 内；backend 通过 `host.docker.internal:5236` 连。schema 由用户预先建好（22 张表 + 数据已迁）。
+> 详见 commit `2ca8f3b`（迁移）+ `294a54d`（model 保留字修复）。
