@@ -18,6 +18,7 @@ public class ChatMessage {
     private String toolName;
     private String toolCallId;
     private Integer tokenCount;
+    @TableField("\"MODEL\"")
     private String model;
     private String traceId;
 
