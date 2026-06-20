@@ -96,10 +96,11 @@ frontend/src/
 
 - 基路径: `/api/v1`
 - 对话: POST `/api/v1/chat/{conversationId}` (SSE)
-- 挖掘模型: CRUD `/api/v1/mining/models`；Pipeline: `/api/v1/mining/pipelines`
-- 数据源: CRUD `/api/v1/datasources`；算法: GET `/api/v1/algorithms`
-- Word 报告: GET `/api/v1/word-report/download/conversation/{id}`
-- 场景/查询历史/提示词/元数据: `/api/v1/scenarios`、`/api/v1/query-history`、`/api/v1/prompt-templates`、`/api/v1/metadata-config`
+- 挖掘模型: CRUD `/api/v1/mining/model`；Pipeline: `/api/v1/mining/pipeline`
+- 数据源: CRUD `/api/v1/datasource`；算法: GET `/api/v1/mining/algorithms`
+- Word 报告: POST `/api/v1/word-report/conversation/{id}`
+- 场景/查询历史/提示词/元数据: `/api/v1/scenario`、`/api/v1/query-history`、`/api/v1/prompt-template`、`/api/v1/metadata-config`
+- 鉴权: POST `/api/v1/auth/login`、GET `/api/v1/auth/me`、POST `/api/v1/auth/logout`；用户管理 `/api/v1/users`（admin）
 
 ## Word 报告图表渲染（ECharts SSR）
 
