@@ -96,9 +96,9 @@ public class DataSourceController {
     @GetMapping("/{id}/tables")
     public Result<List<java.util.Map<String, Object>>> listTables(@PathVariable Long id) {
         var jdbc = dataSourceManager.getJdbcTemplate(id);
-        var tables = jdbc.queryForList(
-            "SELECT TABLE_NAME AS name, TABLE_COMMENT AS comment, TABLE_ROWS AS `rows` " +
-            "FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME");
+        var type = dataSourceMapper.selectById(id).getType();
+        var tables = com.smartquery.util.DbMetadataUtil.listTables(
+            jdbc, com.smartquery.util.DbMetadataUtil.Dialect.of(type));
         return Result.ok(tables);
     }
 
@@ -106,17 +106,12 @@ public class DataSourceController {
     public Result<List<java.util.Map<String, Object>>> listColumns(
             @PathVariable Long id, @PathVariable String table) {
         var jdbc = dataSourceManager.getJdbcTemplate(id);
-        var validated = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
-            Integer.class, table);
-        if (validated == null || validated == 0) {
+        var type = dataSourceMapper.selectById(id).getType();
+        var dialect = com.smartquery.util.DbMetadataUtil.Dialect.of(type);
+        if (!com.smartquery.util.DbMetadataUtil.tableExists(jdbc, dialect, table)) {
             return Result.error("表不存在: " + table);
         }
-        var columns = jdbc.queryForList(
-            "SELECT COLUMN_NAME AS name, COLUMN_TYPE AS type, IS_NULLABLE AS nullable, " +
-            "COLUMN_KEY AS `key`, COLUMN_COMMENT AS comment " +
-            "FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION",
-            table);
+        var columns = com.smartquery.util.DbMetadataUtil.listColumns(jdbc, dialect, table);
         return Result.ok(columns);
     }
 
@@ -126,17 +121,13 @@ public class DataSourceController {
             @RequestParam(defaultValue = "20") int limit) {
         var jdbc = dataSourceManager.getJdbcTemplate(id);
         com.smartquery.common.IdentifierValidator.validateTableName(table);
-        var validated = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
-            Integer.class, table);
-        if (validated == null || validated == 0) {
+        var type = dataSourceMapper.selectById(id).getType();
+        var dialect = com.smartquery.util.DbMetadataUtil.Dialect.of(type);
+        if (!com.smartquery.util.DbMetadataUtil.tableExists(jdbc, dialect, table)) {
             return Result.error("表不存在: " + table);
         }
         limit = Math.max(1, Math.min(limit, 100));
-        var columns = jdbc.queryForList(
-            "SELECT COLUMN_NAME AS name, COLUMN_TYPE AS type " +
-            "FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION",
-            table);
+        var columns = com.smartquery.util.DbMetadataUtil.listColumns(jdbc, dialect, table);
         var columnNames = columns.stream()
             .map(c -> (String) c.get("name"))
             .toList();

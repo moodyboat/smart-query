@@ -176,6 +176,25 @@ public class DataSourceManager {
         ds.setMaxLifetime(dynamicPoolMaxLifetime);
         ds.setPoolName("sq-ds-" + dataSourceId);
 
+        // extraConfig 是 JSONB 列：{"connectionInitSql":"SET SCHEMA ODS_DM", ...}
+        // DM 业务库可用 connectionInitSql 切 schema；未来可扩展其他 HikariCP 属性。
+        String extra = config.getExtraConfig();
+        if (extra != null && !extra.isBlank()) {
+            try {
+                com.fasterxml.jackson.databind.JsonNode node =
+                    new com.fasterxml.jackson.databind.ObjectMapper().readTree(extra);
+                if (node.has("connectionInitSql")) {
+                    String sql = node.get("connectionInitSql").asText("").trim();
+                    if (!sql.isEmpty()) {
+                        ds.setConnectionInitSql(sql);
+                    }
+                }
+            } catch (Exception ignore) {
+                // 非 JSON：兼容历史数据，直接当 SQL
+                ds.setConnectionInitSql(extra.trim());
+            }
+        }
+
         return ds;
     }
 

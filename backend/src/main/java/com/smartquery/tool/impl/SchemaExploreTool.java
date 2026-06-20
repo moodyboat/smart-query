@@ -2,7 +2,10 @@ package com.smartquery.tool.impl;
 
 import com.smartquery.datasource.DataSourceContextHolder;
 import com.smartquery.datasource.DataSourceManager;
+import com.smartquery.entity.DataSource;
+import com.smartquery.mapper.DataSourceMapper;
 import com.smartquery.tool.*;
+import com.smartquery.util.DbMetadataUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -19,6 +22,7 @@ import java.util.*;
 public class SchemaExploreTool implements LlmTool {
 
     private final DataSourceManager dataSourceManager;
+    private final DataSourceMapper dataSourceMapper;
 
     @org.springframework.beans.factory.annotation.Value("${smart-query.schema.explore-sample-rows:5}")
     private int exploreSampleRows;
@@ -59,11 +63,13 @@ public class SchemaExploreTool implements LlmTool {
         try {
             DataSourceContextHolder.set(dsId);
             JdbcTemplate jdbc = dataSourceManager.getJdbcTemplate(dsId);
+            DataSource dsCfg = dataSourceMapper.selectById(dsId);
+            DbMetadataUtil.Dialect dialect = DbMetadataUtil.Dialect.of(dsCfg != null ? dsCfg.getType() : null);
 
             String result = switch (action) {
-                case "list_tables" -> listTables(jdbc);
-                case "describe_table" -> describeTable(jdbc, (String) input.get("table_name"));
-                case "sample_data" -> sampleData(jdbc, (String) input.get("table_name"));
+                case "list_tables" -> listTables(jdbc, dialect);
+                case "describe_table" -> describeTable(jdbc, dialect, (String) input.get("table_name"));
+                case "sample_data" -> sampleData(jdbc, dialect, (String) input.get("table_name"));
                 default -> "未知的 action: " + action;
             };
 
@@ -81,44 +87,37 @@ public class SchemaExploreTool implements LlmTool {
     @Override
     public boolean isConcurrencySafe() { return true; }
 
-    private String listTables(JdbcTemplate jdbc) {
-        List<Map<String, Object>> tables = jdbc.queryForList(
-            "SELECT TABLE_NAME, TABLE_COMMENT, TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME"
-        );
+    private String listTables(JdbcTemplate jdbc, DbMetadataUtil.Dialect dialect) {
+        List<Map<String, Object>> tables = DbMetadataUtil.listTables(jdbc, dialect);
         StringBuilder sb = new StringBuilder("数据库表列表:\n\n");
         sb.append("| 表名 | 注释 | 行数 |\n| --- | --- | --- |\n");
         for (Map<String, Object> row : tables) {
-            sb.append("| ").append(row.get("TABLE_NAME"))
-              .append(" | ").append(row.get("TABLE_COMMENT"))
-              .append(" | ").append(row.get("TABLE_ROWS"))
+            sb.append("| ").append(row.get("name"))
+              .append(" | ").append(row.getOrDefault("comment", ""))
+              .append(" | ").append(row.getOrDefault("rows", ""))
               .append(" |\n");
         }
         return sb.toString();
     }
 
-    private String describeTable(JdbcTemplate jdbc, String tableName) {
-        List<Map<String, Object>> columns = jdbc.queryForList(
-            "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_COMMENT, EXTRA " +
-            "FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION",
-            tableName
-        );
+    private String describeTable(JdbcTemplate jdbc, DbMetadataUtil.Dialect dialect, String tableName) {
+        List<Map<String, Object>> columns = DbMetadataUtil.listColumns(jdbc, dialect, tableName);
         StringBuilder sb = new StringBuilder("表 `").append(tableName).append("` 结构:\n\n");
-        sb.append("| 字段名 | 类型 | 可空 | 键 | 注释 | 额外 |\n| --- | --- | --- | --- | --- | --- |\n");
+        sb.append("| 字段名 | 类型 | 可空 | 键 | 注释 |\n| --- | --- | --- | --- | --- |\n");
         for (Map<String, Object> row : columns) {
-            sb.append("| ").append(row.get("COLUMN_NAME"))
-              .append(" | ").append(row.get("COLUMN_TYPE"))
-              .append(" | ").append(row.get("IS_NULLABLE"))
-              .append(" | ").append(row.get("COLUMN_KEY"))
-              .append(" | ").append(row.get("COLUMN_COMMENT"))
-              .append(" | ").append(row.get("EXTRA"))
+            sb.append("| ").append(row.get("name"))
+              .append(" | ").append(row.get("type"))
+              .append(" | ").append(row.get("nullable"))
+              .append(" | ").append(row.getOrDefault("key", ""))
+              .append(" | ").append(row.getOrDefault("comment", ""))
               .append(" |\n");
         }
         return sb.toString();
     }
 
-    private String sampleData(JdbcTemplate jdbc, String tableName) {
+    private String sampleData(JdbcTemplate jdbc, DbMetadataUtil.Dialect dialect, String tableName) {
         // Validate table name against actual tables to prevent injection
-        if (!isValidTable(jdbc, tableName)) {
+        if (!DbMetadataUtil.tableExists(jdbc, dialect, tableName)) {
             return "表 `" + tableName + "` 不存在";
         }
         String safeName = tableName.replaceAll("[^a-zA-Z0-9_.]", "");
@@ -136,13 +135,5 @@ public class SchemaExploreTool implements LlmTool {
             sb.append("\n");
         }
         return sb.toString();
-    }
-
-    private boolean isValidTable(JdbcTemplate jdbc, String tableName) {
-        if (tableName == null || tableName.isBlank()) return false;
-        List<String> tables = jdbc.queryForList(
-            "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
-            String.class, tableName);
-        return !tables.isEmpty();
     }
 }
