@@ -1,5 +1,5 @@
 <template>
-  <div class="prompt-manager">
+  <div class="page-container prompt-manager">
     <!-- Header -->
     <div class="prompt-header">
       <button class="back-btn" @click="$emit('close')">

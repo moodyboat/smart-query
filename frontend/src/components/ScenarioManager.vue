@@ -1,5 +1,5 @@
 <template>
-  <div class="scenario-manager">
+  <div class="page-container scenario-manager">
     <div class="prompt-header">
       <button class="back-btn" @click="$emit('close')">
         <span class="back-arrow">&larr;</span> 返回问数
@@ -447,9 +447,7 @@ onMounted(() => {
 
 <style scoped>
 .scenario-manager {
-  padding: var(--space-xl);
-  max-width: 1400px;
-  margin: 0 auto;
+  /* 复用全局 .page-container 规则：max-width 1400px + margin auto + padding var(--space-xl) */
 }
 
 .prompt-header {

@@ -1,5 +1,5 @@
 <template>
-  <div class="mining-manager">
+  <div class="page-container mining-manager">
     <!-- Header -->
     <div class="mining-header">
       <div class="header-left">
