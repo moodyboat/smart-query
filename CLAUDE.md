@@ -149,6 +149,57 @@ Word 报告中的图表使用 **ECharts 服务端渲染**，无浏览器、无�
 - 实体使用 MyBatis-Plus 逻辑删除 (`deleted` 字段)
 - 文档见 `docs/`（`guides/` 使用指南，`archive/` 历史归档，根 `README.md` 入口）
 
+## 前端 UI Design Token 规范（2026-06-21 重构落地）
+
+**所有颜色/字号/字体族/间距/圆角/动画必须用 `src/style.css` 的 CSS 变量**，禁止硬编码。
+
+### 必用 token（禁止 hex 字面量）
+
+| 类别 | token | 用途 |
+|---|---|---|
+| 品牌色 | `--brand-primary` `--brand-primary-hover` `--brand-primary-active` `--brand-primary-light` `--brand-primary-lighter` `--brand-gradient` | 主色 #2563eb（Tailwind blue-600）+ 渐变 |
+| 文本 | `--text-primary` `--text-regular` `--text-secondary` `--text-muted` | 4 级文本色阶 |
+| 背景/边框 | `--bg` `--surface` `--border` `--border-light` `--hover` | 页面/卡片/分隔 |
+| 状态 | `--color-success` `--color-warning` `--color-danger` `--color-info` `--color-pink` `--color-python`（+ `-light`）| 业务状态 + Python 官方蓝 |
+| 间距 | `--space-xs/sm/md/lg/xl/2xl` | 4/8/12/16/20/24px |
+| 圆角 | `--radius-sm/md/lg/xl/pill` | 4/6/8/10/999px |
+| 字号 | `--font-xs/sm/md/base/lg/xl/2xl` | 11-18px |
+| 字体族 | `--font-family-sans` `--font-family-mono` | 代码块/SQL 必须用 mono |
+| 动画 | `--transition-fast/base/slow` | 0.15/0.2/0.3s |
+| 层级 | `--z-dropdown/sticky/modal/drawer/toast/tooltip` | 1000-1500 |
+| 阴影 | `--shadow-sm/md/lg` | 卡片阴影 |
+| 代码高亮 | `--syntax-bg/fg/keyword/string/number/comment/function/type/variable/constant/header-bg/line-number` | VS Code Dark+ 独立色板，与品牌色物理隔离 |
+
+### 公共类（管理页直接用）
+
+```html
+<div class="page-container">              <!-- max-width 1400px + margin auto + padding -->
+  <div class="page-header">               <!-- flex + gap -->
+    <button class="back-btn">返回</button> <!-- 品牌色文字 + hover light bg -->
+    <h2 class="page-title">标题</h2>       <!-- 18px / 600 / text-primary -->
+  </div>
+  ...
+</div>
+```
+
+已应用：ScenarioManager / PromptManager / MiningManager / DataSourceManager。
+
+### 例外（可保留硬编码）
+
+- VS Code Dark+ 代码高亮色（已抽 `--syntax-*`，**不要混入品牌色**）
+- ECharts 图表数据色（独立色板，按图表语义定）
+- 组件特色配色（如 ScenarioModule 紫色渐变作 AI 模块标识）
+- placeholder 占位提示（用户输入示例，非真色值）
+- SQL 语法高亮 regex 字符串（JS 拼接，无法用 CSS var）
+
+### element-plus 主题
+
+`--el-color-primary` 已绑定到 `--brand-primary`，所有 element-plus 控件（el-button/el-input/el-select 等）自动跟随品牌色，**禁止在组件里用 `:deep(.el-button)` 覆盖颜色**。
+
+### 向后兼容
+
+`--primary` 是 `--brand-primary` 的别名（已废弃但不删，避免破坏老代码）；新代码用 `--brand-primary`。
+
 ## 已知问题（2026-06-19 代码核查，均有 file:line 证据）
 
 - **[安全·紧急] GLM API Key 泄露**：`application.yml:74,79` 把真实可用的 GLM key 作为 `${GLM_API_KEY:9c82...}` 默认值硬编码并提交进仓库。需立即在智谱控制台轮换，并从 git 历史清除。
