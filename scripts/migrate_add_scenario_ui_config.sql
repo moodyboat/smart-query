@@ -4,9 +4,14 @@
 -- 适用场景：已部署的 smart-query 库（已有 sq_scenario 表，但无 ui_config 列、无 sq_role_scenario 表）
 -- 全新部署：直接导入 smart_query_seed.sql 即可，本脚本可跳过
 --
--- 执行方式：mysql -u root -p smart_query < scripts/migrate_add_scenario_ui_config.sql
+-- 执行方式：mysql -uroot -p smart_query < scripts/migrate_add_scenario_ui_config.sql
+--           docker exec -i <mysql容器> mysql -uroot -p<pwd> smart_query < scripts/migrate_add_scenario_ui_config.sql
 -- 兼容 DM8：DDL 已按 COMPATIBLE_MODE=4 调整
+-- ⚠️ 必须先 SET NAMES utf8mb4，否则 UTF-8 中文会被 mysql 客户端按 latin-1
+--    解读后再以 utf8mb4 存储，导致 JSON 内中文双重编码乱码
 -- =====================================================================
+
+SET NAMES utf8mb4;
 
 -- 1. 扩展 sq_scenario 表，新增 ui_config 列
 --    MySQL 8.0.29+ 支持 IF NOT EXISTS，DM8 不支持但重复执行报错可忽略
