@@ -75,6 +75,8 @@
   --color-danger-light: #fef0f0;
   --color-info: #909399;
   --color-info-light: #f4f4f5;
+  --color-pink: #db2777;          /* pink-600，stat 卡片配色用 */
+  --color-pink-light: #fce7f3;    /* pink-100 */
 
   /* Spacing */
   --space-xs: 4px;

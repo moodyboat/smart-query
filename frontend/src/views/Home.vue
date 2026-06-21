@@ -3,7 +3,7 @@
     <!-- 顶栏 -->
     <header class="home-header">
       <div class="logo">
-        <el-icon :size="26" color="#2563eb"><DataAnalysis /></el-icon>
+        <el-icon :size="26" color="var(--brand-primary)"><DataAnalysis /></el-icon>
         <span>智能问数</span>
       </div>
       <el-dropdown trigger="click" @command="onUserCommand">
@@ -110,17 +110,17 @@ const greeting = computed(() => {
 })
 
 const statCards = computed(() => [
-  { key: 'conv', label: '会话数', value: stats.conversations, loading: loading.conversations, icon: ChatDotRound, color: '#2563eb', bg: '#dbeafe' },
-  { key: 'ds', label: '数据源', value: stats.dataSources, loading: loading.dataSources, icon: Connection, color: '#16a34a', bg: '#dcfce7' },
-  { key: 'model', label: '挖掘模型', value: stats.models, loading: loading.models, icon: TrendCharts, color: '#d97706', bg: '#fef3c7' },
-  { key: 'pub', label: '已发布模型', value: stats.published, loading: loading.models, icon: SetUp, color: '#db2777', bg: '#fce7f3' },
+  { key: 'conv', label: '会话数', value: stats.conversations, loading: loading.conversations, icon: ChatDotRound, color: 'var(--brand-primary)', bg: 'var(--brand-primary-light)' },
+  { key: 'ds', label: '数据源', value: stats.dataSources, loading: loading.dataSources, icon: Connection, color: 'var(--color-success)', bg: 'var(--color-success-light)' },
+  { key: 'model', label: '挖掘模型', value: stats.models, loading: loading.models, icon: TrendCharts, color: 'var(--color-warning)', bg: 'var(--color-warning-light)' },
+  { key: 'pub', label: '已发布模型', value: stats.published, loading: loading.models, icon: SetUp, color: 'var(--color-pink)', bg: 'var(--color-pink-light)' },
 ])
 
 const modules = [
-  { title: '智能问数', desc: '自然语言查询数据库', icon: ChatDotRound, color: '#2563eb', bg: '#dbeafe' },
-  { title: '数据挖掘', desc: '建模、训练、预测、调度', icon: TrendCharts, color: '#16a34a', bg: '#dcfce7' },
-  { title: '可视化分析', desc: '图表与仪表盘', icon: DataAnalysis, color: '#d97706', bg: '#fef3c7' },
-  { title: 'Word 报告', desc: '一键生成分析报告', icon: Document, color: '#db2777', bg: '#fce7f3' },
+  { title: '智能问数', desc: '自然语言查询数据库', icon: ChatDotRound, color: 'var(--brand-primary)', bg: 'var(--brand-primary-light)' },
+  { title: '数据挖掘', desc: '建模、训练、预测、调度', icon: TrendCharts, color: 'var(--color-success)', bg: 'var(--color-success-light)' },
+  { title: '可视化分析', desc: '图表与仪表盘', icon: DataAnalysis, color: 'var(--color-warning)', bg: 'var(--color-warning-light)' },
+  { title: 'Word 报告', desc: '一键生成分析报告', icon: Document, color: 'var(--color-pink)', bg: 'var(--color-pink-light)' },
 ]
 
 function goWorkspace() {
@@ -178,7 +178,7 @@ onMounted(() => {
   width: 100%;
   min-height: 100vh;
   overflow-y: auto;
-  background: var(--bg, #f9f9fb);
+  background: var(--bg);
 }
 
 .home-header {
@@ -187,8 +187,8 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   padding: 0 32px;
-  background: var(--surface, #fff);
-  border-bottom: 1px solid var(--border-color, #e5e6eb);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
 }
 .logo {
   display: flex;
@@ -196,18 +196,18 @@ onMounted(() => {
   gap: 10px;
   font-size: 20px;
   font-weight: 700;
-  color: var(--text-primary, #1d2129);
+  color: var(--text-primary);
 }
 .user-trigger {
   display: flex;
   align-items: center;
   gap: 8px;
   cursor: pointer;
-  color: var(--text-regular, #4e5969);
+  color: var(--text-regular);
 }
 .user-avatar {
-  background: #2563eb;
-  color: #fff;
+  background: var(--brand-primary);
+  color: var(--surface);
   font-weight: 600;
 }
 
@@ -224,8 +224,8 @@ onMounted(() => {
   padding: 32px;
   margin-bottom: 24px;
   border-radius: 12px;
-  background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%);
-  color: #fff;
+  background: var(--brand-gradient);
+  color: var(--surface);
 }
 .welcome h2 {
   margin: 0 0 8px;
@@ -259,12 +259,12 @@ onMounted(() => {
 .stat-value {
   font-size: 28px;
   font-weight: 700;
-  color: var(--text-primary, #1d2129);
+  color: var(--text-primary);
   line-height: 1.2;
 }
 .stat-label {
   font-size: 14px;
-  color: var(--text-secondary, #86909c);
+  color: var(--text-secondary);
   margin-top: 4px;
 }
 
@@ -272,22 +272,22 @@ onMounted(() => {
   font-size: 18px;
   font-weight: 600;
   margin: 0 0 16px;
-  color: var(--text-primary, #1d2129);
+  color: var(--text-primary);
 }
 .module-card {
   display: flex;
   align-items: center;
   gap: 14px;
   padding: 20px;
-  background: var(--surface, #fff);
+  background: var(--surface);
   border-radius: 10px;
-  border: 1px solid var(--border-color, #e5e6eb);
+  border: 1px solid var(--border);
   margin-bottom: 20px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all var(--transition-base);
 }
 .module-card:hover {
-  box-shadow: var(--shadow-md, 0 4px 12px rgba(0, 0, 0, 0.08));
+  box-shadow: var(--shadow-md);
   transform: translateY(-2px);
 }
 .module-icon {
@@ -302,14 +302,14 @@ onMounted(() => {
 .module-title {
   font-size: 16px;
   font-weight: 600;
-  color: var(--text-primary, #1d2129);
+  color: var(--text-primary);
 }
 .module-desc {
   font-size: 13px;
-  color: var(--text-secondary, #86909c);
+  color: var(--text-secondary);
   margin-top: 4px;
 }
 .module-arrow {
-  color: var(--text-muted, #c9cdd4);
+  color: var(--text-muted);
 }
 </style>

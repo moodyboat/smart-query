@@ -116,7 +116,7 @@ async function handleLogin() {
   flex: 1;
   min-height: 100vh;
   width: 100%;
-  background: var(--bg, #f9f9fb);
+  background: var(--bg);
 }
 
 /* 左侧品牌区 */
@@ -127,8 +127,8 @@ async function handleLogin() {
   flex-direction: column;
   justify-content: center;
   padding: 64px;
-  color: #fff;
-  background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 55%, #0ea5e9 100%);
+  color: var(--surface);
+  background: var(--brand-gradient);
   overflow: hidden;
 }
 .brand .el-icon {
@@ -181,7 +181,7 @@ async function handleLogin() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--surface, #fff);
+  background: var(--surface);
 }
 .login-card {
   width: 100%;
@@ -195,11 +195,11 @@ async function handleLogin() {
   font-size: 26px;
   font-weight: 700;
   margin: 0 0 8px;
-  color: var(--text-primary, #1d2129);
+  color: var(--text-primary);
 }
 .login-tip {
   margin: 0 0 28px;
-  color: var(--text-secondary, #86909c);
+  color: var(--text-secondary);
   font-size: 14px;
 }
 .login-btn {
@@ -209,7 +209,7 @@ async function handleLogin() {
   margin-top: 12px;
   text-align: center;
   font-size: 12px;
-  color: var(--text-muted, #c9cdd4);
+  color: var(--text-muted);
 }
 
 @media (max-width: 768px) {
