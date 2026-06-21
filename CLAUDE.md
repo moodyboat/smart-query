@@ -35,8 +35,6 @@ backend/src/main/java/com/smartquery/
 │                   #   PromptTemplate, MetadataConfig, Ontology, Dict, Summary, Dashboard,
 │                   #   LlmConfig, Python, ToolTest)
 ├── engine/         # ReAct 推理引擎 (QueryEngine, ReActEngine, ContextCompactor)
-├── coordinator/    # 任务协调器（并行任务编排）
-├── agent/          # Agent 任务抽象
 ├── service/        # 业务逻辑 (MiningService, PipelineService, ModelScheduleService,
 │                   #   WordReportService, ReportSummaryService, ChartImageService,
 │                   #   EChartsSsrRenderer, SvgToPngConverter, ScenarioService,
@@ -44,7 +42,6 @@ backend/src/main/java/com/smartquery/
 │                   #   QueryHistoryService, PromptTemplateService, MetadataConfigService,
 │                   #   OntologyService, ConversationSummaryService)
 ├── entity/         # 数据实体 (MiningModel, MiningPipeline, Algorithm, Chart, Report, etc.)
-├── mining/         # 挖掘模块 (算法注册, 流程编排)
 ├── python/         # Python 执行器 (进程沙箱, 熔断器)
 ├── llm/            # LLM 多模型适配
 ├── tool/           # ReAct 工具 (execute_sql, execute_python, generate_chart,
@@ -200,14 +197,13 @@ Word 报告中的图表使用 **ECharts 服务端渲染**，无浏览器、无�
 
 `--primary` 是 `--brand-primary` 的别名（已废弃但不删，避免破坏老代码）；新代码用 `--brand-primary`。
 
-## 已知问题（2026-06-19 代码核查，均有 file:line 证据）
+## 已知问题（2026-06-21 代码核查，均有 file:line 证据）
 
 - **[安全·紧急] GLM API Key 泄露**：`application.yml:74,79` 把真实可用的 GLM key 作为 `${GLM_API_KEY:9c82...}` 默认值硬编码并提交进仓库。需立即在智谱控制台轮换，并从 git 历史清除。
 - **[已修复·2026-06-19] 零鉴权**：已建成 JWT 鉴权体系（`config/JwtUtil` HS256 + `config/AuthInterceptor` 拦截 `/api/**` + `entity/User`/`sq_user` 表 + `controller/AuthController` login/me/logout + `controller/UserController` 用户管理）。CORS 仍开放（`WebConfig`）。详见 `docs/DEPENDENCY_AUDIT.md`。
 - **[安全] 凭据明文**：DM8 系统库密码默认 `Dameng123`（`application.yml:13` `${SPRING_DATASOURCE_PASSWORD:Dameng123}`）；MySQL 业务库示例密码默认 `900110`（仅 docker-compose 的 mysql 容器用，非系统库）；动态数据源密码在 DB 表明文存储、读取时直传 Hikari（`DataSourceManager:161-180`）。
 - **[已修复·2026-06-19] Python docker 镜像/超时死配置**：`PythonExecutor:62,68` 现读 `smart-query.python.execution-mode` / `smart-query.python.docker-image`（与 yml 一致，可配）；`PythonExecuteTool:23` 超时 key 已由 `python-tool.*` 改为 `smart-query.python.default-timeout-ms`（与 yml 对齐，配置可达）。
-- **[已修复·2026-06-19] 协调器对比假数据**：原 `CoordinatorIntegration`+`coordinator/executor/ModelTaskExecutor` 用正则拦截「对比 X 和 Y 模型」并返回 `Math.random()` 假指标注入 LLM 上下文。已停用：`CoordinatorIntegration.needsCoordination` 恒返回 false，`ModelTaskExecutor` 改为诚实失败（不再造数据）。真实多算法对比走 `MiningModelTool` 的 `compare` action（需 `source_table`+`target_column`，调 `MiningService.trainModel`）。死代码（extractTasks/coordinate/ModelTaskExecutor）清理待办。
+- **[已彻底清理·2026-06-21] 协调器死代码**：原 `CoordinatorIntegration`（needsCoordination 恒 false）+ `engine/Coordinator`/`AgentTask`/`AgentTaskExecutor`（MiningService 注入但无任何方法调用）+ `coordinator/` 整个包（仅被 CoordinatorIntegration 引用）+ `test/coordinator/TaskCoordinatorTest` 全部删除（约 1340 行）。真实多算法对比走 `MiningModelTool.compare` action（需 `source_table`+`target_column`，调 `MiningService.trainModel`）。
+- **[已彻底清理·2026-06-21] 算法注册孤儿**：`mining/AlgorithmRegistry`（137 行，硬编码 9 种算法）全无外部引用——`AlgorithmService` 自己定义 ALIAS_MAP 从 DB `AlgorithmMapper` 取数据，根本不依赖 Registry。已删除。
 - **[部署] 容器化已落地，CI 仍缺**：已有 `backend/Dockerfile`（Node20+JRE17）、`frontend/Dockerfile`（nginx）、`docker-compose.yml`（**DM8 系统库走 host.docker.internal:5236** + mysql 业务库示例容器 + redis + backend + frontend + python 执行镜像）、`scripts/`（build/airpack）、`docs/guides/DEPLOYMENT.md`、`.env.example`。仍缺 CI（`.github/workflows`）。开发模式 `start.sh` = `mvn spring-boot:run` + `npm run dev`。详见 `docs/DEPENDENCY_AUDIT.md`。
-- **[双源] 算法注册**：`mining/AlgorithmRegistry` 硬编码 9 种算法，与 DB `AlgorithmService` 双源，新增算法易漏改。
-- **[双轨] 任务协调**：`coordinator/`（`DefaultTaskCoordinator` + `TaskDagExecutor`）与 `engine/Coordinator` + `AgentTaskExecutor` 是两套并行的 DAG 编排机制。
 - **[已确认·2026-06-21] ReAct 最大轮次**：`application.yml` `react.max-turns: 15` 生效（`ReActEngine.java:48` `@Value("${react.max-turns:20}")` 默认 20 被 yml 覆盖为 15）。CLAUDE.md 旧值 15 正确。
