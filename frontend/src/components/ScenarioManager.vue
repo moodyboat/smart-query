@@ -270,8 +270,8 @@ const editForm = reactive({
 
 function emptyUiConfig() {
   return {
-    theme: { primary: '#409EFF', gradient: '', background: '#f5f7fa', headerBg: '', cardBg: 'rgba(255, 255, 255, 0.9)' },
-    avatar: { emoji: '🎯', fallbackColor: '#409EFF', size: 'large' },
+    theme: { primary: '#2563eb', gradient: '', background: '#f5f7fa', headerBg: '', cardBg: 'rgba(255, 255, 255, 0.9)' },
+    avatar: { emoji: '🎯', fallbackColor: '#2563eb', size: 'large' },
     welcome: { title: '', subtitle: '', description: '' },
     capabilities: [],
     examples: []
@@ -349,7 +349,7 @@ function handleEdit(row) {
 }
 
 function addCapability() {
-  editForm.uiConfig.capabilities.push({ icon: '📊', iconColor: '#409EFF', title: '', description: '' })
+  editForm.uiConfig.capabilities.push({ icon: '📊', iconColor: '#2563eb', title: '', description: '' })
 }
 
 function removeCapability(index) {
@@ -503,7 +503,7 @@ onMounted(() => {
 }
 
 .muted {
-  color: var(--text-muted, #909399);
+  color: var(--text-muted);
   font-size: 12px;
 }
 
@@ -520,22 +520,22 @@ onMounted(() => {
 
 .auth-tip {
   font-size: 14px;
-  color: var(--text-regular, #606266);
+  color: var(--text-regular);
   line-height: 1.6;
   margin: 0 0 16px 0;
 }
 
-.auth-content code {
-  background: var(--color-info-light, #f5f7fa);
+.auth-tip code {
+  background: var(--color-info-light);
   padding: 2px 6px;
   border-radius: 4px;
-  font-family: monospace;
+  font-family: var(--font-family-mono);
 }
 
 .auth-roles-current {
   min-height: 40px;
   padding: 12px;
-  background: var(--color-info-light, #f5f7fa);
+  background: var(--color-info-light);
   border-radius: var(--radius-md);
 }
 
