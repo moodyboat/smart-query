@@ -632,7 +632,7 @@ onMounted(() => {
 }
 
 .connection-info {
-  font-family: monospace;
+  font-family: var(--font-family-mono);
   font-size: var(--font-sm);
 }
 

@@ -609,7 +609,7 @@ onMounted(() => {
 /* 场景提示词对话框样式 */
 :deep(.scenario-prompt-dialog .el-message-box__content) {
   white-space: pre-wrap;
-  font-family: 'Courier New', monospace;
+  font-family: var(--font-family-mono);
   font-size: var(--font-base);
   line-height: 1.6;
   max-height: 500px;

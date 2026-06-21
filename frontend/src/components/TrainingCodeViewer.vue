@@ -232,7 +232,7 @@ onMounted(() => {
 .code-filename {
   color: var(--code-fg);
   font-size: var(--font-md);
-  font-family: monospace;
+  font-family: var(--font-family-mono);
 }
 
 .code-status {
@@ -273,7 +273,7 @@ onMounted(() => {
 .line-number {
   color: var(--syntax-line-number);
   font-size: var(--font-sm);
-  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+  font-family: var(--font-family-mono);
   line-height: var(--line-height, 24px);
   padding-right: 8px;
   display: flex;
@@ -301,7 +301,7 @@ onMounted(() => {
 .code-line {
   display: flex;
   align-items: flex-start;
-  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+  font-family: var(--font-family-mono);
   font-size: var(--font-md);
   line-height: var(--line-height, 24px);
   padding: 0 16px;
@@ -523,7 +523,7 @@ onMounted(() => {
 .step-functions {
   font-size: 10px;
   color: var(--text-muted);
-  font-family: monospace;
+  font-family: var(--font-family-mono);
   margin-top: 2px;
   display: block;
   overflow: hidden;

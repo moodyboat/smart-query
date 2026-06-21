@@ -223,7 +223,7 @@ function truncate(str, max) {
   padding: 2px 6px;
   border-radius: var(--radius-sm);
   font-size: var(--font-sm);
-  font-family: monospace;
+  font-family: var(--font-family-mono);
 }
 .trace-body.thinking {
   color: var(--color-info);

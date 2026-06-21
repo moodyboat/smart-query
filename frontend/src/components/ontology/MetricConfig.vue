@@ -301,7 +301,7 @@ watch(() => props.dataSourceId, () => loadMetrics(), { immediate: true })
 }
 
 .sql-code {
-  font-family: 'SF Mono', 'Menlo', monospace;
+  font-family: var(--font-family-mono);
   font-size: var(--font-sm);
   color: var(--text-primary);
   white-space: pre-wrap;

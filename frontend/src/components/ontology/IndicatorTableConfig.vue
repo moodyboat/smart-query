@@ -383,7 +383,7 @@ watch(() => props.dataSourceId, () => loadConfigs(), { immediate: true })
 .preview-val {
   color: var(--primary);
   font-weight: 500;
-  font-family: 'SF Mono', 'Menlo', monospace;
+  font-family: var(--font-family-mono);
 }
 
 .spinner {

@@ -833,7 +833,7 @@ onUnmounted(() => {
   padding: 4px 8px;
   border-radius: var(--radius-sm);
   font-size: var(--font-sm);
-  font-family: monospace;
+  font-family: var(--font-family-mono);
 }
 
 .log-info {

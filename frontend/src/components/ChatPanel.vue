@@ -862,7 +862,7 @@ defineExpose({ sendMessage, clearMessages, messages, updateChartOption, pendingC
 }
 :deep(.scenario-prompt-dialog .el-message-box__content) {
   white-space: pre-wrap;
-  font-family: monospace;
+  font-family: var(--font-family-mono);
   font-size: var(--font-base);
   line-height: 1.6;
   max-height: 400px;

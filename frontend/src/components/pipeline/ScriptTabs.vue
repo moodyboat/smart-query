@@ -99,7 +99,7 @@ function highlightPython(code) {
 .script-node-type {
   font-size: var(--font-xs);
   color: var(--text-muted);
-  font-family: monospace;
+  font-family: var(--font-family-mono);
 }
 
 .script-code {
@@ -117,6 +117,6 @@ function highlightPython(code) {
 }
 
 .script-code code {
-  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+  font-family: var(--font-family-mono);
 }
 </style>

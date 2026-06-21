@@ -695,7 +695,7 @@ const trainImportanceOption = computed(() => {
 }
 
 .script-code code {
-  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+  font-family: var(--font-family-mono);
 }
 
 /* Tab toggle */

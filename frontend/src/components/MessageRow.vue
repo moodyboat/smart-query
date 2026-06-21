@@ -841,7 +841,7 @@ function retryPython(code, stderr) {
 .result-meta { font-size: var(--font-sm); color: var(--text-muted); margin-top: var(--space-xs); }
 
 .code-block {
-  padding: var(--space-sm) 14px; font-family: 'Menlo','Monaco',monospace; font-size: var(--font-sm);
+  padding: var(--space-sm) 14px; font-family: var(--font-family-mono); font-size: var(--font-sm);
   overflow-x: auto; white-space: pre-wrap; margin: 0;
 }
 .sql-code { background: var(--code-bg); color: var(--code-fg); }
@@ -877,7 +877,7 @@ details[open] .code-toggle-icon { display: none; }
   background: var(--color-danger); color: var(--surface); font-size: var(--font-xs);
 }
 .error-content {
-  margin: 0; font-family: 'Menlo',monospace; font-size: var(--font-sm);
+  margin: 0; font-family: var(--font-family-mono); font-size: var(--font-sm);
   white-space: pre-wrap; max-height: 200px; overflow-y: auto;
 }
 .error-hint {
@@ -899,7 +899,7 @@ details[open] .code-toggle-icon { display: none; }
 
 .stdout-block {
   background: var(--surface); border: 1px solid var(--border); padding: var(--space-sm) var(--space-md);
-  border-radius: var(--radius-sm); font-family: 'Menlo',monospace; font-size: var(--font-sm);
+  border-radius: var(--radius-sm); font-family: var(--font-family-mono); font-size: var(--font-sm);
   white-space: pre-wrap; max-height: 300px; overflow-y: auto;
   position: relative;
 }
@@ -917,7 +917,7 @@ details[open] .code-toggle-icon { display: none; }
 }
 .stderr-block {
   background: var(--color-danger-light); border: 1px solid var(--color-danger); padding: var(--space-sm) var(--space-md);
-  border-radius: var(--radius-sm); font-family: 'Menlo',monospace; font-size: var(--font-sm);
+  border-radius: var(--radius-sm); font-family: var(--font-family-mono); font-size: var(--font-sm);
   white-space: pre-wrap; color: var(--color-danger); max-height: 200px; overflow-y: auto;
 }
 
@@ -966,7 +966,7 @@ details[open] .code-toggle-icon { display: none; }
 }
 .section-sql-toggle:hover { color: var(--primary); }
 .section-sql-code {
-  margin: 0; padding: var(--space-sm) var(--space-md); font-family: 'Menlo', monospace;
+  margin: 0; padding: var(--space-sm) var(--space-md); font-family: var(--font-family-mono);
   font-size: var(--font-xs); background: var(--code-bg); color: var(--code-fg);
   white-space: pre-wrap; border-top: 1px solid var(--border-light);
 }
