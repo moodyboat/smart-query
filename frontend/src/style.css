@@ -27,6 +27,8 @@
   /* ===== 代码高亮（VS Code Dark+ 主题，独立色板，不归品牌）===== */
   --syntax-bg: #1e1e1e;
   --syntax-fg: #d4d4d4;
+  --syntax-header-bg: #2d2d2d;
+  --syntax-line-number: #858585;
   --syntax-keyword: #569cd6;
   --syntax-string: #ce9178;
   --syntax-number: #b5cea8;

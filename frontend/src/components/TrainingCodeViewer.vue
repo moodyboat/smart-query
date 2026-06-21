@@ -200,7 +200,7 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--code-bg, #1e1e1e);
+  background: var(--code-bg);
   border-radius: var(--radius-lg);
   overflow: hidden;
 }
@@ -210,7 +210,7 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   padding: 12px 16px;
-  background: var(--code-header-bg, #2d2d2d);
+  background: var(--syntax-header-bg);
   border-bottom: 1px solid var(--border);
 }
 
@@ -221,7 +221,7 @@ onMounted(() => {
 }
 
 .code-lang-badge {
-  background: var(--python-color, #3776ab);
+  background: var(--color-python);
   color: white;
   padding: 2px 8px;
   border-radius: var(--radius-sm);
@@ -230,7 +230,7 @@ onMounted(() => {
 }
 
 .code-filename {
-  color: var(--code-fg, #d4d4d4);
+  color: var(--code-fg);
   font-size: var(--font-md);
   font-family: monospace;
 }
@@ -243,7 +243,7 @@ onMounted(() => {
 
 .current-step-badge {
   background: var(--primary-light, rgba(64, 158, 255, 0.2));
-  color: var(--primary, #409eff);
+  color: var(--brand-primary);
   padding: 4px 12px;
   border-radius: 12px;
   font-size: var(--font-sm);
@@ -262,7 +262,7 @@ onMounted(() => {
 }
 
 .line-numbers {
-  background: var(--code-line-numbers-bg, #2d2d2d);
+  background: var(--syntax-header-bg);
   border-right: 1px solid var(--border);
   user-select: none;
   min-width: 50px;
@@ -271,7 +271,7 @@ onMounted(() => {
 }
 
 .line-number {
-  color: var(--code-line-number, #858585);
+  color: var(--syntax-line-number);
   font-size: var(--font-sm);
   font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
   line-height: var(--line-height, 24px);
@@ -283,7 +283,7 @@ onMounted(() => {
 }
 
 .line-number.active {
-  color: var(--primary, #409eff);
+  color: var(--brand-primary);
   background: var(--primary-light, rgba(64, 158, 255, 0.1));
   font-weight: 600;
 }
@@ -311,7 +311,7 @@ onMounted(() => {
 
 .code-line.active {
   background: linear-gradient(90deg, rgba(64, 158, 255, 0.2) 0%, rgba(64, 158, 255, 0.1) 50%, rgba(64, 158, 255, 0.05) 100%);
-  border-left: 3px solid var(--primary, #409eff);
+  border-left: 3px solid var(--brand-primary);
   padding-left: 13px;
   box-shadow: 0 0 10px rgba(64, 158, 255, 0.1);
 }
@@ -357,8 +357,8 @@ onMounted(() => {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--primary, #409eff);
-  border: 2px solid var(--code-bg, #1e1e1e);
+  background: var(--brand-primary);
+  border: 2px solid var(--code-bg);
   transition: all 0.2s;
 }
 
@@ -383,43 +383,43 @@ onMounted(() => {
 }
 
 .code-line code {
-  color: var(--code-fg, #d4d4d4);
+  color: var(--code-fg);
   white-space: pre;
   flex: 1;
 }
 
 /* 语法高亮样式 */
 .syntax-comment {
-  color: #6a9955;
+  color: var(--syntax-comment);
   font-style: italic;
 }
 
 .syntax-string {
-  color: #ce9178;
+  color: var(--syntax-string);
 }
 
 .syntax-keyword {
-  color: #569cd6;
+  color: var(--syntax-keyword);
   font-weight: 500;
 }
 
 .syntax-function {
-  color: #dcdcaa;
+  color: var(--syntax-function);
 }
 
 .syntax-function-def {
-  color: #4ec9b0;
+  color: var(--syntax-type);
   font-weight: 600;
 }
 
 .syntax-number {
-  color: #b5cea8;
+  color: var(--syntax-number);
 }
 
 /* 步骤面板 */
 .steps-panel {
   border-top: 1px solid var(--border);
-  background: var(--bg-secondary, #f5f7fa);
+  background: var(--hover);
   max-height: 200px;
   overflow-y: auto;
 }
@@ -450,12 +450,12 @@ onMounted(() => {
 }
 
 .step-item:hover {
-  background: var(--border-light, #e4e7ed);
+  background: var(--border-light);
 }
 
 .step-item.active {
   background: var(--primary-light, rgba(64, 158, 255, 0.1));
-  border-left: 3px solid var(--primary, #409eff);
+  border-left: 3px solid var(--brand-primary);
 }
 
 .step-item.completed {
@@ -472,7 +472,7 @@ onMounted(() => {
 }
 
 .completed-icon {
-  color: var(--el-color-success, #67c23a);
+  color: var(--color-success);
   font-size: var(--font-base);
   font-weight: bold;
 }
@@ -480,7 +480,7 @@ onMounted(() => {
 .active-spinner {
   width: 14px;
   height: 14px;
-  border: 2px solid var(--primary, #409eff);
+  border: 2px solid var(--brand-primary);
   border-top-color: transparent;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -491,7 +491,7 @@ onMounted(() => {
 }
 
 .pending-number {
-  color: var(--text-muted, #909399);
+  color: var(--text-muted);
   font-size: var(--font-xs);
   font-weight: 500;
 }
@@ -507,7 +507,7 @@ onMounted(() => {
 .step-label {
   font-size: var(--font-md);
   font-weight: 500;
-  color: var(--text-primary, #303133);
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -515,14 +515,14 @@ onMounted(() => {
 
 .step-description {
   font-size: var(--font-xs);
-  color: var(--text-muted, #909399);
+  color: var(--text-muted);
   margin-top: 2px;
   display: block;
 }
 
 .step-functions {
   font-size: 10px;
-  color: var(--text-muted, #909399);
+  color: var(--text-muted);
   font-family: monospace;
   margin-top: 2px;
   display: block;
@@ -533,15 +533,15 @@ onMounted(() => {
 
 .step-lines {
   font-size: var(--font-xs);
-  color: var(--text-muted, #909399);
+  color: var(--text-muted);
 }
 
 .step-item.active .step-label {
-  color: var(--primary, #409eff);
+  color: var(--brand-primary);
 }
 
 .step-item.active .step-description {
-  color: var(--primary, #409eff);
+  color: var(--brand-primary);
   opacity: 0.8;
 }
 </style>
