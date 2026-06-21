@@ -1,7 +1,7 @@
 <template>
   <div class="page-container prompt-manager">
     <!-- Header -->
-    <div class="prompt-header">
+    <div class="page-header">
       <button class="back-btn" @click="$emit('close')">
         <span class="back-arrow">&larr;</span> 返回问数
       </button>
@@ -626,40 +626,7 @@ onMounted(() => {
   margin: 0 auto;
 }
 
-.prompt-header {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 20px;
-}
-
-.back-btn {
-  background: none;
-  border: none;
-  color: var(--color-primary);
-  cursor: pointer;
-  font-size: var(--font-xl);
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 8px 12px;
-  border-radius: var(--radius-md);
-  transition: background var(--transition-fast);
-}
-
-.back-btn:hover {
-  background: var(--color-primary-light);
-}
-
-.back-arrow {
-  font-size: var(--font-2xl);
-}
-
-.page-title {
-  margin: 0;
-  font-size: 24px;
-  font-weight: 600;
-}
+/* .prompt-header / .back-btn / .back-arrow / .page-title 复用全局公共类（style.css）*/
 
 .scenario-selector-card {
   margin-bottom: 20px;
