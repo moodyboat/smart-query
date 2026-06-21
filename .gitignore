@@ -53,3 +53,4 @@ Thumbs.db
 logs/
 tmp/
 .gstack/
+backend/charts/
