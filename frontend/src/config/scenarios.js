@@ -29,9 +29,18 @@ const FALLBACK_GENERAL = {
     description: '我是你的智能数据分析助手，可以帮助你查询数据库、生成图表、分析数据。'
   },
   capabilities: [
-    { icon: 'SQL', iconColor: '#E6A23C', title: '智能查询', description: '用自然语言查询数据库，自动生成 SQL' }
+    { icon: 'SQL', iconColor: '#E6A23C', title: '智能查询', description: '用自然语言查询数据库，自动生成 SQL' },
+    { icon: 'Py', iconColor: '#409EFF', title: '数据挖掘', description: 'Python 分析、建模、预测，支持迭代调试' },
+    { icon: '📊', iconColor: '#67C23A', title: '可视化', description: 'ECharts 图表、仪表盘大屏，自动筛选联动' },
+    { icon: '📋', iconColor: '#F56C6C', title: '分析报告', description: '多表查询、计算分析、结构化报告生成' }
   ],
-  examples: []
+  examples: [
+    '各区域销售额对比，生成柱状图',
+    '用Python分析客户流失原因',
+    '建一个员工薪资分类预测模型',
+    '生成本月销售分析报告',
+    '做一个销售仪表盘大屏'
+  ]
 }
 
 /** 响应式缓存：code -> 场景配置（含 UI） */
