@@ -1,5 +1,5 @@
 <template>
-  <div class="datasource-manager">
+  <div class="page-container datasource-manager">
     <!-- Header -->
     <div class="datasource-header">
       <button class="back-btn" @click="$emit('close')">
@@ -533,7 +533,7 @@ onMounted(() => {
 
 <style scoped>
 .datasource-manager {
-  padding: var(--space-xl);
+  /* max-width/padding/margin 复用全局 .page-container；保留 flex 布局 */
   display: flex;
   flex-direction: column;
   gap: 20px;
