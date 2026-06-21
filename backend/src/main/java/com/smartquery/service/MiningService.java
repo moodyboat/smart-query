@@ -10,10 +10,8 @@ import com.smartquery.logging.DiagnosticsTimer;
 import com.smartquery.mapper.*;
 import com.smartquery.python.PythonExecutor;
 import com.smartquery.python.PythonResult;
-import com.smartquery.engine.Coordinator;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.context.annotation.Lazy;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -77,7 +75,6 @@ public class MiningService {
     private final PipelineService pipelineService;
     private final ConversationEventLogger eventLogger;
     private final Executor miningExecutor;
-    private final Coordinator coordinator;
 
     public MiningService(
             MiningModelMapper miningModelMapper,
@@ -92,8 +89,7 @@ public class MiningService {
             MiningPredictionService predictionService,
             PipelineService pipelineService,
             ConversationEventLogger eventLogger,
-            @Qualifier("miningExecutor") Executor miningExecutor,
-            @Lazy Coordinator coordinator
+            @Qualifier("miningExecutor") Executor miningExecutor
     ) {
         this.miningModelMapper = miningModelMapper;
         this.miningPipelineMapper = miningPipelineMapper;
@@ -108,16 +104,11 @@ public class MiningService {
         this.pipelineService = pipelineService;
         this.eventLogger = eventLogger;
         this.miningExecutor = miningExecutor;
-        this.coordinator = coordinator;
     }
 
     @jakarta.annotation.PostConstruct
     void init() {
         trainingSemaphore = new Semaphore(maxConcurrentTraining);
-    }
-
-    public Coordinator getCoordinator() {
-        return coordinator;
     }
 
     // ======================== Model Lifecycle ========================

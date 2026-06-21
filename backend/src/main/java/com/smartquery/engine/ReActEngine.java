@@ -33,7 +33,6 @@ public class ReActEngine {
     private final ToolOrchestrator toolOrchestrator;
     private final QueryContextAssembler contextAssembler;
     private final ContextCompactor contextCompactor;
-    private final CoordinatorIntegration coordinatorIntegration;
     private final com.smartquery.logging.ConversationStatsService statsService;
     private final List<LifecycleHook> lifecycleHooks;
     private final com.smartquery.tool.hook.AutoRepairHook autoRepairHook;
@@ -63,7 +62,6 @@ public class ReActEngine {
             ToolOrchestrator toolOrchestrator,
             QueryContextAssembler contextAssembler,
             ContextCompactor contextCompactor,
-            CoordinatorIntegration coordinatorIntegration,
             com.smartquery.logging.ConversationStatsService statsService,
             List<LifecycleHook> lifecycleHooks,
             com.smartquery.tool.hook.AutoRepairHook autoRepairHook,
@@ -74,7 +72,6 @@ public class ReActEngine {
         this.toolOrchestrator = toolOrchestrator;
         this.contextAssembler = contextAssembler;
         this.contextCompactor = contextCompactor;
-        this.coordinatorIntegration = coordinatorIntegration;
         this.statsService = statsService;
         this.lifecycleHooks = lifecycleHooks;
         this.autoRepairHook = autoRepairHook;
@@ -155,38 +152,6 @@ public class ReActEngine {
     ) {
         // 1. 构建初始消息 (system + history + user)
         String systemPrompt = contextAssembler.fetchPromptParts(model, dataSourceId, scenarioCode, scenarioVariables).systemPrompt();
-
-        // 1.5 检查是否需要任务协调
-        log.info("[REACT] Checking if coordination needed for message: {}", userMessage);
-
-        if (coordinatorIntegration.needsCoordination(userMessage)) {
-            log.info("[REACT] === COORDINATION TRIGGERED === for message: {}", userMessage);
-
-            List<com.smartquery.coordinator.model.Task> subTasks =
-                coordinatorIntegration.extractTasks(userMessage);
-
-            log.info("[REACT] Extracted {} subtasks", subTasks.size());
-
-            if (!subTasks.isEmpty()) {
-                log.info("[REACT] Starting coordination of {} tasks", subTasks.size());
-
-                List<com.smartquery.coordinator.model.TaskResult> results =
-                    coordinatorIntegration.coordinate(userMessage, subTasks);
-
-                log.info("[REACT] Coordination completed, {} results", results.size());
-
-                String formattedResults = coordinatorIntegration.formatResults(results);
-
-                log.info("[REACT] Formatted results:\n{}", formattedResults);
-
-                // 将协调结果作为系统消息注入
-                systemPrompt = systemPrompt + "\n\n" + formattedResults;
-
-                eventConsumer.accept(new ReActEvent.Info("任务协调完成，已执行 " + results.size() + " 个子任务"));
-            }
-        } else {
-            log.info("[REACT] No coordination needed, proceeding with normal ReAct loop");
-        }
 
         // LifecycleHook: onSessionStart — 注入附加上下文
         StringBuilder sessionExtras = new StringBuilder();
