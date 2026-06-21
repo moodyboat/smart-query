@@ -750,7 +750,7 @@ onUnmounted(() => {
 }
 
 .algorithm-badge {
-  background: var(--python-color, #3776ab);
+  background: var(--color-python);
   color: white;
   padding: 4px 12px;
   border-radius: var(--radius-sm);
