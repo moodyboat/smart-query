@@ -2,7 +2,8 @@ name: build
 
 # 触发：push 到任意分支 + 任意 PR
 # 只在代码改动时跑（仅改 docs/CLAUDE.md 不会触发）
-on:
+# 'on' 加引号：避免被 YAML 1.1 解析为 bool（GitHub Actions 已知坑）
+'on':
   push:
     paths:
       - 'backend/**'
