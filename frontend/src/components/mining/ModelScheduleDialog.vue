@@ -84,5 +84,5 @@ function appendVar(variable) {
 .var-helper { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; }
 .var-label { font-size: var(--font-sm); color: var(--text-muted); }
 .var-chip { font-size: var(--font-xs); padding: 1px 6px; border-radius: var(--radius-sm); background: var(--primary-light); color: var(--primary); cursor: pointer; font-family: var(--font-family-mono); }
-.var-chip:hover { background: var(--primary); color: #fff; }
+.var-chip:hover { background: var(--primary); color: var(--surface); }
 </style>

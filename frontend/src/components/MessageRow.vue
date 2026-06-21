@@ -785,7 +785,7 @@ function retryPython(code, stderr) {
   font-size: var(--font-sm);
   transition: all 0.15s;
 }
-.mining-action-btn:hover { background: var(--badge-mining); color: #fff; }
+.mining-action-btn:hover { background: var(--badge-mining); color: var(--surface); }
 .mining-metrics-card {
   background: var(--bg-primary);
   border: 1px solid var(--border-color);

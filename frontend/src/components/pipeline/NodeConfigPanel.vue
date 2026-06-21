@@ -961,7 +961,7 @@ function trialMissingBadge(colName) {
 .ds-stat-card {
   padding: 6px 8px;
   border-radius: var(--radius-sm);
-  background: var(--bg-secondary, #f5f7fa);
+  background: var(--hover);
   font-size: var(--font-sm);
 }
 
@@ -1272,8 +1272,8 @@ function trialMissingBadge(colName) {
 .feat-chart-block {
   margin-bottom: 8px;
   padding: var(--space-sm);
-  background: var(--surface, #fafafa);
+  background: var(--surface);
   border-radius: var(--radius-md, 6px);
-  border: 1px solid var(--border-light, #eee);
+  border: 1px solid var(--border-light);
 }
 </style>

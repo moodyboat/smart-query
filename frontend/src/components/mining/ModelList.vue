@@ -140,7 +140,7 @@ function handleSelectChange(modelId, checked) {
   box-shadow: 0 1px 2px rgba(0,0,0,0.04); position: relative;
 }
 .model-card.selected {
-  border-color: var(--primary); border-width: 2px; background: var(--primary-light, #e6f7ff);
+  border-color: var(--primary); border-width: 2px; background: var(--primary-light);
 }
 .model-card:hover { border-color: var(--primary); box-shadow: 0 4px 12px rgba(0,0,0,0.08); transform: translateY(-1px); }
 .model-checkbox {
