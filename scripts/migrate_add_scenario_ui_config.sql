@@ -1,23 +1,40 @@
 -- =====================================================================
 -- 老库迁移脚本：场景能力增强（ui_config 列 + sq_role_scenario 授权表）
 -- =====================================================================
--- 适用场景：已部署的 smart-query 库（已有 sq_scenario 表，但无 ui_config 列、无 sq_role_scenario 表）
+-- 适用场景：已部署的 smart_query 库（已有 sq_scenario 表，但无 ui_config 列、无 sq_role_scenario 表）
 -- 全新部署：直接导入 smart_query_seed.sql 即可，本脚本可跳过
 --
--- 执行方式：mysql -uroot -p smart_query < scripts/migrate_add_scenario_ui_config.sql
---           docker exec -i <mysql容器> mysql -uroot -p<pwd> smart_query < scripts/migrate_add_scenario_ui_config.sql
--- 兼容 DM8：DDL 已按 COMPATIBLE_MODE=4 调整
--- ⚠️ 必须先 SET NAMES utf8mb4，否则 UTF-8 中文会被 mysql 客户端按 latin-1
---    解读后再以 utf8mb4 存储，导致 JSON 内中文双重编码乱码
+-- ⚠️ 重要：DM8 部署**优先让 backend 启动时 DataSeeder 自动兜底**（建表 + 加列 + 角色授权种子，
+--    无需手工跑此脚本）。此脚本仅用于：
+--    1. MySQL 历史库迁移（无 DataSeeder 兜底的旧版本）
+--    2. DM8 上 DataSeeder 兜底失败时的手工灾备
+--
+-- 执行方式：
+--   MySQL：mysql -uroot -p smart_query < scripts/migrate_add_scenario_ui_config.sql
+--          docker exec -i <mysql容器> mysql -uroot -p<pwd> smart_query < scripts/migrate_add_scenario_ui_config.sql
+--   DM8：  docker exec -i <dm8容器> disql SYSDBA/Dameng123@localhost:5236 \
+--            < scripts/migrate_add_scenario_ui_config.sql
+--          （脚本头部已加 SET SCHEMA，DM8 disql 不需要 -e）
+--
+-- 兼容性：DDL 同时兼容 MySQL 与 DM8（COMPATIBLE_MODE=4）
+--    - DM8 disql 不认 `SET NAMES`/`ALTER TABLE ... COMMENT`，已规避
+--    - DM8 不支持 `IF NOT EXISTS`，重复执行会报错（已存在时跳过）
 -- =====================================================================
 
-SET NAMES utf8mb4;
+-- DM8 切到 SMART_QUERY schema（MySQL 把这行当无害语句忽略）
+SET SCHEMA SMART_QUERY;
 
 -- 1. 扩展 sq_scenario 表，新增 ui_config 列
---    MySQL 8.0.29+ 支持 IF NOT EXISTS，DM8 不支持但重复执行报错可忽略
-ALTER TABLE sq_scenario ADD COLUMN ui_config TEXT COMMENT '前端UI配置 JSON: {theme, avatar, welcome, capabilities, examples}';
+--    MySQL 8.0.29+ 支持 IF NOT EXISTS；DM8 不支持，重复执行报错可忽略
+--    DM8 不认 ALTER TABLE ... COMMENT 子句，已移除
+ALTER TABLE sq_scenario ADD COLUMN ui_config TEXT;
 
 -- 2. 回填 6 个系统场景的 ui_config 数据（与前端 scenarios.js 对齐）
+--    ⚠️ DM8 disql 对超长字符串（>1KB JSON）解析不稳定，UPDATE 可能失败。
+--    DM8 部署推荐用 admin API 批量回填：
+--      admin 登录 → PUT /api/v1/scenarios/{id} body 含 uiConfig 字段
+--    MySQL 部署可继续用下面的 UPDATE 语句（已加 SET NAMES utf8mb4）。
+--    以下 UPDATE 在 MySQL 上必需；在 DM8 上若报 syntax error 可跳过（API 已回填）。
 UPDATE sq_scenario SET ui_config = '{"theme":{"primary":"#409EFF","gradient":"linear-gradient(135deg, #667eea 0%, #764ba2 100%)","background":"#f5f7fa","headerBg":"linear-gradient(135deg, #667eea 0%, #764ba2 100%)","cardBg":"rgba(255, 255, 255, 0.9)"},"avatar":{"emoji":"🔍","fallbackColor":"#667eea","size":"large"},"welcome":{"title":"欢迎使用智能问数","subtitle":"不只是查询 — 我可以帮你做完整的数据分析","description":"我是你的智能数据分析助手，可以帮助你查询数据库、生成图表、分析数据。"},"capabilities":[{"icon":"SQL","iconColor":"#E6A23C","title":"智能查询","description":"用自然语言查询数据库，自动生成 SQL"},{"icon":"Py","iconColor":"#409EFF","title":"数据挖掘","description":"Python 分析、建模、预测，支持迭代调试"},{"icon":"📊","iconColor":"#67C23A","title":"可视化","description":"ECharts 图表、仪表盘大屏，自动筛选联动"},{"icon":"📋","iconColor":"#F56C6C","title":"分析报告","description":"多表查询、计算分析、结构化报告生成"}],"examples":["各区域销售额对比，生成柱状图","用Python分析客户流失原因","建一个员工薪资分类预测模型","生成本月销售分析报告","做一个销售仪表盘大屏"]}' WHERE code = 'general';
 
 UPDATE sq_scenario SET ui_config = '{"theme":{"primary":"#67C23A","gradient":"linear-gradient(135deg, #11998e 0%, #38ef7d 100%)","background":"#f0fff4","headerBg":"linear-gradient(135deg, #11998e 0%, #38ef7d 100%)","cardBg":"rgba(255, 255, 255, 0.95)"},"avatar":{"emoji":"📈","fallbackColor":"#11998e","size":"large"},"welcome":{"title":"销售数据分析专家","subtitle":"专注于帮助企业洞察销售趋势、识别机会和风险","description":"我是销售数据分析专家，可以帮助你进行销售趋势分析、商品排行分析、客户行为分析等。"},"capabilities":[{"icon":"📊","iconColor":"#67C23A","title":"销售趋势分析","description":"同比、环比、移动平均趋势分析"},{"icon":"🏆","iconColor":"#E6A23C","title":"商品ABC分析","description":"畅销品识别、滞销品预警、结构优化"},{"icon":"👥","iconColor":"#409EFF","title":"客户行为分析","description":"购买习惯、复购分析、客户分层"},{"icon":"🗺️","iconColor":"#F56C6C","title":"区域销售对比","description":"大区对比、省份排名、城市渗透"}],"examples":["分析最近30天销售趋势，识别TOP3畅销产品","对比各区域销售额，找出增长最快的大区","按商品品类分析销售额和利润率","分析客户复购率和客单价变化趋势","预测下季度销售额并给出目标建议"]}' WHERE code = 'sales_analysis';
