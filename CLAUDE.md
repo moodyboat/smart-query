@@ -210,4 +210,4 @@ Word 报告中的图表使用 **ECharts 服务端渲染**，无浏览器、无�
 - **[部署] 容器化已落地，CI 仍缺**：已有 `backend/Dockerfile`（Node20+JRE17）、`frontend/Dockerfile`（nginx）、`docker-compose.yml`（**DM8 系统库走 host.docker.internal:5236** + mysql 业务库示例容器 + redis + backend + frontend + python 执行镜像）、`scripts/`（build/airpack）、`docs/guides/DEPLOYMENT.md`、`.env.example`。仍缺 CI（`.github/workflows`）。开发模式 `start.sh` = `mvn spring-boot:run` + `npm run dev`。详见 `docs/DEPENDENCY_AUDIT.md`。
 - **[双源] 算法注册**：`mining/AlgorithmRegistry` 硬编码 9 种算法，与 DB `AlgorithmService` 双源，新增算法易漏改。
 - **[双轨] 任务协调**：`coordinator/`（`DefaultTaskCoordinator` + `TaskDagExecutor`）与 `engine/Coordinator` + `AgentTaskExecutor` 是两套并行的 DAG 编排机制。
-- **[待核实] ReAct 最大轮次**：CLAUDE.md 旧值记为 15，代码 `ReActEngine` 实际常量需复核（agent 报告为 20）。
+- **[已确认·2026-06-21] ReAct 最大轮次**：`application.yml` `react.max-turns: 15` 生效（`ReActEngine.java:48` `@Value("${react.max-turns:20}")` 默认 20 被 yml 覆盖为 15）。CLAUDE.md 旧值 15 正确。
