@@ -3,9 +3,17 @@
 #   docker compose --profile tools build python     # 先构建 python 执行镜像（后端 docker run 调用）
 #   docker compose build                            # 构建后端 + 前端
 #   docker compose up                               # 启动（前端 http://localhost:5173  后端 :9000）
-# 配置：复制 .env.example → .env 覆盖 GLM_API_KEY / MYSQL_PASSWORD 等
+# 配置：复制 .env.example → .env 覆盖 GLM_API_KEY / DM_PASSWORD / MYSQL_PASSWORD 等
+#
+# 数据库角色分工（重要）：
+#   - 系统库：达梦 DM8（host.docker.internal:5236，宿主或独立部署；后端默认连此）
+#     schema=SMART_QUERY 由 DataSeeder 兜底建表 + smart_query_seed.sql 导入种子
+#   - 业务库示例：mysql 容器（仅作示例数据演示，smart_query_sample 库）
+#     客户真实业务库通过 UI 添加动态数据源，可为 MySQL/PostgreSQL/DM/GBase 任意
 
 services:
+  # 业务库示例容器：仅给"业务库示例数据"演示用，不是系统库
+  # 系统库（smart_query）走 DM8，见 backend 服务的 SPRING_DATASOURCE_URL
   mysql:
     image: mysql:8.0
     environment:

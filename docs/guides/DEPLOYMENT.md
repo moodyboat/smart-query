@@ -25,12 +25,14 @@
 - **backend**：Spring Boot jar（`maven` 多阶段构建）+ JRE17 + Node20（ECharts SSR 调 `tools/echarts-ssr/render.mjs`）。
 - **frontend**：`vite build` → nginx 托管 SPA，`/api/` 反代后端（SSE 已关缓冲、超时 300s）。
 - **python**：独立镜像，**后端通过宿主 docker socket 以 `docker run` 调用**（进程隔离信任边界=容器；进程内 `PythonSandbox` 降为粗筛）。非常驻服务，仅按需拉起。
-- **mysql**：首次启动执行 `docker/db-init.sh`，建 `smart_query`（后端 Flyway 管理）+ `smart_query_sample`（导入示例数据）。
+- **DM8（系统库）**：宿主或独立容器提供 `host.docker.internal:5236`，schema `SMART_QUERY`。后端用 SYSDBA 登录 + `SET SCHEMA SMART_QUERY` 切库；`COMPATIBLE_MODE=4` + `CASE_SENSITIVE=0`。schema + 种子由 `smart_query_seed.sql` 导入（项目已移除 Flyway，由 `DataSeeder` 兜底 `CREATE TABLE IF NOT EXISTS`）。
+- **mysql（业务库示例容器，非系统库）**：首次启动执行 `docker/db-init.sh`，建 `smart_query_sample`（导入示例数据），供 UI 添加数据源演示。客户真实业务库通过 UI 添加，可为 MySQL/PostgreSQL/DM/GBase 任意。
 - **redis**：会话/缓存。
 
 ## 二、前置
 
 - Docker + Docker Compose（本机已验证 Docker 29.4.3 / Compose v5.1.4）。
+- **达梦 DM8**（系统库）：宿主或独立容器提供 5236 端口，已开 `COMPATIBLE_MODE=4` + `CASE_SENSITIVE=0`，schema `SMART_QUERY` 已建。
 - GLM API Key（问数需要）。
 
 ## 三、配置
@@ -39,14 +41,16 @@
 
 ```bash
 export GLM_API_KEY=你的key
-export MYSQL_PASSWORD=900110   # 可改
+export DM_PASSWORD=Dameng123   # DM8 系统库 SYSDBA 密码
+export MYSQL_PASSWORD=900110   # 业务库示例容器密码（仅 demo）
 ```
 
 关键可覆盖项（compose env → application.yml）：
 | env | 作用 | 默认 |
 |---|---|---|
 | `GLM_API_KEY` | LLM 密钥 | yml 内置（私有化可保留） |
-| `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_PASSWORD` | 系统库连接 | mysql / 3306 / 900110 |
+| `DM_HOST` / `DM_PORT` / `DM_USERNAME` / `DM_PASSWORD` / `DM_SCHEMA` | **DM8 系统库** | host.docker.internal / 5236 / SYSDBA / Dameng123 / SMART_QUERY |
+| `MYSQL_PASSWORD` | 业务库示例容器密码（非系统库） | 900110 |
 | `REDIS_HOST` / `REDIS_PORT` | Redis | redis / 6379 |
 | `SMART_QUERY_PYTHON_EXECUTION_MODE` | `docker` / `process` | docker |
 | `SMART_QUERY_PYTHON_DOCKER_IMAGE` | python 执行镜像 | smart-query-python:latest |
@@ -57,7 +61,7 @@ export MYSQL_PASSWORD=900110   # 可改
 # 一键：mvn 打 jar（本地热 ~/.m2，快）→ 拷 app.jar → 构建全部 docker 镜像
 ./scripts/build.sh
 
-# 启动全部（mysql 健康后 backend 起，Flyway 自动迁移 smart_query）
+# 启动全部（DM8 系统库需先就绪 + redis 健康后 backend 起，DataSeeder 自动兜底建表）
 docker compose up -d
 ```
 
@@ -114,8 +118,8 @@ docker compose up -d
 | `failed to connect to the docker API ... no such file or directory` | Docker Desktop 没启动。`open -a Docker`，等 `docker ps` 能跑再构建。 |
 | python/backend 镜像构建很久 | 首次构建要拉基础镜像 + pip 装科学计算包（pandas/sklearn/xgboost），5-10 分钟正常。看 `docker system df` 的 Build Cache 是否在涨判断是否推进。 |
 | `npm ci` 失败 | frontend / echarts-ssr 都有 `package-lock.json`，正常不会失败；若失败检查 lock 文件是否与 package.json 同步。 |
-| backend 启动报数据库连不上 | 确认 `MYSQL_HOST=mysql`（compose 服务名）、mysql 健康（`docker compose ps`）、`MYSQL_PASSWORD` 与 mysql 服务一致。 |
-| Flyway 报错 | `smart_query` 库由 Flyway 管理；确认库为空启动（不要同时导 `smart_query_seed.sql`，否则与 Flyway 建表冲突）。 |
+| backend 启动报数据库连不上 | **系统库是 DM8**：确认 DM8 在 `host.docker.internal:5236` 可达（`nc -z host.docker.internal 5236`）、`DM_PASSWORD` 与 DM8 实例 SYSDBA 密码一致、`DM_SCHEMA` 已建（默认 `SMART_QUERY`）。mysql 容器只是业务库示例，**不是系统库**。 |
+| ~~Flyway 报错~~ | 项目已移除 Flyway；schema 由 `smart_query_seed.sql` 导入 + `DataSeeder` 兜底 `CREATE TABLE IF NOT EXISTS`。 |
 | 端口占用 9000/5173/3306 | `docker compose down` 后改 compose 的端口映射。 |
 | 前端能开但问数 500 | 看后端日志 `docker compose logs backend`；多半是 `GLM_API_KEY` 未设或 LLM 不通。 |
 
