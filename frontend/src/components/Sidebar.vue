@@ -436,7 +436,7 @@ defineExpose({ setCurrentConversation, getSelectedDataSourceId, conversations, r
   padding: var(--space-xs) var(--space-sm);
   margin-bottom: var(--space-sm);
   border-radius: var(--radius-md);
-  background: var(--bg, #f9f9fb);
+  background: var(--bg);
 }
 .user-info {
   display: flex;
@@ -446,8 +446,8 @@ defineExpose({ setCurrentConversation, getSelectedDataSourceId, conversations, r
 }
 .user-avatar {
   flex-shrink: 0;
-  background: var(--primary, #409eff);
-  color: #fff;
+  background: var(--brand-primary);
+  color: var(--surface);
   font-size: 13px;
   font-weight: 600;
 }

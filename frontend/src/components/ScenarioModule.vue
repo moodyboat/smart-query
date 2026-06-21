@@ -113,7 +113,7 @@ const expandAllModules = () => {
   font-size: var(--font-xl);
   font-weight: 600;
   margin-bottom: 8px;
-  color: #f0f9ff;
+  color: var(--surface);
 }
 
 .module-items {

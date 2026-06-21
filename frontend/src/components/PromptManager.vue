@@ -614,7 +614,7 @@ onMounted(() => {
   line-height: 1.6;
   max-height: 500px;
   overflow-y: auto;
-  background: #f5f7fa;
+  background: var(--color-info-light);
   padding: 15px;
   border-radius: var(--radius-sm);
   color: var(--text-regular);
@@ -673,7 +673,7 @@ onMounted(() => {
 
 .selector-label {
   font-weight: 500;
-  color: #606266;
+  color: var(--text-regular);
 }
 
 .scenario-option {
@@ -789,7 +789,7 @@ onMounted(() => {
   margin: 0 0 12px 0;
   font-size: var(--font-base);
   font-weight: 600;
-  color: #606266;
+  color: var(--text-regular);
 }
 
 .detail-section p {
@@ -798,7 +798,7 @@ onMounted(() => {
 }
 
 .content-box {
-  background: #f5f7fa;
+  background: var(--color-info-light);
   padding: var(--space-lg);
   border-radius: var(--radius-lg);
   white-space: pre-wrap;

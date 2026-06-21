@@ -772,7 +772,7 @@ onUnmounted(() => {
 }
 
 .code-section {
-  background: var(--code-bg, #1e1e1e);
+  background: var(--code-bg);
   border-radius: var(--radius-lg);
   overflow: hidden;
   display: flex;
@@ -780,7 +780,7 @@ onUnmounted(() => {
 }
 
 .logs-section {
-  background: var(--bg-secondary, #f5f7fa);
+  background: var(--hover);
   border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
@@ -887,7 +887,7 @@ onUnmounted(() => {
 }
 
 .result-metric {
-  background: var(--bg-secondary, #f5f7fa);
+  background: var(--hover);
   border-radius: var(--radius-md);
   padding: var(--space-md);
   display: flex;

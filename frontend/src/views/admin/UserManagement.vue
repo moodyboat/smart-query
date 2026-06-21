@@ -249,7 +249,7 @@ onMounted(loadUsers)
   width: 100%;
   min-height: 100vh;
   overflow-y: auto;
-  background: var(--bg, #f9f9fb);
+  background: var(--bg);
 }
 .um-header {
   height: 64px;
@@ -257,8 +257,8 @@ onMounted(loadUsers)
   align-items: center;
   justify-content: space-between;
   padding: 0 32px;
-  background: var(--surface, #fff);
-  border-bottom: 1px solid var(--border-color, #e5e6eb);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
 }
 .um-left {
   display: flex;
@@ -268,7 +268,7 @@ onMounted(loadUsers)
 .um-left h2 {
   margin: 0;
   font-size: 20px;
-  color: var(--text-primary, #1d2129);
+  color: var(--text-primary);
 }
 .um-actions {
   display: flex;
@@ -280,6 +280,6 @@ onMounted(loadUsers)
 }
 .reset-tip {
   margin: 0 0 16px;
-  color: var(--text-secondary, #86909c);
+  color: var(--text-secondary);
 }
 </style>
