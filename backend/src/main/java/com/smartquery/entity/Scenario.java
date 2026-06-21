@@ -35,6 +35,12 @@ public class Scenario {
 
     private Integer sortOrder;
 
+    /**
+     * 前端 UI 配置（JSON 字符串）：theme/avatar/welcome/capabilities/examples
+     * 由 ObjectMapper 序列化，前端读取后渲染主题色、欢迎语、能力卡片等。
+     */
+    private String uiConfig;
+
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;

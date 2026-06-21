@@ -22,8 +22,8 @@ public class UserService {
     private final UserMapper userMapper;
     private final PasswordEncoder passwordEncoder;
 
-    /** 仅 admin 可调用用户管理接口 */
-    private void requireAdmin() {
+    /** 仅 admin 可调用用户管理接口（同包/外部 Controller 共用） */
+    public void requireAdmin() {
         UserContextHolder.UserContext ctx = UserContextHolder.get();
         if (ctx == null || !"admin".equals(ctx.role())) {
             throw new BusinessException(403, "无权限，仅管理员可操作");

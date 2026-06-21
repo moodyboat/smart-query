@@ -6,6 +6,7 @@ import com.smartquery.entity.Scenario;
 import com.smartquery.mapper.ScenarioMapper;
 import org.springframework.stereotype.Service;
 
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -22,6 +23,20 @@ public class ScenarioService extends ServiceImpl<ScenarioMapper, Scenario> {
         wrapper.eq(Scenario::getIsEnabled, true)
                 .orderByAsc(Scenario::getSortOrder)
                 .orderByDesc(Scenario::getCreatedAt);
+        return list(wrapper);
+    }
+
+    /**
+     * 根据 ID 集合获取启用的场景（用于按角色过滤）
+     */
+    public List<Scenario> getEnabledScenariosByIds(List<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return Collections.emptyList();
+        }
+        LambdaQueryWrapper<Scenario> wrapper = new LambdaQueryWrapper<>();
+        wrapper.in(Scenario::getId, ids)
+                .eq(Scenario::getIsEnabled, true)
+                .orderByAsc(Scenario::getSortOrder);
         return list(wrapper);
     }
 

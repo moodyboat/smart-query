@@ -1,0 +1,553 @@
+<template>
+  <div class="scenario-manager">
+    <div class="prompt-header">
+      <button class="back-btn" @click="$emit('close')">
+        <span class="back-arrow">&larr;</span> 返回问数
+      </button>
+      <h2 class="page-title">场景管理</h2>
+    </div>
+
+    <el-card shadow="hover">
+      <template #header>
+        <div class="card-header">
+          <span class="card-title">场景列表（{{ scenarios.length }}）</span>
+          <el-button type="primary" size="small" :icon="Plus" @click="handleCreate">
+            新增场景
+          </el-button>
+        </div>
+      </template>
+
+      <el-table :data="scenarios" v-loading="loading" stripe>
+        <el-table-column prop="sortOrder" label="排序" width="70" />
+        <el-table-column label="图标" width="70">
+          <template #default="{ row }">
+            <span class="scenario-icon-preview">{{ row.uiConfig?.avatar?.emoji || row.icon || '🎯' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="name" label="名称" width="140" />
+        <el-table-column prop="code" label="编码" width="170" />
+        <el-table-column prop="category" label="分类" width="100">
+          <template #default="{ row }">
+            <el-tag size="small">{{ row.category || '-' }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="角色授权" min-width="200">
+          <template #default="{ row }">
+            <el-tag
+              v-for="role in (roleMap[row.id] || [])"
+              :key="role"
+              size="small"
+              :type="role === 'admin' ? 'danger' : 'primary'"
+              style="margin: 2px"
+            >{{ role }}</el-tag>
+            <span v-if="!roleMap[row.id]?.length" class="muted">未授权</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="100">
+          <template #default="{ row }">
+            <el-tag v-if="row.isSystem" type="info" size="small">系统</el-tag>
+            <el-tag v-if="!row.isEnabled" type="danger" size="small">禁用</el-tag>
+            <el-tag v-else type="success" size="small">启用</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="290" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="primary" :icon="Edit" @click="handleEdit(row)">编辑</el-button>
+            <el-button link type="warning" :icon="User" @click="handleAuth(row)">角色授权</el-button>
+            <el-button
+              link
+              type="danger"
+              :icon="Delete"
+              :disabled="row.isSystem"
+              @click="handleDelete(row)"
+            >删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
+    <!-- 场景编辑对话框 -->
+    <el-dialog v-model="editDialogVisible" :title="editDialogTitle" width="960px" top="3vh">
+      <el-form :model="editForm" label-width="120px">
+        <el-row :gutter="20">
+          <el-col :span="12">
+            <el-form-item label="名称">
+              <el-input v-model="editForm.name" placeholder="如：供应链分析" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="编码">
+              <el-input v-model="editForm.code" placeholder="如：supply_chain" :disabled="isEditMode" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-row :gutter="20">
+          <el-col :span="8">
+            <el-form-item label="分类">
+              <el-select v-model="editForm.category" placeholder="选择分类" allow-create filterable>
+                <el-option label="查询分析" value="query" />
+                <el-option label="业务分析" value="business" />
+                <el-option label="运维监控" value="ops" />
+                <el-option label="数据挖掘" value="mining" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="6">
+            <el-form-item label="排序">
+              <el-input-number v-model="editForm.sortOrder" :min="0" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="5">
+            <el-form-item label="启用">
+              <el-switch v-model="editForm.isEnabled" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="5">
+            <el-form-item label="Emoji">
+              <el-input v-model="editForm.uiConfig.avatar.emoji" placeholder="🎯" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-form-item label="描述">
+          <el-input v-model="editForm.description" type="textarea" :rows="2" />
+        </el-form-item>
+
+        <el-divider content-position="left">主题配色</el-divider>
+        <el-row :gutter="20">
+          <el-col :span="8">
+            <el-form-item label="主色">
+              <el-color-picker v-model="editForm.uiConfig.theme.primary" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="背景色">
+              <el-input v-model="editForm.uiConfig.theme.background" placeholder="#f5f7fa" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="卡片背景">
+              <el-input v-model="editForm.uiConfig.theme.cardBg" placeholder="rgba(255,255,255,0.9)" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-form-item label="顶部渐变">
+          <el-input v-model="editForm.uiConfig.theme.headerBg" placeholder="linear-gradient(...)" />
+        </el-form-item>
+
+        <el-divider content-position="left">欢迎语</el-divider>
+        <el-form-item label="标题">
+          <el-input v-model="editForm.uiConfig.welcome.title" />
+        </el-form-item>
+        <el-form-item label="副标题">
+          <el-input v-model="editForm.uiConfig.welcome.subtitle" />
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input v-model="editForm.uiConfig.welcome.description" type="textarea" :rows="2" />
+        </el-form-item>
+
+        <el-divider content-position="left">能力卡片</el-divider>
+        <el-button size="small" :icon="Plus" @click="addCapability" style="margin-bottom: 12px">添加能力</el-button>
+        <el-table :data="editForm.uiConfig.capabilities" border size="small">
+          <el-table-column label="图标" width="100">
+            <template #default="{ row }">
+              <el-input v-model="row.icon" size="small" placeholder="📊" />
+            </template>
+          </el-table-column>
+          <el-table-column label="颜色" width="120">
+            <template #default="{ row }">
+              <el-color-picker v-model="row.iconColor" size="small" />
+            </template>
+          </el-table-column>
+          <el-table-column label="标题" width="160">
+            <template #default="{ row }">
+              <el-input v-model="row.title" size="small" />
+            </template>
+          </el-table-column>
+          <el-table-column label="描述">
+            <template #default="{ row }">
+              <el-input v-model="row.description" size="small" />
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="60">
+            <template #default="{ $index }">
+              <el-button link type="danger" :icon="Delete" @click="removeCapability($index)" />
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <el-divider content-position="left">示例问题</el-divider>
+        <div v-for="(ex, i) in editForm.uiConfig.examples" :key="i" class="example-row">
+          <el-input v-model="editForm.uiConfig.examples[i]" size="small" placeholder="示例问题" />
+          <el-button link type="danger" :icon="Delete" @click="editForm.uiConfig.examples.splice(i, 1)" />
+        </div>
+        <el-button size="small" :icon="Plus" @click="editForm.uiConfig.examples.push('')" style="margin-top: 8px">
+          添加示例
+        </el-button>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="editDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="handleSave">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 角色授权对话框 -->
+    <el-dialog v-model="authDialogVisible" title="角色授权" width="500px">
+      <div v-if="authTarget" class="auth-content">
+        <p class="auth-tip">
+          为场景 <strong>{{ authTarget.name }}</strong>（{{ authTarget.code }}）授权可访问的角色。
+          <code>admin</code> 默认拥有所有场景权限。
+        </p>
+        <div class="auth-roles-current">
+          <el-tag
+            v-for="role in authRoles"
+            :key="role"
+            closable
+            :type="role === 'admin' ? 'danger' : 'primary'"
+            style="margin: 4px"
+            @close="removeRole(role)"
+          >{{ role }}</el-tag>
+          <span v-if="!authRoles.length" class="muted">未授权任何角色</span>
+        </div>
+        <el-divider />
+        <div class="auth-add">
+          <el-input
+            v-model="newRole"
+            placeholder="输入角色名（如 user/analyst/finance）"
+            @keyup.enter="addRole"
+          />
+          <el-button type="primary" @click="addRole">添加</el-button>
+        </div>
+        <div class="auth-quick">
+          <span class="muted">快捷：</span>
+          <el-button size="small" @click="quickAddRole('user')">+ user</el-button>
+          <el-button size="small" @click="quickAddRole('analyst')">+ analyst</el-button>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="authDialogVisible = false">关闭</el-button>
+        <el-button type="primary" :loading="savingAuth" @click="handleSaveAuth">保存授权</el-button>
+      </template>
+    </el-dialog>
+  </div>
+</template>
+
+<script setup>
+import { ref, reactive, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Plus, Edit, Delete, User } from '@element-plus/icons-vue'
+import {
+  fetchAllScenariosForAdmin,
+  createScenario,
+  updateScenario,
+  deleteScenario,
+  fetchScenarioRoles,
+  setScenarioRoles
+} from '../api'
+
+const emit = defineEmits(['close'])
+
+const scenarios = ref([])
+const roleMap = ref({})
+const loading = ref(false)
+const saving = ref(false)
+const editDialogVisible = ref(false)
+const editDialogTitle = ref('')
+const isEditMode = ref(false)
+
+const editForm = reactive({
+  id: null,
+  name: '',
+  code: '',
+  description: '',
+  category: 'business',
+  isEnabled: true,
+  sortOrder: 99,
+  uiConfig: emptyUiConfig()
+})
+
+function emptyUiConfig() {
+  return {
+    theme: { primary: '#409EFF', gradient: '', background: '#f5f7fa', headerBg: '', cardBg: 'rgba(255, 255, 255, 0.9)' },
+    avatar: { emoji: '🎯', fallbackColor: '#409EFF', size: 'large' },
+    welcome: { title: '', subtitle: '', description: '' },
+    capabilities: [],
+    examples: []
+  }
+}
+
+// 角色授权相关
+const authDialogVisible = ref(false)
+const authTarget = ref(null)
+const authRoles = ref([])
+const newRole = ref('')
+const savingAuth = ref(false)
+
+async function loadScenarios() {
+  loading.value = true
+  try {
+    const data = await fetchAllScenariosForAdmin()
+    scenarios.value = data || []
+    // 并行加载每个场景的角色
+    const entries = await Promise.all(
+      scenarios.value.map(async s => {
+        try {
+          const roles = await fetchScenarioRoles(s.id)
+          return [s.id, roles || []]
+        } catch {
+          return [s.id, []]
+        }
+      })
+    )
+    roleMap.value = Object.fromEntries(entries)
+  } catch (e) {
+    ElMessage.error('加载场景失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+function handleCreate() {
+  isEditMode.value = false
+  editDialogTitle.value = '新增场景'
+  Object.assign(editForm, {
+    id: null,
+    name: '',
+    code: '',
+    description: '',
+    category: 'business',
+    isEnabled: true,
+    sortOrder: (scenarios.value.at(-1)?.sortOrder || 0) + 1,
+    uiConfig: emptyUiConfig()
+  })
+  editDialogVisible.value = true
+}
+
+function handleEdit(row) {
+  isEditMode.value = true
+  editDialogTitle.value = '编辑场景'
+  const ui = row.uiConfig || emptyUiConfig()
+  Object.assign(editForm, {
+    id: row.id,
+    name: row.name,
+    code: row.code,
+    description: row.description || '',
+    category: row.category || 'business',
+    isEnabled: row.isEnabled,
+    sortOrder: row.sortOrder,
+    uiConfig: {
+      theme: { ...emptyUiConfig().theme, ...(ui.theme || {}) },
+      avatar: { ...emptyUiConfig().avatar, ...(ui.avatar || {}) },
+      welcome: { ...emptyUiConfig().welcome, ...(ui.welcome || {}) },
+      capabilities: Array.isArray(ui.capabilities) ? ui.capabilities.map(c => ({ ...c })) : [],
+      examples: Array.isArray(ui.examples) ? [...ui.examples] : []
+    }
+  })
+  editDialogVisible.value = true
+}
+
+function addCapability() {
+  editForm.uiConfig.capabilities.push({ icon: '📊', iconColor: '#409EFF', title: '', description: '' })
+}
+
+function removeCapability(index) {
+  editForm.uiConfig.capabilities.splice(index, 1)
+}
+
+async function handleSave() {
+  if (!editForm.name?.trim() || !editForm.code?.trim()) {
+    ElMessage.warning('名称和编码不能为空')
+    return
+  }
+  saving.value = true
+  try {
+    const payload = {
+      name: editForm.name,
+      code: editForm.code,
+      description: editForm.description,
+      category: editForm.category,
+      isEnabled: editForm.isEnabled,
+      sortOrder: editForm.sortOrder,
+      uiConfig: editForm.uiConfig
+    }
+    if (isEditMode.value) {
+      await updateScenario(editForm.id, payload)
+      ElMessage.success('更新成功')
+    } else {
+      await createScenario(payload)
+      ElMessage.success('创建成功')
+    }
+    editDialogVisible.value = false
+    await loadScenarios()
+  } catch (e) {
+    ElMessage.error('保存失败：' + (e.message || ''))
+  } finally {
+    saving.value = false
+  }
+}
+
+async function handleDelete(row) {
+  try {
+    await ElMessageBox.confirm(`确定要删除场景 "${row.name}" 吗？关联的角色授权也会一并清除。`, '确认删除', {
+      type: 'warning'
+    })
+    await deleteScenario(row.id)
+    ElMessage.success('已删除')
+    await loadScenarios()
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error('删除失败')
+  }
+}
+
+function handleAuth(row) {
+  authTarget.value = row
+  authRoles.value = [...(roleMap.value[row.id] || [])]
+  newRole.value = ''
+  authDialogVisible.value = true
+}
+
+function addRole() {
+  const r = newRole.value.trim()
+  if (!r) return
+  if (!authRoles.value.includes(r)) {
+    authRoles.value.push(r)
+  }
+  newRole.value = ''
+}
+
+function quickAddRole(r) {
+  if (!authRoles.value.includes(r)) authRoles.value.push(r)
+}
+
+function removeRole(r) {
+  authRoles.value = authRoles.value.filter(x => x !== r)
+}
+
+async function handleSaveAuth() {
+  if (!authTarget.value) return
+  savingAuth.value = true
+  try {
+    await setScenarioRoles(authTarget.value.id, authRoles.value)
+    roleMap.value[authTarget.value.id] = [...authRoles.value]
+    ElMessage.success('授权已保存')
+    authDialogVisible.value = false
+  } catch (e) {
+    ElMessage.error('保存授权失败')
+  } finally {
+    savingAuth.value = false
+  }
+}
+
+onMounted(() => {
+  loadScenarios()
+})
+</script>
+
+<style scoped>
+.scenario-manager {
+  padding: var(--space-xl);
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.prompt-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.back-btn {
+  background: none;
+  border: none;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-size: var(--font-xl);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  transition: background var(--transition-fast);
+}
+
+.back-btn:hover {
+  background: var(--color-primary-light);
+}
+
+.back-arrow {
+  font-size: var(--font-2xl);
+}
+
+.page-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.card-title {
+  font-weight: 600;
+  font-size: var(--font-xl);
+}
+
+.scenario-icon-preview {
+  font-size: 20px;
+}
+
+.muted {
+  color: var(--text-muted, #909399);
+  font-size: 12px;
+}
+
+.example-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.auth-content {
+  padding: 0 8px;
+}
+
+.auth-tip {
+  font-size: 14px;
+  color: var(--text-regular, #606266);
+  line-height: 1.6;
+  margin: 0 0 16px 0;
+}
+
+.auth-content code {
+  background: var(--color-info-light, #f5f7fa);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: monospace;
+}
+
+.auth-roles-current {
+  min-height: 40px;
+  padding: 12px;
+  background: var(--color-info-light, #f5f7fa);
+  border-radius: var(--radius-md);
+}
+
+.auth-add {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.auth-quick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+</style>

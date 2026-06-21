@@ -1,10 +1,12 @@
 package com.smartquery.controller;
 
 import com.smartquery.common.RateLimiter;
+import com.smartquery.common.UserContextHolder;
 import com.smartquery.engine.ConversationContextHolder;
 import com.smartquery.engine.QueryEngine;
 import com.smartquery.engine.ReActEvent;
 import com.smartquery.logging.ConversationStatsService;
+import com.smartquery.service.ScenarioAuthService;
 import com.smartquery.tool.ToolRegistry;
 import com.smartquery.entity.ChatMessage;
 import com.smartquery.logging.ConversationEventLogger;
@@ -48,6 +50,7 @@ public class ChatController {
     private final ToolPromptLoader toolPromptLoader;
     private final SchemaContextBuilder schemaContextBuilder;
     private final Environment environment;
+    private final ScenarioAuthService scenarioAuthService;
 
     @org.springframework.beans.factory.annotation.Value("${smart-query.llm.default-model:glm-5.1}")
     private String defaultModel;
@@ -94,6 +97,20 @@ public class ChatController {
         @RequestParam(defaultValue = "") String model,
         @RequestParam(defaultValue = "") String scenario
     ) {
+        // 场景授权校验：防止前端绕过传未授权的 scenarioCode 越权使用敏感业务提示词
+        if (scenario != null && !scenario.isBlank()) {
+            UserContextHolder.UserContext ctx = UserContextHolder.get();
+            String role = ctx == null ? null : ctx.role();
+            if (!scenarioAuthService.canAccess(role, scenario)) {
+                SseEmitter reject = new SseEmitter();
+                try {
+                    reject.send(SseEmitter.event().data(
+                        "{\"type\":\"Error\",\"message\":\"无权使用该场景\",\"category\":\"NON_RECOVERABLE\",\"retryable\":false}"));
+                } catch (IOException ignored) {}
+                reject.complete();
+                return reject;
+            }
+        }
         // Per-conversation lock: reject concurrent requests to the same conversation
         String resolvedModel = model.isBlank() ? defaultModel : model;
         // Resolve dataSourceId from conversation when not provided

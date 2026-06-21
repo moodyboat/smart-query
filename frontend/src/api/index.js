@@ -472,3 +472,32 @@ export async function deleteUser(id) {
 export async function changeMyPassword(oldPassword, newPassword) {
   await api.post('/auth/password', { oldPassword, newPassword })
 }
+
+// ===== 场景管理（admin） =====
+export async function fetchAllScenariosForAdmin() {
+  const { data } = await api.get('/scenarios/admin/all')
+  return data.data
+}
+
+export async function createScenario(scenario) {
+  const { data } = await api.post('/scenarios', scenario)
+  return data.data
+}
+
+export async function updateScenario(id, updates) {
+  const { data } = await api.put(`/scenarios/${id}`, updates)
+  return data.data
+}
+
+export async function deleteScenario(id) {
+  await api.delete(`/scenarios/${id}`)
+}
+
+export async function fetchScenarioRoles(id) {
+  const { data } = await api.get(`/scenarios/${id}/roles`)
+  return data.data
+}
+
+export async function setScenarioRoles(id, roles) {
+  await api.put(`/scenarios/${id}/roles`, { roles })
+}

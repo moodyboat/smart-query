@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { login as loginApi, fetchCurrentUser, logout as logoutApi } from '../api/index.js'
+import { resetScenarioCache } from '../config/scenarios.js'
 import { AUTH_STORAGE_KEYS, ROUTES } from '../constants.js'
 
 function readUser() {
@@ -56,6 +57,8 @@ export const useUserStore = defineStore('user', {
       this.userInfo = null
       localStorage.removeItem(AUTH_STORAGE_KEYS.TOKEN)
       localStorage.removeItem(AUTH_STORAGE_KEYS.USER)
+      // 重置场景缓存，避免下一个账号看到上一账号的角色授权场景
+      resetScenarioCache()
     },
     redirectToLogin() {
       // 供 axios 拦截器在 401 时调用

@@ -9,6 +9,7 @@
     @openMining="ui.openMining()"
     @openDataSource="ui.openDataSource()"
     @openPromptManager="ui.openPromptManager()"
+    @openScenarioManager="ui.openScenarioManager()"
     @goHome="goHome"
     @logout="onLogout"
   />
@@ -41,6 +42,10 @@
     v-if="ui.promptManagerVisible"
     @close="ui.closePromptManager()"
   />
+  <ScenarioManager
+    v-if="ui.scenarioManagerVisible"
+    @close="ui.closeScenarioManager()"
+  />
 </template>
 
 <script setup>
@@ -52,9 +57,11 @@ import DashboardView from '../components/DashboardView.vue'
 import MiningManager from '../components/MiningManager.vue'
 import DataSourceManager from '../components/DataSourceManager.vue'
 import PromptManager from '../components/PromptManager.vue'
+import ScenarioManager from '../components/ScenarioManager.vue'
 import { useConversationStore } from '../stores/conversation'
 import { useUIStore } from '../stores/ui'
 import { useUserStore } from '../stores/user'
+import { preloadScenarios } from '../config/scenarios.js'
 import { ROUTES } from '../constants.js'
 
 const router = useRouter()
@@ -77,7 +84,11 @@ async function onLogout() {
 function onResize() {
   ui.setIsMobile(window.innerWidth < 768)
 }
-onMounted(() => window.addEventListener('resize', onResize))
+onMounted(() => {
+  window.addEventListener('resize', onResize)
+  // 预热场景缓存（后端按当前用户角色返回可用场景）
+  preloadScenarios()
+})
 onUnmounted(() => window.removeEventListener('resize', onResize))
 
 async function onSelectConversation(convId) {

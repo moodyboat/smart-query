@@ -40,6 +40,7 @@ backend/src/main/java/com/smartquery/
 ├── service/        # 业务逻辑 (MiningService, PipelineService, ModelScheduleService,
 │                   #   WordReportService, ReportSummaryService, ChartImageService,
 │                   #   EChartsSsrRenderer, SvgToPngConverter, ScenarioService,
+│                   #   RoleScenarioService, ScenarioAuthService,  # 场景 + 按角色授权
 │                   #   QueryHistoryService, PromptTemplateService, MetadataConfigService,
 │                   #   OntologyService, ConversationSummaryService)
 ├── entity/         # 数据实体 (MiningModel, MiningPipeline, Algorithm, Chart, Report, etc.)
@@ -95,11 +96,12 @@ frontend/src/
 ## API 结构
 
 - 基路径: `/api/v1`
-- 对话: POST `/api/v1/chat/{conversationId}` (SSE)
+- 对话: GET/POST `/api/v1/chat?conversationId=X&scenario=CODE` (SSE)
 - 挖掘模型: CRUD `/api/v1/mining/model`；Pipeline: `/api/v1/mining/pipeline`
 - 数据源: CRUD `/api/v1/datasource`；算法: GET `/api/v1/mining/algorithms`
 - Word 报告: POST `/api/v1/word-report/conversation/{id}`
-- 场景/查询历史/提示词/元数据: `/api/v1/scenario`、`/api/v1/query-history`、`/api/v1/prompt-template`、`/api/v1/metadata-config`
+- 场景（**复数**，按当前用户角色过滤）: GET `/api/v1/scenarios`、GET `/api/v1/scenarios/admin/all`（admin 全量含禁用）、GET/PUT `/api/v1/scenarios/{id}/roles`（admin 查/改角色授权）、GET `/api/v1/scenarios/code/{code}/prompt`（按权限校验）
+- 查询历史/提示词/元数据: `/api/v1/query-history`、`/api/v1/prompt-templates`、`/api/v1/metadata-config`
 - 鉴权: POST `/api/v1/auth/login`、GET `/api/v1/auth/me`、POST `/api/v1/auth/logout`；用户管理 `/api/v1/users`（admin）
 
 ## Word 报告图表渲染（ECharts SSR）
@@ -126,6 +128,13 @@ Flyway 管理数据库版本，迁移文件在 `backend/src/main/resources/db/mi
 3. **挖掘模块**: 拖拽编排 Pipeline → 配置节点参数 → 执行 → 发布 → 定时调度
 4. **模型调度**: 已发布模型可配置 cron 定时调度 → 自动训练/预测 → 输出写入数据库
 5. **Word 报告**: 对话/报告 → LLM 总结章节 → ECharts SSR 渲染图表 → POI 组装 .docx 下载
+6. **场景化配置（2026-06-21）**: 按角色授权场景 + UI 配置下沉到 DB
+   - **数据模型**: `sq_scenario.ui_config` JSON 存主题色/欢迎语/能力卡片/示例；`sq_role_scenario(role, scenario_id)` 关联表授权
+   - **权限隔离**: `ScenarioAuthService.canAccess(role, code)` —— admin 直通，其他角色查 `sq_role_scenario`
+   - **API 守卫**: `ScenarioController.list()` 按当前用户角色过滤；`/scenarios/admin/all`、`POST/PUT/DELETE /scenarios`、`/{id}/roles` 仅 admin
+   - **Chat 防绕过**: `ChatController:90-105` 在 SSE 流开前校验 `scenario` 必须在用户授权范围，未授权立即返回 `Error: 无权使用该场景`
+   - **提示词生效条件**: `getDefaultPrompt` 五条件全满足（场景存在 + 启用 + scenarioId + isDefault + type=system + 提示词启用）才用场景化提示词，否则回退默认 SystemPromptBuilder
+   - **前端**: `ScenarioManager.vue` 管理场景 + UI 配置 + 角色授权；`config/scenarios.js` 删除硬编码，从 `/scenarios` 拉取响应式缓存；登出时 `resetScenarioCache()` 避免账号串扰
 
 ## 开发注意事项
 

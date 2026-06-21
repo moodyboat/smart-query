@@ -3,10 +3,12 @@ package com.smartquery.controller;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.smartquery.common.Result;
+import com.smartquery.common.UserContextHolder;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartquery.dto.PromptTemplateDTO;
 import com.smartquery.entity.PromptTemplate;
 import com.smartquery.service.PromptTemplateService;
+import com.smartquery.service.ScenarioAuthService;
 import com.smartquery.service.ScenarioService;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -29,6 +31,9 @@ public class PromptTemplateController {
     private ScenarioService scenarioService;
 
     @Autowired
+    private ScenarioAuthService scenarioAuthService;
+
+    @Autowired
     private ObjectMapper objectMapper;
 
     /**
@@ -47,10 +52,15 @@ public class PromptTemplateController {
     }
 
     /**
-     * 根据场景ID获取提示词模板
+     * 根据场景ID获取提示词模板（普通用户仅可访问授权场景）
      */
     @GetMapping("/scenario/{scenarioId}")
     public Result<List<PromptTemplateDTO>> getByScenarioId(@PathVariable Long scenarioId) {
+        UserContextHolder.UserContext ctx = UserContextHolder.get();
+        String role = ctx == null ? null : ctx.role();
+        if (!scenarioAuthService.canAccessById(role, scenarioId)) {
+            return Result.error(403, "无权访问该场景的提示词");
+        }
         List<PromptTemplate> templates = promptTemplateService.getByScenarioId(scenarioId);
         List<PromptTemplateDTO> dtos = templates.stream()
                 .map(this::convertToDTO)
