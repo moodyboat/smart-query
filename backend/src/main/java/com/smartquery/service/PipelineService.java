@@ -491,6 +491,7 @@ public class PipelineService {
             List<Map<String, Object>> nodes = objectMapper.readValue(nodesJson, List.class);
             return extractConfig(nodes);
         } catch (Exception e) {
+            log.warn("[PIPELINE] extractConfigFromNodes 解析失败，返回 null: {}", e.getMessage());
             return null;
         }
     }
