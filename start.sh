@@ -10,6 +10,11 @@ export PATH="$MAVEN_HOME/bin:$PATH"
 FRONTEND_DIR="$PROJECT_DIR/frontend"
 LOG_DIR="$PROJECT_DIR/logs"
 
+# 本地开发：DM8 默认跑在本机（含 docker 容器映射到宿主 5236）。
+# macOS 不解析 host.docker.internal（application.yml 默认值），故本地默认 127.0.0.1。
+# 如 DM8 在远程主机，shell 里 `export DM_HOST=10.0.0.1` 再 ./start.sh 即可覆盖。
+export DM_HOST="${DM_HOST:-127.0.0.1}"
+
 mkdir -p "$LOG_DIR"
 
 echo "=== 智能问数 启动 ==="

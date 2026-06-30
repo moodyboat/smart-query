@@ -25,8 +25,9 @@ public class DataSource extends BaseEntity {
     private Boolean system;
 
     public String getJdbcUrl() {
-        return switch (type) {
-            case "mysql" -> "jdbc:mysql://%s:%d/%s?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&useSSL=false".formatted(host, port, databaseName);
+        String t = type == null ? "" : type.toLowerCase();
+        return switch (t) {
+            case "mysql" -> "jdbc:mysql://%s:%d/%s?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true&connectTimeout=5000&socketTimeout=10000".formatted(host, port, databaseName);
             case "postgresql" -> "jdbc:postgresql://%s:%d/%s?currentSchema=public".formatted(host, port, databaseName);
             case "oracle" -> "jdbc:oracle:thin:@%s:%d:%s".formatted(host, port, databaseName);
             case "dm" -> "jdbc:dm://%s:%d/%s".formatted(host, port, databaseName);
@@ -36,7 +37,8 @@ public class DataSource extends BaseEntity {
     }
 
     public String getDriverClassName() {
-        return switch (type) {
+        String t = type == null ? "" : type.toLowerCase();
+        return switch (t) {
             case "mysql" -> "com.mysql.cj.jdbc.Driver";
             case "postgresql" -> "org.postgresql.Driver";
             case "oracle" -> "oracle.jdbc.OracleDriver";

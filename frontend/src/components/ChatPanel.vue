@@ -1,6 +1,6 @@
 <template>
   <section class="main-area" :class="{ 'scenario-mode': convStore.getCurrentScenario() }" :style="scenarioTheme.background ? { '--bg': scenarioTheme.background } : {}">
-    <header class="chat-header" :style="scenarioTheme.headerBg ? { 'background': scenarioTheme.headerBg } : {}">
+    <header class="chat-header">
       <button v-if="showSidebarToggle" class="hamburger-btn" @click="emit('toggleSidebar')">☰</button>
       <span class="header-title">
         <span v-if="convStore.getCurrentScenario()" class="scenario-icon">{{ currentScenarioConfig.icon }}</span>
@@ -838,12 +838,14 @@ defineExpose({ sendMessage, clearMessages, messages, updateChartOption, pendingC
 }
 
 .chat-header {
-  height: 52px; background: var(--surface); border-bottom: 1px solid var(--border);
+  height: 52px; background: var(--brand-gradient); border-bottom: none;
   display: flex; align-items: center; padding: 0 var(--space-xl);
   font-size: var(--font-lg); font-weight: 600; flex-shrink: 0;
   justify-content: space-between;
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
-.header-title { color: var(--text-primary); }
+.header-title { color: #fff; }
 .scenario-indicator {
   font-weight: 500;
   padding: 4px 12px;
@@ -871,24 +873,26 @@ defineExpose({ sendMessage, clearMessages, messages, updateChartOption, pendingC
 .hamburger-btn {
   width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;
   background: transparent; border: none; font-size: var(--font-2xl); cursor: pointer;
-  border-radius: var(--radius-md); color: var(--text-secondary); margin-right: var(--space-sm);
+  border-radius: var(--radius-md); color: #fff; margin-right: var(--space-sm);
+  transition: background var(--transition-fast);
 }
-.hamburger-btn:hover { background: var(--border-lighter); }
-.cost-badge { font-size: var(--font-sm); color: var(--text-muted); font-weight: 400; }
+.hamburger-btn:hover { background: rgba(255, 255, 255, 0.2); }
+.cost-badge { font-size: var(--font-sm); color: rgba(255, 255, 255, 0.85); font-weight: 400; }
 .step-badge {
-  font-size: var(--font-xs); color: var(--primary); font-weight: 500;
-  padding: 2px var(--space-sm); background: var(--primary-light); border-radius: var(--radius-xl);
+  font-size: var(--font-xs); color: #fff; font-weight: 500;
+  padding: 2px var(--space-sm); background: rgba(255, 255, 255, 0.22); border-radius: var(--radius-xl);
   animation: stepPulse 2s ease-in-out infinite;
 }
 .conn-badge {
   font-size: var(--font-xs); font-weight: 500; padding: 2px var(--space-sm); border-radius: var(--radius-xl);
   display: inline-flex; align-items: center; gap: var(--space-xs);
+  color: #fff;
 }
-.conn-badge.connecting { color: var(--color-warning); background: var(--color-warning-light); }
-.conn-badge.streaming { color: var(--primary); background: var(--primary-light); }
-.conn-badge.error { color: var(--color-danger); background: var(--color-danger-light); }
+.conn-badge.connecting { background: rgba(255, 255, 255, 0.22); }
+.conn-badge.streaming { background: rgba(255, 255, 255, 0.22); }
+.conn-badge.error { background: rgba(245, 108, 108, 0.85); }
 .spinner-sm {
-  width: 10px; height: 10px; border: 1.5px solid var(--border); border-top-color: var(--primary);
+  width: 10px; height: 10px; border: 1.5px solid rgba(255, 255, 255, 0.5); border-top-color: #fff;
   border-radius: 50%; animation: spin 0.6s linear infinite;
 }
 @keyframes stepPulse {
@@ -968,11 +972,12 @@ defineExpose({ sendMessage, clearMessages, messages, updateChartOption, pendingC
 }
 .retry-btn-inline:hover { background: var(--primary-light); }
 .trace-btn {
-  background: none; border: 1px solid var(--border); border-radius: var(--radius-md);
-  padding: var(--space-xs) var(--space-sm); cursor: pointer; color: var(--text-secondary); display: flex; align-items: center;
+  background: rgba(255, 255, 255, 0.12); border: 1px solid rgba(255, 255, 255, 0.28); border-radius: var(--radius-md);
+  padding: var(--space-xs) var(--space-sm); cursor: pointer; color: #fff; display: flex; align-items: center;
   margin-left: auto;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
 }
-.trace-btn:hover { background: var(--hover); border-color: var(--primary); color: var(--primary); }
+.trace-btn:hover { background: rgba(255, 255, 255, 0.24); border-color: rgba(255, 255, 255, 0.6); color: #fff; }
 
 /* 场景化样式 */
 .main-area.scenario-mode {

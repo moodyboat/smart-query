@@ -43,14 +43,14 @@ public class DataSourceUsageService {
             LEFT JOIN sq_conversation c ON ds.id = c.data_source_id AND c.deleted = 0
             LEFT JOIN sq_query_history qh ON c.id = qh.conversation_id
                 AND qh.status = 'success'
-                AND qh.created_at >= DATE_SUB(NOW(), INTERVAL ?)
+                AND qh.created_at >= DATEADD(DAY, -DAYS_ARG, SYSDATE)
             WHERE ds.deleted = 0
             GROUP BY ds.id, ds.name
             ORDER BY totalQueries DESC, lastUsedAt DESC
             """;
 
-        String interval = getTimeIntervalSql(timeRange);
-        String finalSql = sql.replace("INTERVAL ?", "INTERVAL " + interval);
+        int days = getDays(timeRange);
+        String finalSql = sql.replace("DAYS_ARG", String.valueOf(days));
 
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(finalSql);
 
@@ -132,6 +132,15 @@ public class DataSourceUsageService {
             case "weekly" -> "7 DAY";
             case "monthly" -> "30 DAY";
             default -> "7 DAY";
+        };
+    }
+
+    private int getDays(String timeRange) {
+        return switch (timeRange.toLowerCase()) {
+            case "daily" -> 1;
+            case "weekly" -> 7;
+            case "monthly" -> 30;
+            default -> 7;
         };
     }
 

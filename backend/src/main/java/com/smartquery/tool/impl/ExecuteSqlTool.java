@@ -93,7 +93,7 @@ public class ExecuteSqlTool implements LlmTool {
             String output = formatResult(rows);
             return ToolResult.ok(getName(), output, duration, rows);
         } catch (Exception e) {
-            log.error("[TOOL] execute_sql error: {}", e.getMessage());
+            log.error("[TOOL] execute_sql error: {}", e.getMessage(), e);
             return ToolResult.error(getName(), "SQL 执行错误: " + e.getMessage(), System.currentTimeMillis() - start);
         } finally {
             DataSourceContextHolder.clear();

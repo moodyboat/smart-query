@@ -110,6 +110,8 @@ import { ElMessage } from 'element-plus'
 import TrainingCodeViewer from '../TrainingCodeViewer.vue'
 import { analyzeCodeForSteps } from '../../config/trainingSteps'
 import { createCodeAnalyzer } from '../../utils/codeAnalyzer'
+import { fetchMiningModel } from '../../api'
+import { MODEL_STATUS } from '../../constants'
 
 const props = defineProps({
   show: { type: Boolean, default: false },
@@ -570,10 +572,28 @@ function startRealTraining() {
 function simulateTrainingProgress() {
   let stepIndex = 0
   const steps = trainingSteps.value
+  const modelId = props.model?.id
 
-  trainingSimulation = setInterval(() => {
+  trainingSimulation = setInterval(async () => {
+    // 先查真实状态：后端可能已秒失败（如数据源连不上），避免 UI 永远转圈
+    if (modelId) {
+      try {
+        const real = await fetchMiningModel(modelId)
+        if (real && [MODEL_STATUS.TRAINED, MODEL_STATUS.FAILED, MODEL_STATUS.PUBLISHED].includes(real.status)) {
+          const success = real.status !== MODEL_STATUS.FAILED
+          completeTraining(success, success ? {
+            success: true,
+            metrics: typeof real.metrics === 'string' ? JSON.parse(real.metrics || '{}') : (real.metrics || {}),
+            modelPath: real.modelPath,
+            featureImportance: real.featureImportance
+          } : { error: (typeof real.trainingLog === 'string' ? real.trainingLog.slice(-300) : '训练失败，请查看执行历史') })
+          return
+        }
+      } catch { /* 查询失败则继续走假进度 */ }
+    }
+
     if (stepIndex >= steps.length) {
-      // 训练完成
+      // 假进度走完仍未拿到终态：按成功兜底（后端 train-stream 会补真实结果）
       completeTraining(true)
       return
     }

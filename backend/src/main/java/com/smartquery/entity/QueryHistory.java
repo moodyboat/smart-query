@@ -21,6 +21,7 @@ public class QueryHistory {
     private Integer executionTimeMs;
     private Integer rowCount;
     private Integer totalTokens;
+    @TableField("\"MODEL\"")
     private String model;
     private BigDecimal costUsd;
     private String status;
