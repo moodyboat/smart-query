@@ -157,6 +157,12 @@ public class ChatController {
         });
 
         CompletableFuture.runAsync(() -> {
+            // 主请求线程的 UserContext 不自动传递到 async 线程，需手动捕获后重新 set，
+            // 否则下游任何 Ownership / UserContextHolder.getUserId() 调用都会拿到 null。
+            UserContextHolder.UserContext requestCtx = UserContextHolder.get();
+            if (requestCtx != null) {
+                UserContextHolder.set(requestCtx);
+            }
             ConversationContextHolder.setConversationId(conversationId);
             ConversationContextHolder.setDataSourceId(finalDataSourceId);
             ConversationContextHolder.setTraceId(UUID.randomUUID().toString().substring(0, 8));
@@ -187,6 +193,7 @@ public class ChatController {
             } finally {
                 sessionManager.unregister(conversationId);
                 ConversationContextHolder.clear();
+                UserContextHolder.clear();
             }
         }, asyncExecutor);
 

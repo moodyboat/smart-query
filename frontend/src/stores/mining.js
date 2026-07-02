@@ -123,11 +123,21 @@ export const useMiningStore = defineStore('mining', () => {
     }
   }
 
+  /** 登出/切换账号时清空，避免下一个账号看到上一个账号的模型列表 */
+  function reset() {
+    closeEventSource()
+    models.value = []
+    selectedModelId.value = null
+    dataSources.value = []
+    filterDsId.value = null
+    loading.value = false
+  }
+
   return {
     models, selectedModelId, selectedModel, publishedModels,
     dataSources, loading, filterDsId,
     loadModels, selectModel, clearSelection,
     updateModelInList, addModel, removeModel, refreshModel,
-    watchModelStatus, closeEventSource
+    watchModelStatus, closeEventSource, reset
   }
 })

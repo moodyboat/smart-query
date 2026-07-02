@@ -1,5 +1,7 @@
 package com.smartquery.controller;
 
+import com.smartquery.common.BusinessException;
+import com.smartquery.common.Ownership;
 import com.smartquery.common.Result;
 import com.smartquery.datasource.DataSourceManager;
 import com.smartquery.dto.DataSourceUsageStats;
@@ -20,6 +22,7 @@ public class DataSourceController {
     private final DataSourceMapper dataSourceMapper;
     private final DataSourceManager dataSourceManager;
     private final DataSourceUsageService usageService;
+    private final Ownership ownership;
 
     @org.springframework.beans.factory.annotation.Value("${spring.datasource.url}")
     private String systemDatasourceUrl;
@@ -36,6 +39,7 @@ public class DataSourceController {
 
     @PostMapping
     public Result<DataSource> create(@RequestBody DataSource ds) {
+        if (!ownership.isAdmin()) throw new BusinessException(403, "仅管理员可创建数据源");
         dataSourceMapper.insert(ds);
         return Result.ok(ds);
     }
@@ -57,6 +61,7 @@ public class DataSourceController {
 
     @PutMapping("/{id}")
     public Result<Void> update(@PathVariable Long id, @RequestBody DataSource ds) {
+        if (!ownership.isAdmin()) throw new BusinessException(403, "仅管理员可修改数据源");
         DataSource existing = dataSourceMapper.selectById(id);
         if (existing == null) return Result.error("数据源不存在");
         ds.setId(id);
@@ -76,6 +81,7 @@ public class DataSourceController {
 
     @DeleteMapping("/{id}")
     public Result<Void> delete(@PathVariable Long id) {
+        if (!ownership.isAdmin()) throw new BusinessException(403, "仅管理员可删除数据源");
         dataSourceManager.destroyDataSource(id);
         dataSourceMapper.deleteById(id);
         return Result.ok();

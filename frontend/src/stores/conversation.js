@@ -39,6 +39,15 @@ export const useConversationStore = defineStore('conversation', () => {
     currentConvId.value = null
   }
 
+  /** 登出/切换账号时清空，避免下一个账号看到上一个账号的会话与历史缓存 */
+  function reset() {
+    currentConvId.value = null
+    currentDsId.value = null
+    currentScenario.value = null
+    messageCache.clear()
+    historyMsgCounter = 0
+  }
+
   /**
    * Invalidate cache for a specific conversation (e.g. after new message).
    */
@@ -350,6 +359,7 @@ export const useConversationStore = defineStore('conversation', () => {
     getCurrentScenario,
     clearCurrent,
     invalidateCache,
+    reset,
     loadConversationHistory
   }
 })

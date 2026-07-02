@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
 import { login as loginApi, fetchCurrentUser, logout as logoutApi } from '../api/index.js'
 import { resetScenarioCache } from '../config/scenarios.js'
+import { useConversationStore } from './conversation.js'
+import { useMiningStore } from './mining.js'
 import { AUTH_STORAGE_KEYS, ROUTES } from '../constants.js'
 
 function readUser() {
@@ -59,6 +61,15 @@ export const useUserStore = defineStore('user', {
       localStorage.removeItem(AUTH_STORAGE_KEYS.USER)
       // 重置场景缓存，避免下一个账号看到上一账号的角色授权场景
       resetScenarioCache()
+      // 重置其他业务 store，避免下一个账号在公共电脑上看到上一账号的会话/模型列表
+      try {
+        const conv = useConversationStore()
+        conv.reset()
+      } catch { /* store 不可用时忽略 */ }
+      try {
+        const mining = useMiningStore()
+        mining.reset()
+      } catch { /* store 不可用时忽略 */ }
     },
     redirectToLogin() {
       // 供 axios 拦截器在 401 时调用

@@ -5,6 +5,7 @@ import com.smartquery.common.ModelStatus;
 import com.smartquery.common.Ownership;
 import com.smartquery.common.RateLimiter;
 import com.smartquery.common.Result;
+import com.smartquery.common.UserContextHolder;
 import com.smartquery.datasource.DataSourceManager;
 import com.smartquery.entity.MiningModel;
 import com.smartquery.entity.ModelExecution;
@@ -185,6 +186,10 @@ public class MiningModelController {
         ExecutorService executor = Executors.newSingleThreadExecutor();
 
         executor.execute(() -> {
+            UserContextHolder.UserContext requestCtx = UserContextHolder.get();
+            if (requestCtx != null) {
+                UserContextHolder.set(requestCtx);
+            }
             try {
                 MiningModel model = miningModelMapper.selectById(id);
                 if (model == null || Integer.valueOf(1).equals(model.getDeleted())) {
@@ -261,6 +266,7 @@ public class MiningModelController {
                 emitter.completeWithError(e);
             } finally {
                 executor.shutdown();
+                UserContextHolder.clear();
             }
         });
 
@@ -514,6 +520,10 @@ public class MiningModelController {
         if (!ownership.model(id)) throw new BusinessException(403, "无权访问该模型");
         SseEmitter emitter = new SseEmitter(statusStreamTimeoutMs);
         sseExecutor.submit(() -> {
+            UserContextHolder.UserContext requestCtx = UserContextHolder.get();
+            if (requestCtx != null) {
+                UserContextHolder.set(requestCtx);
+            }
             try {
                 String lastStatus = null;
                 for (int i = 0; i < 60; i++) { // max 2 min (60 × 2s)
@@ -546,6 +556,7 @@ public class MiningModelController {
                 }
             } finally {
                 emitter.complete();
+                UserContextHolder.clear();
             }
         });
         return emitter;

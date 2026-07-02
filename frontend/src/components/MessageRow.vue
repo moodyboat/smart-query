@@ -104,7 +104,7 @@
             </div>
             <div v-for="art in (block.result.artifacts || [])" :key="art" class="artifact-block">
               <img
-                :src="'/artifacts/' + sanitizeFilename(art)"
+                :src="artifactUrl(art)"
                 class="artifact-img"
                 :alt="sanitizeFilename(art)"
                 @error="$event.target.src = ''; $event.target.parentElement.classList.add('img-failed')"
@@ -348,6 +348,9 @@ import DashboardRenderer from './DashboardRenderer.vue'
 import DataTable from './DataTable.vue'
 import { rerenderChart, METRIC_NAMES } from '../api'
 import { BLOCK_STATUS } from '../constants'
+import { useUserStore } from '../stores/user'
+
+const userStore = useUserStore()
 
 const props = defineProps({
   msg: { type: Object, required: true },
@@ -664,6 +667,12 @@ function formatPythonError(stderr) {
 function sanitizeFilename(path) {
   const name = path.split('/').pop()
   return name.replace(/[^a-zA-Z0-9._-]/g, '')
+}
+
+// /artifacts/** 现已强制鉴权，<img> 无法带 Authorization header，走 ?token= 兜底
+function artifactUrl(path) {
+  const name = sanitizeFilename(path)
+  return `/artifacts/${name}?token=${encodeURIComponent(userStore.token || '')}`
 }
 
 function retryPython(code, stderr) {
