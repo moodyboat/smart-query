@@ -1,3 +1,5 @@
+package com.smartquery.controller;
+
 import com.smartquery.common.BusinessException;
 import com.smartquery.common.Ownership;
 import com.smartquery.common.Result;
