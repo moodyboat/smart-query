@@ -1,5 +1,7 @@
 package com.smartquery.controller;
 
+import com.smartquery.common.BusinessException;
+import com.smartquery.common.Ownership;
 import com.smartquery.common.Result;
 import com.smartquery.datasource.DataSourceManager;
 import com.smartquery.entity.Chart;
@@ -23,17 +25,26 @@ public class ChartController {
     private final DataSourceManager dataSourceManager;
     private final SqlSafetyValidator sqlSafetyValidator;
     private final ObjectMapper objectMapper;
+    private final Ownership ownership;
 
     @org.springframework.beans.factory.annotation.Value("${smart-query.sql-safety.max-rows:1000}")
     private int maxRows;
 
     @GetMapping("/{id}")
     public Result<Chart> get(@PathVariable Long id) {
-        return Result.ok(chartMapper.selectById(id));
+        Chart chart = chartMapper.selectById(id);
+        if (chart == null) return Result.ok(null);
+        if (!ownership.conversation(chart.getConversationId())) {
+            throw new BusinessException(403, "无权访问该图表");
+        }
+        return Result.ok(chart);
     }
 
     @GetMapping("/conversation/{conversationId}")
     public Result<List<Chart>> listByConversation(@PathVariable Long conversationId) {
+        if (!ownership.conversation(conversationId)) {
+            throw new BusinessException(403, "无权访问该会话");
+        }
         return Result.ok(chartMapper.selectList(
             new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Chart>()
                 .eq(Chart::getConversationId, conversationId)));
@@ -50,6 +61,9 @@ public class ChartController {
         Chart chart = chartMapper.selectById(id);
         if (chart == null) {
             return Result.error("图表不存在: " + id);
+        }
+        if (!ownership.conversation(chart.getConversationId())) {
+            throw new BusinessException(403, "无权访问该图表");
         }
         if (chart.getBaseSql() == null || chart.getBaseSql().isBlank()) {
             return Result.error("图表没有关联的 SQL 查询");

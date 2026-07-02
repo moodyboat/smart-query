@@ -2,6 +2,7 @@ package com.smartquery.controller;
 
 import com.smartquery.common.BusinessException;
 import com.smartquery.common.ModelStatus;
+import com.smartquery.common.Ownership;
 import com.smartquery.common.RateLimiter;
 import com.smartquery.common.Result;
 import com.smartquery.datasource.DataSourceManager;
@@ -54,6 +55,21 @@ public class MiningModelController {
     private final DataSourceManager dataSourceManager;
     private final ConversationEventLogger eventLogger;
     private final RateLimiter rateLimiter;
+    private final Ownership ownership;
+
+    /**
+     * 按 id 加载模型并校验归属当前用户；不存在或越权时抛 BusinessException。
+     */
+    private MiningModel loadOwned(Long id) {
+        MiningModel model = miningModelMapper.selectById(id);
+        if (model == null || Integer.valueOf(1).equals(model.getDeleted())) {
+            throw new BusinessException("模型不存在: " + id);
+        }
+        if (!ownership.modelOwnedBy(model)) {
+            throw new BusinessException(403, "无权访问该模型");
+        }
+        return model;
+    }
 
     @GetMapping
     public Result<List<MiningModel>> list(
@@ -62,6 +78,11 @@ public class MiningModelController {
         LambdaQueryWrapper<MiningModel> wrapper = new LambdaQueryWrapper<MiningModel>()
                 .eq(MiningModel::getDeleted, 0)
                 .orderByDesc(MiningModel::getCreatedAt);
+        if (!ownership.isAdmin()) {
+            String uid = ownership.currentUserIdString();
+            if (uid == null) return Result.ok(List.of());
+            wrapper.eq(MiningModel::getUserId, uid);
+        }
         if (dataSourceId != null) wrapper.eq(MiningModel::getDataSourceId, dataSourceId);
         if (status != null) wrapper.eq(MiningModel::getStatus, status);
         return Result.ok(miningModelMapper.selectList(wrapper));
@@ -69,11 +90,7 @@ public class MiningModelController {
 
     @GetMapping("/{id}")
     public Result<MiningModel> get(@PathVariable Long id) {
-        MiningModel model = miningModelMapper.selectById(id);
-        if (model == null || Integer.valueOf(1).equals(model.getDeleted())) {
-            throw new BusinessException("模型不存在: " + id);
-        }
-        return Result.ok(model);
+        return Result.ok(loadOwned(id));
     }
 
     @GetMapping("/by-pipeline/{pipelineId}")
@@ -93,15 +110,13 @@ public class MiningModelController {
 
     @PutMapping("/{id}")
     public Result<MiningModel> update(@PathVariable Long id, @RequestBody MiningModel updates) {
+        if (!ownership.model(id)) throw new BusinessException(403, "无权访问该模型");
         return Result.ok(miningService.updateModel(id, updates));
     }
 
     @PutMapping("/{id}/predict-config")
     public Result<MiningModel> updatePredictConfig(@PathVariable Long id, @RequestBody Map<String, Object> body) {
-        MiningModel model = miningModelMapper.selectById(id);
-        if (model == null || Integer.valueOf(1).equals(model.getDeleted())) {
-            throw new BusinessException("模型不存在: " + id);
-        }
+        MiningModel model = loadOwned(id);
         miningModelMapper.update(null,
             new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<MiningModel>()
                 .eq(MiningModel::getId, id)
@@ -113,10 +128,7 @@ public class MiningModelController {
 
     @DeleteMapping("/{id}")
     public Result<Void> delete(@PathVariable Long id) {
-        MiningModel model = miningModelMapper.selectById(id);
-        if (model == null || Integer.valueOf(1).equals(model.getDeleted())) {
-            throw new BusinessException("模型不存在: " + id);
-        }
+        MiningModel model = loadOwned(id);
         if (ModelStatus.TRAINING.equals(model.getStatus())) {
             throw new BusinessException("模型正在训练中，无法删除");
         }
@@ -132,6 +144,9 @@ public class MiningModelController {
      */
     @DeleteMapping("/{id}/force")
     public Result<Void> forceDelete(@PathVariable Long id) {
+        if (!ownership.isAdmin()) {
+            throw new BusinessException(403, "仅管理员可强制删除模型");
+        }
         MiningModel model = miningModelMapper.selectById(id);
         if (model == null) {
             throw new BusinessException("模型不存在: " + id);
@@ -155,6 +170,7 @@ public class MiningModelController {
         if (!rateLimiter.tryAcquire("train", rateTrain)) {
             throw new BusinessException(429, "训练请求过于频繁，请稍后重试");
         }
+        if (!ownership.model(id)) throw new BusinessException(403, "无权访问该模型");
         return Result.ok(miningService.trainModel(id, "manual"));
     }
 
@@ -164,6 +180,7 @@ public class MiningModelController {
      */
     @GetMapping(value = "/{id}/train-stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter trainStream(@PathVariable Long id) {
+        if (!ownership.model(id)) throw new BusinessException(403, "无权访问该模型");
         SseEmitter emitter = new SseEmitter(statusStreamTimeoutMs);
         ExecutorService executor = Executors.newSingleThreadExecutor();
 
@@ -325,16 +342,19 @@ public class MiningModelController {
 
     @PostMapping("/{id}/publish")
     public Result<MiningModel> publish(@PathVariable Long id, @RequestBody(required = false) Map<String, Object> body) {
+        if (!ownership.model(id)) throw new BusinessException(403, "无权访问该模型");
         return Result.ok(miningService.publishModel(id, body));
     }
 
     @PostMapping("/{id}/offline")
     public Result<MiningModel> offline(@PathVariable Long id) {
+        if (!ownership.model(id)) throw new BusinessException(403, "无权访问该模型");
         return Result.ok(miningService.offlineModel(id));
     }
 
     @PutMapping("/{id}/hyperparams")
     public Result<MiningModel> updateHyperparams(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        if (!ownership.model(id)) throw new BusinessException(403, "无权访问该模型");
         try {
             String hyperparamsJson = new com.fasterxml.jackson.databind.ObjectMapper()
                     .writeValueAsString(body.get("hyperparameters"));
@@ -346,6 +366,7 @@ public class MiningModelController {
 
     @GetMapping("/{id}/executions")
     public Result<List<ModelExecution>> executions(@PathVariable Long id) {
+        if (!ownership.model(id)) throw new BusinessException(403, "无权访问该模型");
         return Result.ok(modelExecutionMapper.selectList(
                 new LambdaQueryWrapper<ModelExecution>()
                         .eq(ModelExecution::getModelId, id)
@@ -355,10 +376,7 @@ public class MiningModelController {
 
     @PutMapping("/{id}/schedule")
     public Result<MiningModel> updateSchedule(@PathVariable Long id, @RequestBody Map<String, Object> body) {
-        MiningModel model = miningModelMapper.selectById(id);
-        if (model == null || Integer.valueOf(1).equals(model.getDeleted())) {
-            throw new BusinessException("模型不存在: " + id);
-        }
+        MiningModel model = loadOwned(id);
         if (body.containsKey("cron")) {
             model.setScheduleCron((String) body.get("cron"));
         }
@@ -376,6 +394,7 @@ public class MiningModelController {
 
     @PostMapping("/{id}/predict")
     public Result<Map<String, Object>> predict(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        if (!ownership.model(id)) throw new BusinessException(403, "无权访问该模型");
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> inputRows = (List<Map<String, Object>>) body.get("input");
         if (inputRows == null || inputRows.isEmpty()) {
@@ -391,6 +410,7 @@ public class MiningModelController {
         if (!rateLimiter.tryAcquire("predict", ratePredict)) {
             throw new BusinessException(429, "预测请求过于频繁，请稍后重试");
         }
+        if (!ownership.model(id)) throw new BusinessException(403, "无权访问该模型");
         String overrideTable = body != null ? (String) body.get("inputTable") : null;
         String overrideResult = body != null ? (String) body.get("resultTable") : null;
         String overrideFilter = body != null ? (String) body.get("inputFilter") : null;
@@ -399,6 +419,7 @@ public class MiningModelController {
 
     @GetMapping("/{id}/validate")
     public Result<Map<String, Object>> validate(@PathVariable Long id) {
+        if (!ownership.model(id)) throw new BusinessException(403, "无权访问该模型");
         return Result.ok(miningService.validateForTraining(id));
     }
 
@@ -406,6 +427,7 @@ public class MiningModelController {
     public Result<List<PredictionResult>> predictions(
             @PathVariable Long id,
             @RequestParam(defaultValue = "100") int limit) {
+        if (!ownership.model(id)) throw new BusinessException(403, "无权访问该模型");
         return Result.ok(miningService.getPredictionResults(id, limit));
     }
 
@@ -414,10 +436,7 @@ public class MiningModelController {
             @PathVariable Long id,
             @RequestParam String tableName,
             @RequestParam(defaultValue = "10") int limit) {
-        MiningModel model = miningModelMapper.selectById(id);
-        if (model == null || Integer.valueOf(1).equals(model.getDeleted())) {
-            throw new BusinessException("模型不存在: " + id);
-        }
+        MiningModel model = loadOwned(id);
         JdbcTemplate jdbc = dataSourceManager.getJdbcTemplate(model.getDataSourceId());
         com.smartquery.common.IdentifierValidator.validateTableName(tableName);
         Integer count = jdbc.queryForObject(
@@ -435,10 +454,7 @@ public class MiningModelController {
 
     @PostMapping("/{id}/sync-pipeline")
     public Result<MiningModel> syncPipeline(@PathVariable Long id) {
-        MiningModel model = miningModelMapper.selectById(id);
-        if (model == null || Integer.valueOf(1).equals(model.getDeleted())) {
-            throw new BusinessException("模型不存在: " + id);
-        }
+        MiningModel model = loadOwned(id);
         if (model.getPipelineId() == null) {
             throw new BusinessException("模型未关联流程");
         }
@@ -450,15 +466,13 @@ public class MiningModelController {
 
     @PostMapping("/{id}/rollback/{executionId}")
     public Result<MiningModel> rollback(@PathVariable Long id, @PathVariable Long executionId) {
+        if (!ownership.model(id)) throw new BusinessException(403, "无权访问该模型");
         return Result.ok(miningService.rollbackToExecution(id, executionId));
     }
 
     @GetMapping("/{id}/lineage")
     public Result<List<Map<String, Object>>> lineage(@PathVariable Long id) {
-        MiningModel model = miningModelMapper.selectById(id);
-        if (model == null || Integer.valueOf(1).equals(model.getDeleted())) {
-            throw new BusinessException("模型不存在: " + id);
-        }
+        MiningModel model = loadOwned(id);
         return Result.ok(eventLogger.getConversationTrace(model.getConversationId()));
     }
 
@@ -497,6 +511,7 @@ public class MiningModelController {
      */
     @GetMapping(value = "/{id}/status-stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter statusStream(@PathVariable Long id) {
+        if (!ownership.model(id)) throw new BusinessException(403, "无权访问该模型");
         SseEmitter emitter = new SseEmitter(statusStreamTimeoutMs);
         sseExecutor.submit(() -> {
             try {

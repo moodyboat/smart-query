@@ -21,6 +21,10 @@ public class MiningModel {
 
     private String source;
 
+    /** 归属用户 ID（与 sq_conversation.user_id 对齐，String 类型）。
+     *  admin 可见全部；其他用户只能访问自己的模型。 */
+    private String userId;
+
     private String modelType;
     private String algorithm;
 

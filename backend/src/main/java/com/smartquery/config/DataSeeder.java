@@ -72,6 +72,13 @@ public class DataSeeder implements CommandLineRunner {
     private static final String ALTER_SQ_SCENARIO_ADD_UI_CONFIG_SQL =
         "ALTER TABLE sq_scenario ADD COLUMN ui_config TEXT";
 
+    /**
+     * 给 sq_mining_model 加 user_id 列，用于多租户隔离（同 sq_conversation.user_id）。
+     * 列已存在或老库不支持时由 catch 吞错。
+     */
+    private static final String ALTER_SQ_MINING_MODEL_ADD_USER_ID_SQL =
+        "ALTER TABLE sq_mining_model ADD COLUMN user_id VARCHAR(50)";
+
     private final UserMapper userMapper;
     private final ScenarioMapper scenarioMapper;
     private final RoleScenarioMapper roleScenarioMapper;
@@ -98,6 +105,14 @@ public class DataSeeder implements CommandLineRunner {
             log.info("[SEED] sq_scenario 加列 ui_config 成功");
         } catch (Exception e) {
             log.debug("[SEED] sq_scenario.ui_config 已存在或加列失败（可忽略）: {}", e.getMessage());
+        }
+
+        // 兼容老库：尝试给 sq_mining_model 加 user_id 列，用于多租户隔离
+        try {
+            jdbcTemplate.execute(ALTER_SQ_MINING_MODEL_ADD_USER_ID_SQL);
+            log.info("[SEED] sq_mining_model 加列 user_id 成功");
+        } catch (Exception e) {
+            log.debug("[SEED] sq_mining_model.user_id 已存在或加列失败（可忽略）: {}", e.getMessage());
         }
 
         seedDefaultAdmin();

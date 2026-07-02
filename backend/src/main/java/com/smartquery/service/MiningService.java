@@ -2,6 +2,7 @@ package com.smartquery.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartquery.common.ModelStatus;
+import com.smartquery.common.UserContextHolder;
 import com.smartquery.datasource.DataSourceManager;
 import com.smartquery.entity.*;
 import com.smartquery.util.DbUrlUtil;
@@ -121,6 +122,13 @@ public class MiningService {
         }
         if (model.getTargetColumn() != null && !model.getTargetColumn().isBlank()) {
             com.smartquery.common.IdentifierValidator.validateColumnName(model.getTargetColumn());
+        }
+        // 注入归属：手动创建走当前登录用户；Pipeline 自动触发（无 user context）时留空，admin 可见
+        if (model.getUserId() == null) {
+            UserContextHolder.UserContext ctx = UserContextHolder.get();
+            if (ctx != null && ctx.userId() != null) {
+                model.setUserId(ctx.userId().toString());
+            }
         }
         model.setStatus(ModelStatus.DRAFT);
         model.setVersion(1);

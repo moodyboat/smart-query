@@ -1,5 +1,7 @@
 package com.smartquery.controller;
 
+import com.smartquery.common.BusinessException;
+import com.smartquery.common.Ownership;
 import com.smartquery.common.Result;
 import com.smartquery.entity.ChatMessage;
 import com.smartquery.entity.Conversation;
@@ -15,6 +17,8 @@ import com.smartquery.entity.Dashboard;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+
 import java.util.List;
 
 @RestController
@@ -28,38 +32,50 @@ public class ConversationController {
     private final ReportMapper reportMapper;
     private final DashboardMapper dashboardMapper;
     private final ConversationEventLogger eventLogger;
+    private final Ownership ownership;
 
     @PostMapping
     public Result<Conversation> create(@RequestBody Conversation conversation) {
+        // 强制以当前登录用户身份创建，防止伪造 userId 越权
+        conversation.setId(null);
+        conversation.setUserId(ownership.currentUserIdString());
         conversationMapper.insert(conversation);
         return Result.ok(conversation);
     }
 
     @GetMapping
     public Result<List<Conversation>> list() {
-        return Result.ok(conversationMapper.selectList(null));
+        if (ownership.isAdmin()) {
+            return Result.ok(conversationMapper.selectList(null));
+        }
+        String uid = ownership.currentUserIdString();
+        if (uid == null) return Result.ok(List.of());
+        return Result.ok(conversationMapper.selectList(
+            new LambdaQueryWrapper<Conversation>().eq(Conversation::getUserId, uid)));
     }
 
     @GetMapping("/{id}")
     public Result<Conversation> get(@PathVariable Long id) {
+        if (!ownership.conversation(id)) {
+            throw new BusinessException(403, "无权访问该会话");
+        }
         return Result.ok(conversationMapper.selectById(id));
     }
 
     @DeleteMapping("/{id}")
     public Result<Void> delete(@PathVariable Long id) {
+        if (!ownership.conversation(id)) {
+            throw new BusinessException(403, "无权访问该会话");
+        }
         // Cascade delete related entities
         chatMessageMapper.delete(
-            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ChatMessage>()
-                .eq(ChatMessage::getConversationId, id));
+            new LambdaQueryWrapper<ChatMessage>().eq(ChatMessage::getConversationId, id));
         chartMapper.delete(
-            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Chart>()
-                .eq(Chart::getConversationId, id));
+            new LambdaQueryWrapper<Chart>().eq(Chart::getConversationId, id));
         reportMapper.delete(
-            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Report>()
-                .eq(Report::getConversationId, id));
+            new LambdaQueryWrapper<Report>().eq(Report::getConversationId, id));
         dashboardMapper.delete(
-            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Dashboard>()
-                .eq(Dashboard::getConversationId, id));
+            new LambdaQueryWrapper<Dashboard>().eq(Dashboard::getConversationId, id));
         conversationMapper.deleteById(id);
         return Result.ok(null);
     }
@@ -79,6 +95,13 @@ public class ConversationController {
                 return Result.error(400, "没有有效的对话ID");
             }
 
+            // 校验整个批次归属：发现任何越权 id 立即拒绝，避免部分成功导致状态混乱
+            for (Long id : ids) {
+                if (!ownership.conversation(id)) {
+                    throw new BusinessException(403, "无权删除会话: " + id);
+                }
+            }
+
             java.util.Set<Long> failedIds = new java.util.HashSet<>();
             int deletedCount = 0;
 
@@ -86,17 +109,13 @@ public class ConversationController {
                 try {
                     // Cascade delete related entities for each conversation
                     chatMessageMapper.delete(
-                        new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ChatMessage>()
-                            .eq(ChatMessage::getConversationId, id));
+                        new LambdaQueryWrapper<ChatMessage>().eq(ChatMessage::getConversationId, id));
                     chartMapper.delete(
-                        new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Chart>()
-                            .eq(Chart::getConversationId, id));
+                        new LambdaQueryWrapper<Chart>().eq(Chart::getConversationId, id));
                     reportMapper.delete(
-                        new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Report>()
-                            .eq(Report::getConversationId, id));
+                        new LambdaQueryWrapper<Report>().eq(Report::getConversationId, id));
                     dashboardMapper.delete(
-                        new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Dashboard>()
-                            .eq(Dashboard::getConversationId, id));
+                        new LambdaQueryWrapper<Dashboard>().eq(Dashboard::getConversationId, id));
                     conversationMapper.deleteById(id);
                     deletedCount++;
                 } catch (Exception e) {
@@ -115,6 +134,8 @@ public class ConversationController {
             }
 
             return Result.ok(null);
+        } catch (BusinessException e) {
+            throw e;
         } catch (Exception e) {
             e.printStackTrace();
             return Result.error(500, "批量删除失败: " + e.getMessage());
@@ -126,6 +147,9 @@ public class ConversationController {
         String title = body.get("title");
         if (title == null || title.isBlank()) return Result.error("标题不能为空");
         if (title.length() > 100) title = title.substring(0, 100);
+        if (!ownership.conversation(id)) {
+            throw new BusinessException(403, "无权访问该会话");
+        }
         Conversation conv = conversationMapper.selectById(id);
         if (conv == null) return Result.error("对话不存在");
         conv.setTitle(title);
@@ -135,8 +159,11 @@ public class ConversationController {
 
     @GetMapping("/{id}/messages")
     public Result<List<ChatMessage>> getMessages(@PathVariable Long id) {
+        if (!ownership.conversation(id)) {
+            throw new BusinessException(403, "无权访问该会话");
+        }
         List<ChatMessage> messages = chatMessageMapper.selectList(
-            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ChatMessage>()
+            new LambdaQueryWrapper<ChatMessage>()
                 .eq(ChatMessage::getConversationId, id)
                 .orderByAsc(ChatMessage::getCreatedAt));
 
@@ -155,7 +182,7 @@ public class ConversationController {
                     chatMessageMapper.insert(cm);
                 }
                 messages = chatMessageMapper.selectList(
-                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ChatMessage>()
+                    new LambdaQueryWrapper<ChatMessage>()
                         .eq(ChatMessage::getConversationId, id)
                         .orderByAsc(ChatMessage::getCreatedAt));
 

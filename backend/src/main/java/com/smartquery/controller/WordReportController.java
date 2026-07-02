@@ -1,5 +1,5 @@
-package com.smartquery.controller;
-
+import com.smartquery.common.BusinessException;
+import com.smartquery.common.Ownership;
 import com.smartquery.common.Result;
 import com.smartquery.service.WordReportService;
 import lombok.RequiredArgsConstructor;
@@ -19,6 +19,7 @@ import jakarta.servlet.http.HttpServletResponse;
 public class WordReportController {
 
     private final WordReportService wordReportService;
+    private final Ownership ownership;
 
     /**
      * 从对话记录生成Word报告
@@ -27,6 +28,9 @@ public class WordReportController {
     public Result<byte[]> generateFromConversation(
             @PathVariable Long conversationId,
             @RequestParam(required = false) String title) {
+        if (!ownership.conversation(conversationId)) {
+            throw new BusinessException(403, "无权访问该会话");
+        }
         try {
             byte[] wordDocument = wordReportService.generateReportFromConversation(
                 conversationId,
@@ -57,6 +61,12 @@ public class WordReportController {
             @PathVariable Long conversationId,
             @RequestParam(required = false) String title,
             HttpServletResponse response) throws java.io.IOException {
+        if (!ownership.conversation(conversationId)) {
+            response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+            response.setContentType("application/json;charset=UTF-8");
+            response.getWriter().write("{\"code\":403,\"message\":\"无权访问该会话\"}");
+            return;
+        }
         try {
             byte[] wordDocument = wordReportService.generateReportFromConversation(
                 conversationId,
