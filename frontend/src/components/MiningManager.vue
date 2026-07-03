@@ -1,18 +1,14 @@
 <template>
   <div class="page-container mining-manager">
     <!-- Header -->
-    <div class="mining-header">
-      <div class="header-left">
-        <button class="back-btn" @click="$emit('close')">
-          <span class="back-arrow">&larr;</span> 返回问数
-        </button>
-        <h2 class="page-title">数据挖掘管理</h2>
-      </div>
-      <div class="header-actions">
-        <el-select v-model="filterDsId" placeholder="数据源" size="small" clearable style="width: 160px">
-          <el-option v-for="ds in dataSources" :key="ds.id" :label="ds.name" :value="ds.id" />
-        </el-select>
-      </div>
+    <div class="page-header">
+      <button class="back-btn" @click="$emit('close')">
+        <span class="back-arrow">&larr;</span> 返回问数
+      </button>
+      <h2 class="page-title">数据挖掘管理</h2>
+      <el-select v-model="filterDsId" placeholder="数据源" size="small" clearable style="width: 160px; margin-left: auto">
+        <el-option v-for="ds in dataSources" :key="ds.id" :label="ds.name" :value="ds.id" />
+      </el-select>
     </div>
 
     <el-tabs v-model="activeTab" class="mining-tabs">
@@ -1046,22 +1042,6 @@ function onDetailTuneParams(model) {
 .selected-count { font-size: var(--font-base); color: var(--el-color-danger); font-weight: 600; }
 .batch-hint { display: flex; align-items: center; }
 .hint-text { font-size: var(--font-sm); color: var(--el-color-info); background: var(--el-color-info-light-9); padding: 4px 10px; border-radius: var(--radius-sm); }
-.mining-header {
-  height: 52px; background: var(--surface); border-bottom: 1px solid var(--border);
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 0 var(--space-xl); flex-shrink: 0;
-}
-.header-left { display: flex; align-items: center; gap: var(--space-md); }
-.back-btn {
-  background: none; border: none; cursor: pointer; font-size: var(--font-md);
-  color: var(--primary); display: flex; align-items: center; gap: 4px;
-  padding: 4px 8px; border-radius: var(--radius-md);
-  transition: background 0.15s;
-}
-.back-btn:hover { background: var(--primary-light); }
-.back-arrow { font-size: var(--font-lg); }
-.page-title { font-size: var(--font-xl); font-weight: 600; color: var(--text-primary); }
-.header-actions { display: flex; align-items: center; gap: var(--space-sm); }
 
 /* Params editor (kept inline since it's a small dialog) */
 .params-editor { padding: var(--space-sm) 0; }
