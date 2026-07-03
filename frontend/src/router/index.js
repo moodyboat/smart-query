@@ -10,12 +10,6 @@ const routes = [
     meta: { public: true },
   },
   {
-    path: ROUTES.HOME,
-    name: 'Home',
-    component: () => import('../views/Home.vue'),
-    meta: { requiresAuth: true },
-  },
-  {
     path: ROUTES.WORKSPACE,
     name: 'Workspace',
     component: () => import('../views/Workspace.vue'),
@@ -31,12 +25,12 @@ const routes = [
     path: '/',
     redirect: () => {
       const user = useUserStore()
-      return user.isLoggedIn ? ROUTES.HOME : ROUTES.LOGIN
+      return user.isLoggedIn ? ROUTES.WORKSPACE : ROUTES.LOGIN
     },
   },
   {
     path: '/:pathMatch(.*)*',
-    redirect: ROUTES.HOME,
+    redirect: ROUTES.WORKSPACE,
   },
 ]
 
@@ -47,17 +41,17 @@ const router = createRouter({
 
 router.beforeEach((to) => {
   const user = useUserStore()
-  // 已登录访问登录页 → 跳首页
+  // 已登录访问登录页 → 跳工作台
   if (to.meta.public && user.isLoggedIn && to.path === ROUTES.LOGIN) {
-    return { path: ROUTES.HOME }
+    return { path: ROUTES.WORKSPACE }
   }
   // 需鉴权但未登录 → 跳登录页
   if (to.meta.requiresAuth && !user.isLoggedIn) {
     return { path: ROUTES.LOGIN }
   }
-  // 需要管理员但当前非管理员 → 跳首页
+  // 需要管理员但当前非管理员 → 跳工作台
   if (to.meta.requiresAdmin && !user.isAdmin) {
-    return { path: ROUTES.HOME }
+    return { path: ROUTES.WORKSPACE }
   }
   return true
 })

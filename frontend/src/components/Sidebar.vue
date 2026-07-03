@@ -100,11 +100,6 @@
           <span class="user-name" :title="userStore.displayName">{{ userStore.displayName }}</span>
         </div>
         <div class="user-actions">
-          <el-tooltip content="返回首页" placement="top">
-            <el-button text circle @click="$emit('goHome')">
-              <el-icon><HomeFilled /></el-icon>
-            </el-button>
-          </el-tooltip>
           <el-tooltip content="退出登录" placement="top">
             <el-button text circle @click="$emit('logout')">
               <el-icon><SwitchButton /></el-icon>
@@ -136,7 +131,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
-import { Plus, DataAnalysis, DataLine, TrendCharts, EditPen, Setting, Delete, HomeFilled, SwitchButton, Star } from '@element-plus/icons-vue'
+import { Plus, DataAnalysis, DataLine, TrendCharts, EditPen, Setting, Delete, SwitchButton, Star } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { fetchConversations, fetchDataSources, createConversation, deleteConversation, renameConversation, batchDeleteConversations } from '../api'
 import { useUserStore } from '../stores/user'
@@ -157,7 +152,7 @@ const editInput = ref(null)
 const batchMode = ref(false)
 const selectedConversations = ref({})
 
-const emit = defineEmits(['selectConversation', 'conversationCreated', 'conversationDeleted', 'dataSourceChanged', 'openMining', 'openDataSource', 'openPromptManager', 'openScenarioManager', 'goHome', 'logout'])
+const emit = defineEmits(['selectConversation', 'conversationCreated', 'conversationDeleted', 'dataSourceChanged', 'openMining', 'openDataSource', 'openPromptManager', 'openScenarioManager', 'logout'])
 
 const filteredConversations = computed(() => {
   if (!searchQuery.value.trim()) return conversations.value

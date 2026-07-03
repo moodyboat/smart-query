@@ -10,7 +10,6 @@
     @openDataSource="ui.openDataSource()"
     @openPromptManager="ui.openPromptManager()"
     @openScenarioManager="ui.openScenarioManager()"
-    @goHome="goHome"
     @logout="onLogout"
   />
   <ChatPanel
@@ -71,10 +70,6 @@ const userStore = useUserStore()
 
 const sidebar = ref(null)
 const chatPanel = ref(null)
-
-function goHome() {
-  router.push(ROUTES.HOME)
-}
 
 async function onLogout() {
   await userStore.logout()

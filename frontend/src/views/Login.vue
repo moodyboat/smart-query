@@ -100,8 +100,7 @@ async function handleLogin() {
   loading.value = true
   try {
     await userStore.login(form.username, form.password)
-    ElMessage.success('登录成功')
-    router.push(ROUTES.HOME)
+    router.push(ROUTES.WORKSPACE)
   } catch (e) {
     // 错误提示已由 axios 拦截器处理
   } finally {

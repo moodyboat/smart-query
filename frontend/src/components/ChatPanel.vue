@@ -18,11 +18,10 @@
       <span v-if="loading && stepInfo.total > 0" class="step-badge">
         步骤 {{ stepInfo.current }}/{{ stepInfo.total }}
       </span>
-      <span v-if="cost > 0" class="cost-badge">Token: {{ totalTokens }}</span>
       <button v-if="conversationId" class="trace-btn" @click="traceVisible = true" title="查看执行追踪">
         <el-icon :size="16"><View /></el-icon>
       </button>
-      <button class="trace-btn" @click="adminVisible = true" title="系统监控">
+      <button v-if="userStore.isAdmin" class="trace-btn" @click="adminVisible = true" title="系统监控">
         <el-icon :size="16"><Monitor /></el-icon>
       </button>
       <button v-if="conversationId && messages.length > 0" class="trace-btn" @click="generateWordReport" title="生成Word报告">
@@ -116,6 +115,7 @@
     <TracePanel
       v-model:visible="traceVisible"
       :conversationId="conversationId"
+      :totalTokens="totalTokens"
     />
     <AdminStatsPanel v-model:visible="adminVisible" />
   </section>
@@ -135,6 +135,7 @@ import { SSE_SAFETY_TIMEOUT_MS, BLOCK_STATUS } from '../constants'
 import { useMiningStore } from '../stores/mining'
 import { useUIStore } from '../stores/ui'
 import { useConversationStore } from '../stores/conversation'
+import { useUserStore } from '../stores/user'
 import { getScenarioConfig } from '../config/scenarios.js'
 
 const props = defineProps({
@@ -148,6 +149,7 @@ const adminVisible = ref(false)
 const mining = useMiningStore()
 const ui = useUIStore()
 const convStore = useConversationStore()
+const userStore = useUserStore()
 
 // 提示词模块相关
 const scenarioModules = ref([])

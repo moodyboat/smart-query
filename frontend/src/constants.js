@@ -6,7 +6,6 @@ export const TRAINING_SAFETY_TIMEOUT_MS = 300_000
 // 路由路径
 export const ROUTES = Object.freeze({
   LOGIN: '/login',
-  HOME: '/home',
   WORKSPACE: '/workspace',
   USER_MANAGEMENT: '/admin/users',
 })

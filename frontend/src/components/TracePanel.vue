@@ -20,6 +20,7 @@
       <div class="trace-summary">
         共 {{ events.length }} 个事件 &middot;
         <span v-if="totalDuration > 0">{{ (totalDuration / 1000).toFixed(1) }}s</span>
+        <span v-if="totalTokens > 0" class="trace-tokens"> &middot; Tokens: {{ totalTokens }}</span>
       </div>
 
       <el-timeline>
@@ -109,7 +110,8 @@ import { fetchConversationTraces } from '../api'
 
 const props = defineProps({
   conversationId: { type: Number, default: null },
-  visible: { type: Boolean, default: false }
+  visible: { type: Boolean, default: false },
+  totalTokens: { type: Number, default: 0 }
 })
 const emit = defineEmits(['close', 'update:visible'])
 
@@ -209,6 +211,10 @@ function truncate(str, max) {
   margin-bottom: 4px;
 }
 .trace-duration {
+  font-size: var(--font-sm);
+  color: var(--text-muted);
+}
+.trace-tokens {
   font-size: var(--font-sm);
   color: var(--text-muted);
 }

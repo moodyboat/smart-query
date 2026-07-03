@@ -2,7 +2,7 @@
   <div class="um-page">
     <header class="um-header">
       <div class="um-left">
-        <el-button text :icon="ArrowLeft" @click="$router.push(ROUTES.HOME)">返回首页</el-button>
+        <el-button text :icon="ArrowLeft" @click="$router.push(ROUTES.WORKSPACE)">返回工作台</el-button>
         <h2>用户管理</h2>
       </div>
       <div class="um-actions">
