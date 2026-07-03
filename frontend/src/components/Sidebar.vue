@@ -113,9 +113,6 @@
       <el-button style="width: 100%; margin-bottom: var(--space-sm)" @click="$emit('openPromptManager')">
         <el-icon><EditPen /></el-icon> 提示词管理
       </el-button>
-      <el-button style="width: 100%; margin-bottom: var(--space-sm)" @click="openMetricEngine">
-        <el-icon><DataAnalysis /></el-icon> 指标引擎
-      </el-button>
       <el-button style="width: 100%; margin-bottom: var(--space-sm)" @click="$emit('openMining')">
         <el-icon><TrendCharts /></el-icon> 数据挖掘管理
       </el-button>
@@ -131,7 +128,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
-import { Plus, DataAnalysis, DataLine, TrendCharts, EditPen, Setting, Delete, SwitchButton, Star } from '@element-plus/icons-vue'
+import { Plus, DataLine, TrendCharts, EditPen, Setting, Delete, SwitchButton, Star } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { fetchConversations, fetchDataSources, createConversation, deleteConversation, renameConversation, batchDeleteConversations } from '../api'
 import { useUserStore } from '../stores/user'
@@ -266,10 +263,6 @@ async function saveRename(convId) {
 
 function cancelRename() {
   editingId.value = null
-}
-
-function openMetricEngine() {
-  window.open('http://localhost:5174', '_blank')
 }
 
 // Batch mode functions

@@ -13,8 +13,6 @@
         <li><el-icon><Document /></el-icon> 一键生成 Word 分析报告</li>
         <li><el-icon><Lock /></el-icon> 私有化部署，数据不出域</li>
       </ul>
-      <div class="brand-decor decor-1"></div>
-      <div class="brand-decor decor-2"></div>
     </div>
 
     <!-- 右侧表单区 -->
@@ -62,7 +60,7 @@
           </el-form-item>
         </el-form>
 
-        <div class="login-hint">
+        <div v-if="isDev" class="login-hint">
           默认账号 <b>admin</b> / <b>admin123</b>（首次启动自动创建，请尽快修改密码）
         </div>
       </el-card>
@@ -80,6 +78,8 @@ import { ROUTES } from '../constants.js'
 
 const router = useRouter()
 const userStore = useUserStore()
+
+const isDev = import.meta.env.DEV
 
 const formRef = ref(null)
 const loading = ref(false)
@@ -155,23 +155,6 @@ async function handleLogin() {
   font-size: 16px;
   margin-bottom: 18px;
   opacity: 0.95;
-}
-.brand-decor {
-  position: absolute;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.08);
-}
-.decor-1 {
-  width: 320px;
-  height: 320px;
-  top: -80px;
-  right: -60px;
-}
-.decor-2 {
-  width: 200px;
-  height: 200px;
-  bottom: -60px;
-  left: 10%;
 }
 
 /* 右侧表单区 */
