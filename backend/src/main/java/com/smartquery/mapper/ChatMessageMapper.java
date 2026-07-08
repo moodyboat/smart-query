@@ -11,7 +11,7 @@ import java.util.Map;
 @Mapper
 public interface ChatMessageMapper extends BaseMapper<ChatMessage> {
 
-    @Select("SELECT id, role, content, \"MODEL\" AS model, trace_id, created_at " +
+    @Select("SELECT id, role, content, trace_id, created_at " +
             "FROM sq_chat_message " +
             "WHERE conversation_id = #{conversationId} " +
             "ORDER BY created_at ASC")

@@ -37,11 +37,14 @@ public class OpenAiCompatibleService implements LlmService {
     @org.springframework.beans.factory.annotation.Value("${smart-query.llm.http-timeout-seconds:180}")
     private int httpTimeoutSeconds;
 
-    @org.springframework.beans.factory.annotation.Value("${smart-query.llm.max-retries:3}")
+    @org.springframework.beans.factory.annotation.Value("${smart-query.llm.max-retries:100}")
     private int maxRetries;
 
     @org.springframework.beans.factory.annotation.Value("${smart-query.llm.retry-delay-ms:1000}")
     private long retryDelayMs;
+
+    @org.springframework.beans.factory.annotation.Value("${smart-query.llm.max-retry-delay-ms:30000}")
+    private long maxRetryDelayMs;
 
     @org.springframework.beans.factory.annotation.Value("${smart-query.llm.connect-timeout-seconds:30}")
     private int connectTimeoutSeconds;
@@ -121,8 +124,9 @@ public class OpenAiCompatibleService implements LlmService {
 
                 if (response.statusCode() == 429 || response.statusCode() >= 500) {
                     if (attempt < maxRetries) {
-                        long delay = retryDelayMs * (1L << attempt);
-                        log.warn("[LLM] retry after {}ms, status={}", delay, response.statusCode());
+                        long raw = retryDelayMs * (1L << Math.min(attempt, 30));
+                        long delay = Math.min(raw, maxRetryDelayMs);
+                        log.warn("[LLM] retry after {}ms (attempt {}/{}, max-cap {}ms), status={}", delay, attempt + 1, maxRetries, maxRetryDelayMs, response.statusCode());
                         Thread.sleep(delay);
                         continue;
                     }
@@ -152,8 +156,16 @@ public class OpenAiCompatibleService implements LlmService {
                 if (attempt == maxRetries) {
                     throw new RuntimeException("LLM call failed after " + maxRetries + " retries", e);
                 }
-                log.warn("[LLM] attempt {} failed: {} - {}", attempt, e.getClass().getSimpleName(), e.getMessage());
+                long raw = retryDelayMs * (1L << Math.min(attempt, 30));
+                long delay = Math.min(raw, maxRetryDelayMs);
+                log.warn("[LLM] attempt {}/{} failed: {} - {} (retry after {}ms)", attempt + 1, maxRetries, e.getClass().getSimpleName(), e.getMessage(), delay);
                 log.debug("[LLM] exception details:", e);
+                try {
+                    Thread.sleep(delay);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("LLM call interrupted during retry backoff", ie);
+                }
             }
         }
         return List.of();
