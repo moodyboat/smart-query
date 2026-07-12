@@ -852,19 +852,54 @@ function retryPython(code, stderr) {
 .chart-title-inline, .report-title-inline { font-weight: 500; color: var(--text-regular); }
 
 .tool-input { padding: 0; }
-.tool-result { padding: var(--space-md) 14px; font-size: var(--font-md); }
+.tool-result {
+  padding: var(--space-md) var(--space-lg);
+  font-size: var(--font-md);
+  line-height: 1.6;
+  color: var(--text-regular);
+}
+.tool-result :deep(table) {
+  border-collapse: collapse; width: 100%; margin: var(--space-xs) 0; font-size: var(--font-sm);
+}
+.tool-result :deep(th), .tool-result :deep(td) {
+  border: 1px solid var(--border-light);
+  padding: 6px var(--space-sm);
+  text-align: left;
+}
+.tool-result :deep(th) {
+  background: var(--bg);
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.tool-result :deep(tr:nth-child(even) td) {
+  background: var(--bg);
+}
 .sql-error {
   display: flex; align-items: flex-start; gap: var(--space-xs);
   color: var(--color-danger); font-size: var(--font-md);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--color-danger-light);
+  border-left: 3px solid var(--color-danger);
+  border-radius: var(--radius-sm);
+  margin: var(--space-sm) 0;
 }
 .result-meta { font-size: var(--font-sm); color: var(--text-muted); margin-top: var(--space-xs); }
 
 .code-block {
-  padding: var(--space-sm) 14px; font-family: var(--font-family-mono); font-size: var(--font-sm);
-  overflow-x: auto; white-space: pre-wrap; margin: 0;
+  padding: var(--space-md) var(--space-lg);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-sm);
+  line-height: 1.6;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  margin: 0;
+  background: var(--code-bg);
+  color: var(--code-fg);
 }
-.sql-code { background: var(--code-bg); color: var(--code-fg); }
-.python-code { background: var(--code-bg); color: var(--code-fg); }
+.sql-code, .python-code { background: var(--code-bg); color: var(--code-fg); }
 
 .python-tool .code-details {
   border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
