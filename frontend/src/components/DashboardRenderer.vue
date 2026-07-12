@@ -185,23 +185,31 @@ watch(() => props.charts, (newCharts) => {
 <style scoped>
 .dashboard-container {
   background: var(--surface);
-  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-xl);
   overflow: hidden;
+  box-shadow: var(--shadow-sm);
 }
 .dashboard-header {
-  padding: var(--space-md) var(--space-lg);
-  font-size: var(--font-lg);
-  font-weight: 600;
+  padding: var(--space-lg) var(--space-xl);
+  font-size: var(--font-xl);
+  font-weight: 700;
   color: var(--text-primary);
   border-bottom: 1px solid var(--border-light);
+  letter-spacing: -0.01em;
+  background: linear-gradient(180deg, var(--brand-primary-lighter) 0%, transparent 100%);
 }
 .dashboard-filters {
-  display: flex; gap: var(--space-sm); padding: var(--space-sm) var(--space-md); flex-wrap: wrap;
-  align-items: center; border-bottom: 1px solid var(--border-lighter);
+  display: flex; gap: var(--space-sm);
+  padding: var(--space-md) var(--space-lg);
+  flex-wrap: wrap;
+  align-items: center;
+  border-bottom: 1px solid var(--border-lighter);
+  background: var(--bg);
 }
 .dashboard-grid {
-  padding: var(--space-md);
-  gap: 12px;
+  padding: var(--space-lg);
+  gap: var(--space-md);
 }
 .grid-2col {
   display: grid;
@@ -213,6 +221,21 @@ watch(() => props.charts, (newCharts) => {
 }
 .dashboard-chart-cell {
   min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  padding: var(--space-sm);
+  transition: all var(--transition-base);
+}
+.dashboard-chart-cell:hover {
+  border-color: var(--brand-primary-light);
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
+}
+.dashboard-chart-cell :deep(.chart-card),
+.dashboard-chart-cell :deep(> div) {
+  border: none !important;
+  box-shadow: none !important;
 }
 .dashboard-loading {
   padding: var(--space-xl);
@@ -235,7 +258,7 @@ watch(() => props.charts, (newCharts) => {
   gap: var(--space-sm);
 }
 .spinner {
-  width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--primary);
+  width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--brand-primary);
   border-radius: 50%; animation: spin 0.6s linear infinite; flex-shrink: 0;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
