@@ -81,35 +81,52 @@
         </div>
       </div>
 
-      <div
-        v-for="conv in filteredConversations"
-        :key="conv.id"
-        class="conv-item"
-        :class="{ active: conv.id === currentConvId, 'batch-mode': batchMode }"
-        @click="handleConvClick(conv)"
-      >
-        <el-checkbox
-          v-if="batchMode"
-          v-model="selectedConversations[conv.id]"
-          @click.stop
-          class="conv-checkbox"
-        />
-        <span class="conv-icon">💬</span>
-        <template v-if="editingId === conv.id">
-          <input
-            ref="editInput"
-            v-model="editTitle"
-            class="conv-edit-input"
-            @keydown.enter="saveRename(conv.id)"
-            @keydown.escape="cancelRename"
-            @blur="saveRename(conv.id)"
+      <template v-if="!batchMode">
+        <div v-for="g in groupedConversations" :key="g.key" class="conv-group">
+          <div v-if="g.items.length" class="conv-group-label">{{ g.label }}</div>
+          <div
+            v-for="conv in g.items"
+            :key="conv.id"
+            class="conv-item"
+            :class="{ active: conv.id === currentConvId }"
+            @click="handleConvClick(conv)"
+          >
+            <span class="conv-icon">💬</span>
+            <template v-if="editingId === conv.id">
+              <input
+                ref="editInput"
+                v-model="editTitle"
+                class="conv-edit-input"
+                @keydown.enter="saveRename(conv.id)"
+                @keydown.escape="cancelRename"
+                @blur="saveRename(conv.id)"
+              />
+            </template>
+            <template v-else>
+              <span class="conv-title" @dblclick="startRename(conv)">{{ conv.title || '新对话' }}</span>
+            </template>
+            <span class="conv-delete" @click.stop="handleDelete(conv.id)" title="删除">×</span>
+          </div>
+        </div>
+      </template>
+      <template v-else>
+        <div
+          v-for="conv in filteredConversations"
+          :key="conv.id"
+          class="conv-item batch-mode"
+          :class="{ active: conv.id === currentConvId }"
+          @click="handleConvClick(conv)"
+        >
+          <el-checkbox
+            v-model="selectedConversations[conv.id]"
+            @click.stop
+            class="conv-checkbox"
           />
-        </template>
-        <template v-else>
-          <span class="conv-title" @dblclick="startRename(conv)">{{ conv.title || '新对话' }}</span>
-        </template>
-        <span class="conv-delete" @click.stop="handleDelete(conv.id)" title="删除">×</span>
-      </div>
+          <span class="conv-icon">💬</span>
+          <span class="conv-title">{{ conv.title || '新对话' }}</span>
+          <span class="conv-delete" @click.stop="handleDelete(conv.id)" title="删除">×</span>
+        </div>
+      </template>
       <div v-if="!filteredConversations.length && conversations.length" class="conv-empty">未找到匹配对话</div>
       <div v-if="!conversations.length" class="conv-empty">暂无对话</div>
     </div>
@@ -226,6 +243,31 @@ const filteredConversations = computed(() => {
   if (!searchQuery.value.trim()) return conversations.value
   const q = searchQuery.value.toLowerCase()
   return conversations.value.filter(c => (c.title || '新对话').toLowerCase().includes(q))
+})
+
+/**
+ * 按时间分组（今天/昨天/更早），仅非批量模式 + 无搜索时启用。
+ * 后端按 created_at 倒序返回，所以同组内仍保持最新在最上。
+ */
+const groupedConversations = computed(() => {
+  if (batchMode.value || searchQuery.value.trim()) {
+    return [{ key: 'all', label: '', items: filteredConversations.value }]
+  }
+  const now = new Date()
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const startOfYesterday = startOfToday - 86400000
+  const today = [], yesterday = [], earlier = []
+  for (const c of filteredConversations.value) {
+    const t = c.createdAt ? new Date(c.createdAt).getTime() : 0
+    if (t >= startOfToday) today.push(c)
+    else if (t >= startOfYesterday) yesterday.push(c)
+    else earlier.push(c)
+  }
+  return [
+    { key: 'today', label: '今天', items: today },
+    { key: 'yesterday', label: '昨天', items: yesterday },
+    { key: 'earlier', label: '更早', items: earlier }
+  ]
 })
 
 const qaEnabledDataSources = computed(() => {
@@ -562,6 +604,15 @@ defineExpose({ setCurrentConversation, getSelectedDataSourceId, conversations, r
 .conv-delete:hover { background: var(--sidebar-danger-hover-bg); color: var(--sidebar-danger-hover-fg); }
 .conv-empty {
   text-align: center; color: var(--sidebar-fg-muted); font-size: var(--font-md); padding: 30px 0;
+}
+.conv-group { margin-bottom: var(--space-sm); }
+.conv-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--sidebar-fg-muted);
+  letter-spacing: 0.05em;
+  padding: var(--space-sm) var(--space-md) var(--space-xs);
+  text-transform: uppercase;
 }
 
 .sidebar-footer {

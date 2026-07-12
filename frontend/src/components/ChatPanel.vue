@@ -97,13 +97,14 @@
       <div v-else class="input-row">
         <el-input
           v-model="inputText"
-          placeholder="输入你的问题..."
+          placeholder="输入你的问题，回车发送..."
           size="large"
           @keydown.enter.prevent="sendMessage"
           :disabled="loading"
           clearable
+          class="chat-input"
         />
-        <el-button type="primary" size="large" :loading="loading" @click="sendMessage">
+        <el-button type="primary" size="large" :loading="loading" @click="sendMessage" class="send-btn">
           发送
         </el-button>
       </div>
@@ -978,13 +979,46 @@ defineExpose({ sendMessage, clearMessages, messages, updateChartOption, pendingC
 .example-chip.disabled { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
 
 .input-area {
-  padding: var(--space-lg) var(--space-xl); background: var(--surface);
-  border-top: 1px solid var(--border); flex-shrink: 0;
+  padding: var(--space-md) var(--space-xl) var(--space-lg);
+  background: var(--surface);
+  border-top: 1px solid var(--border-light);
+  flex-shrink: 0;
 }
-.input-row { display: flex; gap: var(--space-sm); }
-.input-row .el-input { flex: 1; }
+.input-row {
+  display: flex; gap: var(--space-sm);
+  max-width: 1200px; margin: 0 auto;
+}
+.input-row .chat-input {
+  flex: 1;
+}
+.input-row :deep(.chat-input .el-input__wrapper) {
+  border-radius: var(--radius-pill);
+  padding: 4px 18px;
+  box-shadow: 0 0 0 1px var(--border) inset;
+  transition: box-shadow var(--transition-base);
+}
+.input-row :deep(.chat-input .el-input__wrapper:hover) {
+  box-shadow: 0 0 0 1px var(--brand-primary-light) inset;
+}
+.input-row :deep(.chat-input.is-focus .el-input__wrapper),
+.input-row :deep(.chat-input .el-input__wrapper.is-focus) {
+  box-shadow: 0 0 0 2px var(--brand-primary-light) inset, var(--shadow-brand) !important;
+}
+.send-btn {
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-xl);
+  background: var(--brand-gradient);
+  border-color: transparent;
+  box-shadow: var(--shadow-brand);
+  font-weight: 500;
+}
+.send-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-lg), var(--shadow-brand);
+}
 .input-hint {
-  text-align: center; padding: var(--space-sm); color: var(--text-muted); font-size: var(--font-md);
+  text-align: center; padding: var(--space-lg); color: var(--text-muted); font-size: var(--font-md);
+  display: flex; align-items: center; justify-content: center; gap: var(--space-sm);
 }
 .no-response-hint {
   text-align: center; padding: var(--space-xl); color: var(--text-muted); font-size: var(--font-md);
