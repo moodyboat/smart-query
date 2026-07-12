@@ -318,3 +318,79 @@ body {
 .page-container :deep(.el-table .cell) {
   padding: 0 12px;
 }
+
+/* ===== el-dialog / el-message-box 全局统一风（所有弹窗受益）===== */
+.el-dialog {
+  border-radius: var(--radius-xl) !important;
+  overflow: hidden;
+  box-shadow: var(--shadow-xl) !important;
+  border: 1px solid var(--border-light);
+}
+.el-dialog__header {
+  padding: var(--space-lg) var(--space-xl) var(--space-md) !important;
+  margin-right: 0 !important;
+  border-bottom: 1px solid var(--border-lighter);
+  background: linear-gradient(180deg, var(--brand-primary-lighter) 0%, transparent 100%);
+}
+.el-dialog__title {
+  font-size: var(--font-xl) !important;
+  font-weight: 700 !important;
+  color: var(--text-primary) !important;
+  letter-spacing: -0.01em;
+}
+.el-dialog__headerbtn {
+  top: var(--space-md) !important;
+  right: var(--space-lg) !important;
+  width: 28px !important;
+  height: 28px !important;
+  border-radius: var(--radius-md);
+  transition: background var(--transition-fast);
+}
+.el-dialog__headerbtn:hover {
+  background: var(--border-lighter);
+}
+.el-dialog__body {
+  padding: var(--space-lg) var(--space-xl) !important;
+  color: var(--text-regular);
+}
+.el-dialog__footer {
+  padding: var(--space-md) var(--space-xl) var(--space-lg) !important;
+  border-top: 1px solid var(--border-lighter);
+  background: var(--bg);
+}
+.el-dialog__footer .el-button {
+  min-width: 80px;
+  border-radius: var(--radius-md);
+}
+
+/* el-message-box（确认对话框）同步 */
+.el-message-box {
+  border-radius: var(--radius-xl) !important;
+  border: 1px solid var(--border-light);
+  box-shadow: var(--shadow-xl) !important;
+  padding: var(--space-lg) var(--space-lg) var(--space-md) !important;
+}
+.el-message-box__header {
+  padding: 0 0 var(--space-sm) 0 !important;
+  margin-right: 0 !important;
+}
+.el-message-box__title {
+  font-size: var(--font-lg) !important;
+  font-weight: 700 !important;
+  color: var(--text-primary) !important;
+}
+.el-message-box__content {
+  padding: var(--space-sm) 0 !important;
+  color: var(--text-regular);
+}
+.el-message-box__btns .el-button {
+  border-radius: var(--radius-md);
+}
+
+/* el-message 全局提示也统一圆角 */
+.el-message {
+  border-radius: var(--radius-pill) !important;
+  box-shadow: var(--shadow-md) !important;
+  border: 1px solid var(--border-light) !important;
+  padding: 10px 18px !important;
+}
