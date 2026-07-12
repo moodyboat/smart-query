@@ -128,19 +128,21 @@
           </el-tooltip>
         </div>
       </div>
-      <el-button v-if="userStore.isAdmin" style="width: 100%; margin-bottom: var(--space-sm)" @click="$emit('openScenarioManager')">
-        <el-icon><Star /></el-icon> 场景管理
-      </el-button>
-      <el-button style="width: 100%; margin-bottom: var(--space-sm)" @click="$emit('openPromptManager')">
-        <el-icon><EditPen /></el-icon> 提示词管理
-      </el-button>
-      <el-button style="width: 100%; margin-bottom: var(--space-sm)" @click="$emit('openMining')">
-        <el-icon><TrendCharts /></el-icon> 数据挖掘管理
-      </el-button>
-      <el-button style="width: 100%; margin-bottom: var(--space-sm)" @click="$emit('openDataSource')">
-        <el-icon><DataLine /></el-icon> 数据源管理
-      </el-button>
-      <el-button type="primary" style="width: 100%" :loading="creating" @click="handleNewConversation">
+      <div class="admin-actions">
+        <el-button v-if="userStore.isAdmin" @click="$emit('openScenarioManager')">
+          <el-icon><Star /></el-icon> 场景
+        </el-button>
+        <el-button @click="$emit('openPromptManager')">
+          <el-icon><EditPen /></el-icon> 提示词
+        </el-button>
+        <el-button @click="$emit('openMining')">
+          <el-icon><TrendCharts /></el-icon> 挖掘
+        </el-button>
+        <el-button @click="$emit('openDataSource')">
+          <el-icon><DataLine /></el-icon> 数据源
+        </el-button>
+      </div>
+      <el-button type="primary" class="new-conv-btn" :loading="creating" @click="handleNewConversation">
         <el-icon><Plus /></el-icon> 新建对话
       </el-button>
     </div>
@@ -439,7 +441,7 @@ defineExpose({ setCurrentConversation, getSelectedDataSourceId, conversations, r
   color: var(--sidebar-fg);
   display: flex; flex-direction: column; flex-shrink: 0;
   transition: transform 0.25s ease;
-  background-image: radial-gradient(circle at 30% 0%, rgba(99, 102, 241, 0.08), transparent 60%);
+  background-image: radial-gradient(circle at 30% 0%, var(--sidebar-brand-glow), transparent 60%);
 }
 @media (max-width: 767px) {
   .sidebar {
@@ -452,10 +454,13 @@ defineExpose({ setCurrentConversation, getSelectedDataSourceId, conversations, r
 .sidebar-header {
   padding: var(--space-lg);
   border-bottom: 1px solid var(--sidebar-border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
 }
 .sidebar-header h2 {
   font-size: var(--font-xl); font-weight: 700; color: var(--sidebar-fg-strong);
-  margin: 0 0 var(--space-sm);
+  margin: 0;
   letter-spacing: 0.02em;
 }
 .sidebar-header h2::before {
@@ -474,7 +479,7 @@ defineExpose({ setCurrentConversation, getSelectedDataSourceId, conversations, r
 .scenario-select,
 .ds-select {
   width: 100%;
-  margin-top: var(--space-xs);
+  margin: 0;
 }
 .sidebar :deep(.el-select .el-select__wrapper) {
   background: var(--sidebar-bg-soft);
@@ -484,7 +489,7 @@ defineExpose({ setCurrentConversation, getSelectedDataSourceId, conversations, r
   min-height: 32px;
 }
 .sidebar :deep(.el-select .el-select__wrapper:hover) {
-  border-color: rgba(99, 102, 241, 0.4);
+  border-color: var(--sidebar-brand-border);
 }
 .sidebar :deep(.el-select .el-select__placeholder),
 .sidebar :deep(.el-select .el-select__selected-item) {
@@ -530,13 +535,13 @@ defineExpose({ setCurrentConversation, getSelectedDataSourceId, conversations, r
   width: 18px; height: 18px;
   display: inline-flex; align-items: center; justify-content: center;
   border-radius: 50%;
-  background: rgba(99, 102, 241, 0.15);
+  background: var(--sidebar-icon-bg);
   color: var(--sidebar-fg-muted);
   font-size: 10px;
 }
 .conv-item.active .conv-icon {
   background: var(--brand-primary);
-  color: white;
+  color: var(--on-dark-text);
 }
 .conv-title {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
@@ -554,7 +559,7 @@ defineExpose({ setCurrentConversation, getSelectedDataSourceId, conversations, r
   color: var(--sidebar-fg-muted); flex-shrink: 0; cursor: pointer; transition: all 0.15s;
 }
 .conv-item:hover .conv-delete { display: inline-flex; }
-.conv-delete:hover { background: rgba(239, 68, 68, 0.2); color: #fca5a5; }
+.conv-delete:hover { background: var(--sidebar-danger-hover-bg); color: var(--sidebar-danger-hover-fg); }
 .conv-empty {
   text-align: center; color: var(--sidebar-fg-muted); font-size: var(--font-md); padding: 30px 0;
 }
@@ -562,11 +567,13 @@ defineExpose({ setCurrentConversation, getSelectedDataSourceId, conversations, r
 .sidebar-footer {
   padding: var(--space-md);
   border-top: 1px solid var(--sidebar-border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
 }
 .user-bar {
   display: flex; align-items: center; justify-content: space-between;
   padding: var(--space-xs) var(--space-sm);
-  margin-bottom: var(--space-sm);
   border-radius: var(--radius-md);
   background: var(--sidebar-bg-soft);
 }
@@ -576,7 +583,7 @@ defineExpose({ setCurrentConversation, getSelectedDataSourceId, conversations, r
 .user-avatar {
   flex-shrink: 0;
   background: var(--brand-gradient);
-  color: var(--surface);
+  color: var(--on-dark-text);
   font-size: 13px; font-weight: 600;
 }
 .user-name {
@@ -586,9 +593,37 @@ defineExpose({ setCurrentConversation, getSelectedDataSourceId, conversations, r
 }
 .user-actions { display: flex; gap: 2px; }
 
-/* 深色 Sidebar 里 el-button 主色按钮（新建对话/批量管理）保持醒目 */
-.sidebar-footer :deep(.el-button--primary),
-.sidebar-header :deep(.el-button--primary) {
+/* 2x2 网格管理按钮，节省垂直空间 */
+.admin-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-xs);
+}
+.admin-actions :deep(.el-button) {
+  margin: 0 !important;
+  padding: 0 var(--space-sm);
+  height: 30px;
+  font-size: var(--font-sm);
+  background: var(--sidebar-bg-soft);
+  border: 1px solid var(--sidebar-border);
+  color: var(--sidebar-fg);
+}
+.admin-actions :deep(.el-button:hover) {
+  background: var(--sidebar-hover);
+  border-color: var(--sidebar-brand-border);
+  color: var(--sidebar-fg-strong);
+}
+.admin-actions :deep(.el-button .el-icon) {
+  font-size: 14px;
+  margin-right: 2px;
+}
+.new-conv-btn {
+  width: 100%;
+  margin: 0 !important;
+}
+
+/* 深色 Sidebar 里 el-button 主色按钮（新建对话）保持醒目 */
+.sidebar-footer :deep(.el-button--primary) {
   background: var(--brand-gradient);
   border-color: transparent;
   box-shadow: var(--shadow-brand);

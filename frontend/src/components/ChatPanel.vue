@@ -844,10 +844,10 @@ defineExpose({ sendMessage, clearMessages, messages, updateChartOption, pendingC
   display: flex; align-items: center; padding: 0 var(--space-xl);
   font-size: var(--font-lg); font-weight: 600; flex-shrink: 0;
   justify-content: space-between;
-  color: #fff;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  color: var(--on-dark-text);
+  box-shadow: var(--shadow-sm);
 }
-.header-title { color: #fff; }
+.header-title { color: var(--on-dark-text); }
 .scenario-indicator {
   font-weight: 500;
   padding: 4px 12px;
@@ -875,26 +875,26 @@ defineExpose({ sendMessage, clearMessages, messages, updateChartOption, pendingC
 .hamburger-btn {
   width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;
   background: transparent; border: none; font-size: var(--font-2xl); cursor: pointer;
-  border-radius: var(--radius-md); color: #fff; margin-right: var(--space-sm);
+  border-radius: var(--radius-md); color: var(--on-dark-text); margin-right: var(--space-sm);
   transition: background var(--transition-fast);
 }
-.hamburger-btn:hover { background: rgba(255, 255, 255, 0.2); }
-.cost-badge { font-size: var(--font-sm); color: rgba(255, 255, 255, 0.85); font-weight: 400; }
+.hamburger-btn:hover { background: var(--on-dark-fill-hover); }
+.cost-badge { font-size: var(--font-sm); color: var(--on-dark-muted); font-weight: 400; }
 .step-badge {
-  font-size: var(--font-xs); color: #fff; font-weight: 500;
-  padding: 2px var(--space-sm); background: rgba(255, 255, 255, 0.22); border-radius: var(--radius-xl);
+  font-size: var(--font-xs); color: var(--on-dark-text); font-weight: 500;
+  padding: 2px var(--space-sm); background: var(--on-dark-fill); border-radius: var(--radius-xl);
   animation: stepPulse 2s ease-in-out infinite;
 }
 .conn-badge {
   font-size: var(--font-xs); font-weight: 500; padding: 2px var(--space-sm); border-radius: var(--radius-xl);
   display: inline-flex; align-items: center; gap: var(--space-xs);
-  color: #fff;
+  color: var(--on-dark-text);
 }
-.conn-badge.connecting { background: rgba(255, 255, 255, 0.22); }
-.conn-badge.streaming { background: rgba(255, 255, 255, 0.22); }
+.conn-badge.connecting { background: var(--on-dark-fill); }
+.conn-badge.streaming { background: var(--on-dark-fill); }
 .conn-badge.error { background: rgba(245, 108, 108, 0.85); }
 .spinner-sm {
-  width: 10px; height: 10px; border: 1.5px solid rgba(255, 255, 255, 0.5); border-top-color: #fff;
+  width: 10px; height: 10px; border: 1.5px solid var(--on-dark-border); border-top-color: var(--on-dark-text);
   border-radius: 50%; animation: spin 0.6s linear infinite;
 }
 @keyframes stepPulse {
@@ -994,12 +994,12 @@ defineExpose({ sendMessage, clearMessages, messages, updateChartOption, pendingC
 }
 .retry-btn-inline:hover { background: var(--primary-light); }
 .trace-btn {
-  background: rgba(255, 255, 255, 0.12); border: 1px solid rgba(255, 255, 255, 0.28); border-radius: var(--radius-md);
-  padding: var(--space-xs) var(--space-sm); cursor: pointer; color: #fff; display: flex; align-items: center;
+  background: var(--on-dark-fill); border: 1px solid var(--on-dark-border); border-radius: var(--radius-md);
+  padding: var(--space-xs) var(--space-sm); cursor: pointer; color: var(--on-dark-text); display: flex; align-items: center;
   margin-left: auto;
   transition: background var(--transition-fast), border-color var(--transition-fast);
 }
-.trace-btn:hover { background: rgba(255, 255, 255, 0.24); border-color: rgba(255, 255, 255, 0.6); color: #fff; }
+.trace-btn:hover { background: var(--on-dark-fill-hover); border-color: var(--on-dark-border-strong); color: var(--on-dark-text); }
 
 /* 场景化样式 */
 .main-area.scenario-mode {

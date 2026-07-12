@@ -113,6 +113,21 @@
   --sidebar-hover: rgba(255, 255, 255, 0.05);
   --sidebar-active: rgba(99, 102, 241, 0.18);
   --sidebar-active-bar: linear-gradient(180deg, #6366f1 0%, #2563eb 100%);
+  /* Sidebar 内的品牌色叠加（避免在组件里硬编码 rgba） */
+  --sidebar-brand-glow: rgba(99, 102, 241, 0.08);
+  --sidebar-brand-border: rgba(99, 102, 241, 0.4);
+  --sidebar-icon-bg: rgba(99, 102, 241, 0.15);
+  /* Sidebar 内 danger hover（删除会话按钮） */
+  --sidebar-danger-hover-bg: rgba(239, 68, 68, 0.2);
+  --sidebar-danger-hover-fg: #fca5a5;
+
+  /* ===== 深色填充背景上的前景色（ChatPanel header / 场景 banner 等）===== */
+  --on-dark-text: #ffffff;
+  --on-dark-fill: rgba(255, 255, 255, 0.18);
+  --on-dark-fill-hover: rgba(255, 255, 255, 0.28);
+  --on-dark-border: rgba(255, 255, 255, 0.4);
+  --on-dark-border-strong: rgba(255, 255, 255, 0.6);
+  --on-dark-muted: rgba(255, 255, 255, 0.7);
 
   /* ===== 玻璃态 / 胶囊按钮 ===== */
   --glass-bg: rgba(255, 255, 255, 0.72);
