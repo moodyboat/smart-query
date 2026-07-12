@@ -19,7 +19,7 @@ import api from '../api'
 const SCENARIOS_BASELINE = {
   general: {
     code: 'general', name: '通用查询', icon: '🔍',
-    theme: { primary: '#409EFF', gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', background: '#f5f7fa', headerBg: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', cardBg: 'rgba(255, 255, 255, 0.9)' },
+    theme: { primary: '#2563eb', gradient: 'linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%)', background: '#faf9fb', headerBg: 'var(--sidebar-bg)', cardBg: 'rgba(255, 255, 255, 0.92)' },
     avatar: { emoji: '🔍', fallbackColor: '#667eea', size: 'large' },
     welcome: { title: '欢迎使用智能问数', subtitle: '不只是查询 — 我可以帮你做完整的数据分析', description: '我是你的智能数据分析助手，可以帮助你查询数据库、生成图表、分析数据。' },
     capabilities: [
