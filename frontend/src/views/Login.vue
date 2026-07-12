@@ -118,43 +118,75 @@ async function handleLogin() {
   background: var(--bg);
 }
 
-/* 左侧品牌区 */
+/* 左侧品牌区 — slate-900 深色 + 双层径向品牌色发光（跟 Sidebar 一致） */
 .login-left {
   position: relative;
   flex: 1;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  padding: 64px;
-  color: var(--surface);
-  background: var(--brand-gradient);
+  padding: 80px;
+  color: var(--on-dark-text);
+  background: var(--sidebar-bg);
   overflow: hidden;
 }
+.login-left::before {
+  content: '';
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(circle at 25% 15%, rgba(99, 102, 241, 0.28), transparent 45%),
+    radial-gradient(circle at 75% 85%, rgba(37, 99, 235, 0.22), transparent 55%);
+  pointer-events: none;
+}
+.login-left > * { position: relative; z-index: 1; }
+
 .brand .el-icon {
-  margin-bottom: 16px;
+  margin-bottom: var(--space-lg);
+  color: var(--brand-primary);
+  background: rgba(99, 102, 241, 0.18);
+  padding: 10px;
+  border-radius: var(--radius-md);
 }
 .brand h1 {
-  font-size: 38px;
+  font-size: 42px;
   font-weight: 700;
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-sm);
+  letter-spacing: -0.02em;
 }
 .brand-sub {
   font-size: 18px;
-  opacity: 0.9;
+  opacity: 0.7;
   margin: 0;
+  font-weight: 400;
 }
 .brand-points {
   list-style: none;
   padding: 0;
-  margin: 48px 0 0;
+  margin: 56px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
 }
 .brand-points li {
   display: flex;
   align-items: center;
-  gap: 12px;
-  font-size: 16px;
-  margin-bottom: 18px;
-  opacity: 0.95;
+  gap: var(--space-md);
+  font-size: 15px;
+  opacity: 0.85;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--sidebar-bg-soft);
+  border: 1px solid var(--sidebar-border);
+  border-radius: var(--radius-md);
+  transition: all var(--transition-base);
+}
+.brand-points li:hover {
+  background: var(--sidebar-hover);
+  border-color: var(--sidebar-brand-border);
+  opacity: 1;
+}
+.brand-points li .el-icon {
+  color: var(--brand-primary);
+  font-size: 18px;
 }
 
 /* 右侧表单区 */
@@ -164,42 +196,60 @@ async function handleLogin() {
   align-items: center;
   justify-content: center;
   background: var(--surface);
+  padding: var(--space-xl);
 }
 .login-card {
   width: 100%;
   max-width: 360px;
   border: none;
+  box-shadow: none;
 }
 .login-card :deep(.el-card__body) {
   padding: 16px 8px;
 }
 .login-title {
-  font-size: 26px;
+  font-size: 28px;
   font-weight: 700;
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-xs);
   color: var(--text-primary);
+  letter-spacing: -0.02em;
 }
 .login-tip {
-  margin: 0 0 28px;
+  margin: 0 0 var(--space-2xl);
   color: var(--text-secondary);
   font-size: 14px;
 }
+.login-card :deep(.el-input__wrapper) {
+  border-radius: var(--radius-md);
+  padding: 4px 14px;
+}
 .login-btn {
   width: 100%;
+  border-radius: var(--radius-md);
+  background: var(--brand-gradient);
+  border-color: transparent;
+  box-shadow: var(--shadow-brand);
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  transition: all var(--transition-base);
+}
+.login-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-lg), var(--shadow-brand);
 }
 .login-hint {
-  margin-top: 12px;
+  margin-top: var(--space-md);
   text-align: center;
   font-size: 12px;
   color: var(--text-muted);
+  padding: var(--space-sm);
+  background: var(--bg);
+  border-radius: var(--radius-md);
+  line-height: 1.6;
 }
 
 @media (max-width: 768px) {
-  .login-left {
-    display: none;
-  }
-  .login-right {
-    width: 100%;
-  }
+  .login-left { display: none; }
+  .login-right { width: 100%; }
 }
 </style>
