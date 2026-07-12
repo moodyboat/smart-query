@@ -687,15 +687,25 @@ function retryPython(code, stderr) {
 /* User */
 .user-message { display: flex; justify-content: flex-end; margin: var(--space-md) 0 var(--space-lg); }
 .user-bubble {
-  background: var(--primary); color: var(--surface); padding: var(--space-sm) var(--space-lg); border-radius: var(--radius-pill) var(--radius-pill) var(--radius-sm) var(--radius-pill);
-  font-size: var(--font-base); max-width: 70%; word-break: break-word; line-height: 1.5;
+  background: var(--brand-gradient); color: var(--on-dark-text);
+  padding: var(--space-md) var(--space-lg);
+  border-radius: 18px 18px 4px 18px;
+  font-size: var(--font-base); max-width: 70%;
+  word-break: break-word; line-height: 1.55;
+  box-shadow: var(--shadow-brand);
+  font-weight: 450;
 }
 
 /* Assistant */
 .assistant-block { margin: var(--space-xs) 0; }
 .assistant-text {
-  font-size: var(--font-base); line-height: 1.7; color: var(--text-regular); padding: var(--space-sm) 0;
+  font-size: var(--font-base); line-height: 1.75; color: var(--text-regular);
+  padding: var(--space-md) var(--space-lg);
+  background: var(--surface);
+  border: 1px solid var(--border-light);
+  border-radius: 4px 18px 18px 18px;
   max-width: 90%;
+  box-shadow: var(--shadow-sm);
 }
 .assistant-text.streaming {
   display: flex; flex-wrap: wrap; align-items: baseline;

@@ -486,6 +486,17 @@ async function loadDataSources() {
 
 /* .prompt-header / .back-btn / .back-arrow / .page-title 复用全局公共类（style.css）*/
 
+/* 整体卡片弱化边框、加柔和阴影 */
+.scenario-manager :deep(.el-card) {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
+}
+.scenario-manager :deep(.el-card__header) {
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--border-lighter);
+}
+
 .card-header {
   display: flex;
   justify-content: space-between;
@@ -495,6 +506,31 @@ async function loadDataSources() {
 .card-title {
   font-weight: 600;
   font-size: var(--font-xl);
+  color: var(--text-primary);
+}
+
+/* el-table 头部轻量化、行间距放大 */
+.scenario-manager :deep(.el-table) {
+  --el-table-border-color: var(--border-lighter);
+  --el-table-header-bg-color: transparent;
+  --el-table-tr-bg-color: transparent;
+  --el-table-row-hover-bg-color: var(--brand-primary-lighter);
+}
+.scenario-manager :deep(.el-table th.el-table__cell) {
+  background: transparent;
+  font-weight: 600;
+  font-size: var(--font-sm);
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--border);
+  padding: 10px 0;
+}
+.scenario-manager :deep(.el-table td.el-table__cell) {
+  border-bottom: 1px solid var(--border-lighter);
+  padding: 12px 0;
+}
+.scenario-manager :deep(.el-table .cell) {
+  padding: 0 12px;
 }
 
 .scenario-icon-preview {
