@@ -53,7 +53,7 @@
   --primary-light: var(--brand-primary-light);
 
   /* Surfaces */
-  --bg: #f9f9fb;
+  --bg: #faf9fb;
   --surface: #ffffff;
   --surface-raised: #ffffff;
 
@@ -252,7 +252,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: var(--space-xs);
-  padding: 6px 14px;
+  padding: 8px 16px;
   border-radius: var(--radius-pill);
   background: var(--chip-bg);
   color: var(--chip-fg);
@@ -267,7 +267,8 @@ body {
   background: var(--chip-bg-hover);
   color: var(--chip-fg-hover);
   border-color: var(--chip-border-hover);
-  transform: translateY(-1px);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-brand);
 }
 
 /* ===== 玻璃卡片（欢迎区/能力卡）===== */

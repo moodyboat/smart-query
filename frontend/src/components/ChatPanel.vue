@@ -2,10 +2,7 @@
   <section class="main-area" :class="{ 'scenario-mode': convStore.getCurrentScenario() }" :style="scenarioTheme.background ? { '--bg': scenarioTheme.background, '--scenario-header-bg': scenarioTheme.headerBg } : {}">
     <header class="chat-header">
       <button v-if="showSidebarToggle" class="hamburger-btn" @click="emit('toggleSidebar')">☰</button>
-      <span class="header-title">
-        <span v-if="convStore.getCurrentScenario()" class="scenario-icon">{{ currentScenarioConfig.icon }}</span>
-        {{ scenarioWelcome.title || '智能数据分析助手' }}
-      </span>
+      <span class="header-title">工作台</span>
       <!-- 当前场景指示器 -->
       <el-tag v-if="convStore.getCurrentScenario()" type="success" size="small" class="scenario-indicator" @click="showScenarioPrompt" style="cursor: pointer" :style="{ 'background-color': scenarioTheme.primary, 'border-color': scenarioTheme.primary }">
         {{ currentScenarioConfig.icon }} {{ currentScenarioConfig.name }} <span style="margin-left: 8px; opacity: 0.8;">查看提示词</span>
@@ -919,12 +916,13 @@ defineExpose({ sendMessage, clearMessages, messages, updateChartOption, pendingC
   text-align: center; color: var(--text-muted); padding: 60px var(--space-xl) 30px;
 }
 .welcome h3 {
-  font-size: 26px; margin-bottom: var(--space-sm); color: var(--text-primary);
-  font-weight: 700; letter-spacing: -0.01em;
+  font-size: 30px; margin-bottom: var(--space-md); color: var(--text-primary);
+  font-weight: 700; letter-spacing: -0.02em; line-height: 1.25;
 }
 .welcome-desc {
-  font-size: var(--font-lg); color: var(--text-secondary);
+  font-size: var(--font-xl); color: var(--text-secondary);
   margin-bottom: var(--space-2xl);
+  font-weight: 400;
 }
 
 .welcome-cards {
