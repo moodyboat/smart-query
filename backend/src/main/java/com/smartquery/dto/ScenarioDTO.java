@@ -20,6 +20,33 @@ public class ScenarioDTO {
     private Boolean isEnabled;
     private Integer sortOrder;
     private ScenarioUiConfig uiConfig;
+
+    /**
+     * 场景锁定的数据源 ID；NULL 表示不锁定（用户运行时可自由切换）。
+     */
+    private Long dataSourceId;
+
+    /**
+     * 数据库 schema 标识（仅配置元数据，不切换连接 schema）。
+     */
+    private String schemaName;
+
+    /**
+     * 表白名单（逗号分隔原始字符串）；前端编辑用 {@link #allowedTableList}。
+     */
+    private String allowedTables;
+
+    /**
+     * 表白名单（前端友好的 List 形式）；保存时由 Controller join 回 {@link #allowedTables}。
+     * NULL 或空表示该数据源全部表可见。
+     */
+    private List<String> allowedTableList;
+
+    /**
+     * 场景级 system prompt 覆盖（预留扩展点）。
+     */
+    private String promptOverride;
+
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     private List<PromptTemplateDTO> promptTemplates;

@@ -60,6 +60,20 @@ public class SchemaExploreTool implements LlmTool {
             ? ((Number) input.get("data_source_id")).longValue()
             : context.dataSourceId();
 
+        Set<String> allowed = context.allowedTables();
+
+        // describe_table / sample_data 在执行前先做白名单校验（list_tables 在结果上过滤）
+        if (allowed != null && !allowed.isEmpty()) {
+            String tableName = (String) input.get("table_name");
+            if (tableName != null && !tableName.isBlank()) {
+                String norm = SqlSafetyValidator.normalizeTableName(tableName);
+                if (norm == null || !allowed.contains(norm)) {
+                    return ToolResult.error(getName(),
+                        "表 `" + tableName + "` 不在当前场景授权范围", System.currentTimeMillis() - start);
+                }
+            }
+        }
+
         try {
             DataSourceContextHolder.set(dsId);
             JdbcTemplate jdbc = dataSourceManager.getJdbcTemplate(dsId);
@@ -67,7 +81,7 @@ public class SchemaExploreTool implements LlmTool {
             DbMetadataUtil.Dialect dialect = DbMetadataUtil.Dialect.of(dsCfg != null ? dsCfg.getType() : null);
 
             String result = switch (action) {
-                case "list_tables" -> listTables(jdbc, dialect);
+                case "list_tables" -> listTables(jdbc, dialect, allowed);
                 case "describe_table" -> describeTable(jdbc, dialect, (String) input.get("table_name"));
                 case "sample_data" -> sampleData(jdbc, dialect, (String) input.get("table_name"));
                 default -> "未知的 action: " + action;
@@ -87,8 +101,17 @@ public class SchemaExploreTool implements LlmTool {
     @Override
     public boolean isConcurrencySafe() { return true; }
 
-    private String listTables(JdbcTemplate jdbc, DbMetadataUtil.Dialect dialect) {
+    private String listTables(JdbcTemplate jdbc, DbMetadataUtil.Dialect dialect, Set<String> allowed) {
         List<Map<String, Object>> tables = DbMetadataUtil.listTables(jdbc, dialect);
+        // 场景白名单过滤（normalize 后小写比较）
+        if (allowed != null && !allowed.isEmpty()) {
+            tables = tables.stream()
+                .filter(r -> {
+                    String n = SqlSafetyValidator.normalizeTableName((String) r.get("name"));
+                    return n != null && allowed.contains(n);
+                })
+                .collect(java.util.stream.Collectors.toList());
+        }
         StringBuilder sb = new StringBuilder("数据库表列表:\n\n");
         sb.append("| 表名 | 注释 | 行数 |\n| --- | --- | --- |\n");
         for (Map<String, Object> row : tables) {

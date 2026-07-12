@@ -65,6 +65,14 @@
             <version>${mybatis-plus.version}</version>
         </dependency>
 
+        <!-- JSqlParser：场景表白名单拦截需要解析 SQL 涉及的表名。
+             显式声明避免依赖 MyBatis-Plus 传递依赖（升级时被丢失）。 -->
+        <dependency>
+            <groupId>com.github.jsqlparser</groupId>
+            <artifactId>jsqlparser</artifactId>
+            <version>4.9</version>
+        </dependency>
+
         <!-- MySQL -->
         <dependency>
             <groupId>com.mysql</groupId>

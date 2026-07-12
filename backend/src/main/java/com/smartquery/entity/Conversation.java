@@ -13,4 +13,6 @@ public class Conversation extends BaseEntity {
     private Long dataSourceId;
     private String userId;
     private Integer status;
+    /** 会话绑定的场景编码（如 sales_analysis）；NULL=通用对话，刷新页面后用于恢复场景上下文 */
+    private String scenario;
 }

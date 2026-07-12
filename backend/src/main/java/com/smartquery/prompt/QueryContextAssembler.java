@@ -27,6 +27,7 @@ public class QueryContextAssembler {
     private final SchemaContextBuilder schemaContextBuilder;
     private final OntologyContextBuilder ontologyContextBuilder;
     private final com.smartquery.tool.ToolRegistry toolRegistry;
+    private final com.smartquery.service.ScenarioService scenarioService;
 
     @org.springframework.beans.factory.annotation.Value("${smart-query.prompt.system-token-budget:16000}")
     private int systemTokenBudget;
@@ -51,6 +52,23 @@ public class QueryContextAssembler {
     public PromptParts fetchPromptParts(String model, Long dataSourceId, String scenarioCode, Map<String, Object> scenarioVariables) {
         String systemPrompt;
 
+        // 反查场景配置（数据源/schema 名/表白名单），用于白名单过滤和变量注入
+        com.smartquery.entity.Scenario scenarioObj = null;
+        java.util.Set<String> allowedTables = null;
+        if (scenarioCode != null && !scenarioCode.isBlank()) {
+            try {
+                scenarioObj = scenarioService.getByCode(scenarioCode);
+            } catch (Exception e) {
+                log.debug("[CTX-ASM] failed to load scenario {}: {}", scenarioCode, e.getMessage());
+            }
+            if (scenarioObj != null && scenarioObj.getAllowedTables() != null && !scenarioObj.getAllowedTables().isBlank()) {
+                allowedTables = java.util.Arrays.stream(scenarioObj.getAllowedTables().split(","))
+                    .map(SchemaContextBuilder::normalizeTableName)
+                    .filter(java.util.Objects::nonNull)
+                    .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+            }
+        }
+
         // 如果指定了场景编码，使用场景化提示词
         if (scenarioCode != null && !scenarioCode.isBlank()) {
             boolean hasMining = toolRegistry.getTool("mining_model").isPresent();
@@ -61,9 +79,9 @@ public class QueryContextAssembler {
                 variables.putAll(scenarioVariables);
             }
 
-            // 添加数据库schema变量
+            // 添加数据库schema变量（按场景白名单过滤）
             if (dataSourceId != null) {
-                String schemaContext = schemaContextBuilder.buildSchemaContext(dataSourceId, systemTokenBudget);
+                String schemaContext = schemaContextBuilder.buildSchemaContext(dataSourceId, scenarioCode, allowedTables, systemTokenBudget);
                 if (schemaContext != null) {
                     variables.put("database_schema", schemaContext);
                 }
@@ -75,6 +93,11 @@ public class QueryContextAssembler {
                 }
             }
 
+            // 场景 schema 名作为变量供提示词模板使用
+            if (scenarioObj != null && scenarioObj.getSchemaName() != null && !scenarioObj.getSchemaName().isBlank()) {
+                variables.put("schema_name", scenarioObj.getSchemaName());
+            }
+
             // 添加当前日期
             variables.put("current_date", java.time.LocalDate.now().toString());
 
@@ -84,7 +107,7 @@ public class QueryContextAssembler {
             // 如果场景提示词为空，回退到默认构建器
             if (!scenarioPrompt.isBlank()) {
                 systemPrompt = scenarioPrompt;
-                log.info("[CTX-ASM] using scenario prompt: {}", scenarioCode);
+                log.info("[CTX-ASM] using scenario prompt: {} (allowedTables={})", scenarioCode, allowedTables);
             } else {
                 log.warn("[CTX-ASM] scenario prompt empty, falling back to default");
                 systemPrompt = systemPromptBuilder.build(model, dataSourceId, hasMining);
@@ -104,7 +127,7 @@ public class QueryContextAssembler {
         // 渲染动态占位符
         systemPrompt = promptLoader.renderPrompt(systemPrompt, context);
 
-        // 如果不是场景化提示词，注入数据字典上下文 — 带 token 预算控制
+        // 如果不是场景化提示词，注入数据字典上下文 — 带 token 预算控制（场景化分支已通过变量注入，不重复）
         if (scenarioCode == null || scenarioCode.isBlank()) {
             int systemTokens = systemPrompt.length() / CHARS_PER_TOKEN;
             int remainingTokens = Math.max(0, systemTokenBudget - systemTokens);

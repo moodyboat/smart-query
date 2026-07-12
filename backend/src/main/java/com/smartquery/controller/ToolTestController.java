@@ -27,7 +27,7 @@ public class ToolTestController {
         @RequestBody Map<String, Object> input
     ) {
         ToolExecutionContext ctx = new ToolExecutionContext(
-            0L, dataSourceId, "test", "test", () -> false, null);
+            0L, dataSourceId, "test", "test", null, () -> false, null);
         ToolResult result = schemaExploreTool.execute(input, ctx);
         return Result.ok(result);
     }
@@ -41,7 +41,7 @@ public class ToolTestController {
         input.put("sql", body.get("sql"));
         input.put("data_source_id", dataSourceId);
         ToolExecutionContext ctx = new ToolExecutionContext(
-            0L, dataSourceId, "test", "test", () -> false, null);
+            0L, dataSourceId, "test", "test", null, () -> false, null);
         ToolResult result = executeSqlTool.execute(input, ctx);
         return Result.ok(result);
     }

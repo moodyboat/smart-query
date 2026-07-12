@@ -98,8 +98,17 @@ export async function fetchConversations() {
   return data.data
 }
 
-export async function createConversation(title) {
-  const { data } = await api.post('/conversation', { title })
+/**
+ * 创建会话。
+ * @param {string | { title?: string, dataSourceId?: number, scenario?: string }} titleOrOpts
+ *   - 字符串：仅设 title（向后兼容）
+ *   - 对象：可同时携带 dataSourceId / scenario
+ */
+export async function createConversation(titleOrOpts) {
+  const body = typeof titleOrOpts === 'string'
+    ? { title: titleOrOpts }
+    : { title: titleOrOpts?.title, dataSourceId: titleOrOpts?.dataSourceId, scenario: titleOrOpts?.scenario }
+  const { data } = await api.post('/conversation', body)
   return data.data
 }
 
@@ -117,6 +126,12 @@ export async function renameConversation(id, title) {
 
 export async function fetchConversationMessages(conversationId) {
   const { data } = await api.get(`/conversation/${conversationId}/messages`)
+  return data.data
+}
+
+/** 获取会话详情（含 scenario 字段，用于刷新页面后恢复场景） */
+export async function fetchConversationMeta(conversationId) {
+  const { data } = await api.get(`/conversation/${conversationId}`)
   return data.data
 }
 

@@ -41,6 +41,28 @@ public class Scenario {
      */
     private String uiConfig;
 
+    /**
+     * 场景锁定的数据源 ID；NULL 表示不锁定（用户运行时可自由切换）。
+     * 锁定后 ChatController 强制使用此数据源，覆盖前端传参。
+     */
+    private Long dataSourceId;
+
+    /**
+     * 数据库 schema 标识（仅配置元数据，注入提示词供 LLM 参考；不切换连接 schema）。
+     */
+    private String schemaName;
+
+    /**
+     * 表白名单（逗号分隔）；NULL 或空表示该数据源全部表可见。
+     * 同时用于 SchemaContextBuilder 过滤和 ExecuteSqlTool 运行时拦截。
+     */
+    private String allowedTables;
+
+    /**
+     * 场景级 system prompt 覆盖（预留扩展点，本期不暴露 UI）。
+     */
+    private String promptOverride;
+
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;

@@ -70,7 +70,11 @@ public class ExecuteSqlTool implements LlmTool {
             return ToolResult.error(getName(), "SQL 不能为空", System.currentTimeMillis() - start);
         }
 
-        SqlSafetyValidator.ValidationResult validation = safetyValidator.validate(sql);
+        // 场景白名单优先于基础校验：白名单非空时叠加表名拦截
+        java.util.Set<String> allowed = context.allowedTables();
+        SqlSafetyValidator.ValidationResult validation = (allowed != null && !allowed.isEmpty())
+            ? safetyValidator.validateAgainstWhitelist(sql, allowed)
+            : safetyValidator.validate(sql);
         if (!validation.safe()) {
             return ToolResult.error(getName(), "SQL 安全检查未通过: " + validation.reason(), System.currentTimeMillis() - start);
         }

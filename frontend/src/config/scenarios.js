@@ -128,7 +128,12 @@ function transformBackendScenario(s, baseline) {
       : (baseline?.capabilities || []),
     examples: Array.isArray(ui.examples) && ui.examples.length > 0
       ? ui.examples
-      : (baseline?.examples || [])
+      : (baseline?.examples || []),
+    // 场景化隔离字段（基线无对应键 → undefined → 使用方用 ?? null 兜底）
+    dataSourceId: s.dataSourceId ?? null,
+    schemaName: s.schemaName ?? null,
+    allowedTableList: Array.isArray(s.allowedTableList) ? s.allowedTableList : null,
+    promptOverride: s.promptOverride ?? null
   }
 }
 

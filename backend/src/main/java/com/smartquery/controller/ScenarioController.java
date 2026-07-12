@@ -159,8 +159,9 @@ public class ScenarioController {
     public Result<ScenarioDTO> create(@RequestBody ScenarioDTO dto) {
         userService.requireAdmin();
         Scenario scenario = new Scenario();
-        BeanUtils.copyProperties(dto, scenario, "uiConfig", "promptTemplates");
+        BeanUtils.copyProperties(dto, scenario, "uiConfig", "promptTemplates", "allowedTableList");
         serializeUiConfig(dto, scenario);
+        serializeAllowedTables(dto, scenario);
         scenario.setIsSystem(false);
         scenario.setIsEnabled(true);
         scenarioService.save(scenario);
@@ -177,8 +178,9 @@ public class ScenarioController {
         if (scenario == null) {
             return Result.error("场景不存在");
         }
-        BeanUtils.copyProperties(dto, scenario, "id", "createdAt", "isSystem", "uiConfig", "promptTemplates");
+        BeanUtils.copyProperties(dto, scenario, "id", "createdAt", "isSystem", "uiConfig", "promptTemplates", "allowedTableList");
         serializeUiConfig(dto, scenario);
+        serializeAllowedTables(dto, scenario);
         scenarioService.updateById(scenario);
         return Result.ok(convertToDTO(scenario));
     }
@@ -217,9 +219,24 @@ public class ScenarioController {
         }
     }
 
+    /**
+     * 将 DTO 的 allowedTableList (List<String>) join 成 allowedTables (CSV 字符串) 写入实体。
+     * 空列表或 null 写入 null（语义=不限表）。
+     */
+    private void serializeAllowedTables(ScenarioDTO dto, Scenario scenario) {
+        if (dto == null || dto.getAllowedTableList() == null || dto.getAllowedTableList().isEmpty()) {
+            scenario.setAllowedTables(null);
+            return;
+        }
+        scenario.setAllowedTables(dto.getAllowedTableList().stream()
+            .filter(s -> s != null && !s.isBlank())
+            .map(String::trim)
+            .collect(Collectors.joining(",")));
+    }
+
     private ScenarioDTO convertToDTO(Scenario scenario) {
         ScenarioDTO dto = new ScenarioDTO();
-        BeanUtils.copyProperties(scenario, dto, "uiConfig");
+        BeanUtils.copyProperties(scenario, dto, "uiConfig", "allowedTables");
 
         if (scenario.getUiConfig() != null && !scenario.getUiConfig().isBlank()) {
             try {
@@ -228,6 +245,16 @@ public class ScenarioController {
             } catch (Exception e) {
                 // 旧数据 uiConfig 格式不符则忽略，保证列表不挂
             }
+        }
+
+        // CSV → List<String>（前端友好）；空字符串 → 空列表（语义=不限表）
+        if (scenario.getAllowedTables() != null && !scenario.getAllowedTables().isBlank()) {
+            dto.setAllowedTableList(java.util.Arrays.stream(scenario.getAllowedTables().split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .collect(Collectors.toList()));
+        } else {
+            dto.setAllowedTableList(java.util.Collections.emptyList());
         }
         return dto;
     }

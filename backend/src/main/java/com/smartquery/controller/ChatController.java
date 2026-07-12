@@ -51,6 +51,7 @@ public class ChatController {
     private final SchemaContextBuilder schemaContextBuilder;
     private final Environment environment;
     private final ScenarioAuthService scenarioAuthService;
+    private final com.smartquery.service.ScenarioService scenarioService;
 
     @org.springframework.beans.factory.annotation.Value("${smart-query.llm.default-model:glm-5.1}")
     private String defaultModel;
@@ -113,8 +114,22 @@ public class ChatController {
         }
         // Per-conversation lock: reject concurrent requests to the same conversation
         String resolvedModel = model.isBlank() ? defaultModel : model;
-        // Resolve dataSourceId from conversation when not provided
-        Long dsId = dataSourceId;
+        // 数据源解析优先级：场景绑定 > 请求参数 > 会话兜底
+        // 场景绑定了数据源时强制覆盖，前端禁用切换器只是 UX，这里是真正的安全边界
+        Long dsId = null;
+        if (scenario != null && !scenario.isBlank()) {
+            try {
+                com.smartquery.entity.Scenario s = scenarioService.getByCode(scenario);
+                if (s != null && s.getDataSourceId() != null) {
+                    dsId = s.getDataSourceId();
+                }
+            } catch (Exception e) {
+                log.debug("[CHAT] failed to resolve scenario datasource: {}", e.getMessage());
+            }
+        }
+        if (dsId == null) {
+            dsId = dataSourceId;
+        }
         if (dsId == null) {
             try {
                 var conv = conversationMapper.selectById(conversationId);

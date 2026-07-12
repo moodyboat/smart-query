@@ -38,19 +38,31 @@ public class SchemaContextBuilder {
     }
 
     /**
-     * 构建数据库结构上下文 (带 token 预算)
+     * 构建数据库结构上下文 (带 token 预算) — 向后兼容重载，等价于不限场景白名单。
+     */
+    public String buildSchemaContext(Long dataSourceId, int maxTokens) {
+        return buildSchemaContext(dataSourceId, null, null, maxTokens);
+    }
+
+    /**
+     * 构建数据库结构上下文 (带 token 预算 + 场景表白名单过滤)。
      *
      * @param dataSourceId 数据源 ID
+     * @param scenarioCode 场景编码（仅用于缓存 key 维度，避免场景间串味；可为 null）
+     * @param allowedTables 表白名单（小写、已 normalize）；null/empty 表示该数据源全部表可见
      * @param maxTokens schema 上下文允许的最大 token 数
      * @return 格式化的 Markdown 结构说明，如果无数据返回 null
      */
-    public String buildSchemaContext(Long dataSourceId, int maxTokens) {
+    public String buildSchemaContext(Long dataSourceId, String scenarioCode, java.util.Set<String> allowedTables, int maxTokens) {
         if (dataSourceId == null) return null;
 
-        String cacheKey = dataSourceId + ":" + maxTokens;
+        String cacheKey = dataSourceId
+            + ":" + (scenarioCode == null ? "_" : scenarioCode)
+            + ":" + (allowedTables == null ? 0 : allowedTables.hashCode())
+            + ":" + maxTokens;
         CachedEntry cached = schemaCache.get(cacheKey);
         if (cached != null && System.currentTimeMillis() - cached.cachedAt < cacheTtlMs) {
-            log.debug("[SCHEMA-CTX] cache hit for dataSourceId={}", dataSourceId);
+            log.debug("[SCHEMA-CTX] cache hit for dataSourceId={}, scenario={}", dataSourceId, scenarioCode);
             return cached.content;
         }
 
@@ -63,6 +75,21 @@ public class SchemaContextBuilder {
         if (dicts == null || dicts.isEmpty()) {
             log.debug("[SCHEMA-CTX] no data dict for dataSourceId={}", dataSourceId);
             return null;
+        }
+
+        // 场景白名单过滤：normalized 小写比较，兼容 LLM 写的 schema.table 形式
+        if (allowedTables != null && !allowedTables.isEmpty()) {
+            dicts = dicts.stream()
+                .filter(d -> {
+                    String norm = normalizeTableName(d.getTableName());
+                    return norm != null && allowedTables.contains(norm);
+                })
+                .collect(Collectors.toList());
+            if (dicts.isEmpty()) {
+                log.warn("[SCHEMA-CTX] whitelist={} excluded all tables for dataSourceId={}, scenario={}",
+                    allowedTables, dataSourceId, scenarioCode);
+                return null;
+            }
         }
 
         // 按表名分组
@@ -86,6 +113,25 @@ public class SchemaContextBuilder {
             dataSourceId, tableGroups.size(), fullContext.length(), summaryContext.length(), maxTokens);
         schemaCache.put(cacheKey, new CachedEntry(summaryContext, System.currentTimeMillis()));
         return summaryContext;
+    }
+
+    /**
+     * 表名归一化：去 schema 前缀（取最后一段）、去反引号/方括号/双引号、转小写。
+     * 例：`ods_dm.users` → users；`[Users]` → users；`` `User` `` → user。
+     */
+    public static String normalizeTableName(String raw) {
+        if (raw == null) return null;
+        String s = raw.trim();
+        // 去 schema/database 前缀
+        int dot = s.lastIndexOf('.');
+        if (dot >= 0 && dot < s.length() - 1) s = s.substring(dot + 1);
+        // 去包裹符号
+        if ((s.startsWith("`") && s.endsWith("`"))
+            || (s.startsWith("[") && s.endsWith("]"))
+            || (s.startsWith("\"") && s.endsWith("\""))) {
+            s = s.substring(1, s.length() - 1);
+        }
+        return s.toLowerCase();
     }
 
     public void clearCache() {

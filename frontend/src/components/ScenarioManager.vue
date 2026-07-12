@@ -114,77 +114,58 @@
           <el-input v-model="editForm.description" type="textarea" :rows="2" />
         </el-form-item>
 
-        <el-divider content-position="left">主题配色</el-divider>
+        <el-divider content-position="left">数据范围（场景隔离）</el-divider>
         <el-row :gutter="20">
-          <el-col :span="8">
-            <el-form-item label="主色">
-              <el-color-picker v-model="editForm.uiConfig.theme.primary" />
+          <el-col :span="12">
+            <el-form-item label="绑定数据源">
+              <el-select
+                v-model="editForm.dataSourceId"
+                clearable
+                filterable
+                placeholder="不绑=用户自由切换"
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="ds in dataSources"
+                  :key="ds.id"
+                  :label="ds.name + (ds.system ? '（系统库）' : '')"
+                  :value="ds.id"
+                  :disabled="!!ds.system"
+                />
+              </el-select>
             </el-form-item>
           </el-col>
-          <el-col :span="8">
-            <el-form-item label="背景色">
-              <el-input v-model="editForm.uiConfig.theme.background" placeholder="#f5f7fa" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="8">
-            <el-form-item label="卡片背景">
-              <el-input v-model="editForm.uiConfig.theme.cardBg" placeholder="rgba(255,255,255,0.9)" />
+          <el-col :span="12">
+            <el-form-item label="Schema 标识">
+              <el-input
+                v-model="editForm.schemaName"
+                placeholder="如 ods_dm；仅配置标识，不切换连接"
+              />
             </el-form-item>
           </el-col>
         </el-row>
-        <el-form-item label="顶部渐变">
-          <el-input v-model="editForm.uiConfig.theme.headerBg" placeholder="linear-gradient(...)" />
+        <el-form-item label="表清单">
+          <el-select
+            v-model="editForm.allowedTableList"
+            multiple
+            filterable
+            collapse-tags
+            collapse-tags-tooltip
+            :disabled="!editForm.dataSourceId"
+            placeholder="留空=该数据源全部表可见"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="t in tableCandidates"
+              :key="t"
+              :label="t"
+              :value="t"
+            />
+          </el-select>
+          <div class="muted" style="margin-top: 4px; font-size: 12px">
+            选了数据源但未选表 = 该数据源全部表可见；选了表 = 仅这些表对 LLM 可见，SQL 越界会被执行层拦截。
+          </div>
         </el-form-item>
-
-        <el-divider content-position="left">欢迎语</el-divider>
-        <el-form-item label="标题">
-          <el-input v-model="editForm.uiConfig.welcome.title" />
-        </el-form-item>
-        <el-form-item label="副标题">
-          <el-input v-model="editForm.uiConfig.welcome.subtitle" />
-        </el-form-item>
-        <el-form-item label="描述">
-          <el-input v-model="editForm.uiConfig.welcome.description" type="textarea" :rows="2" />
-        </el-form-item>
-
-        <el-divider content-position="left">能力卡片</el-divider>
-        <el-button size="small" :icon="Plus" @click="addCapability" style="margin-bottom: 12px">添加能力</el-button>
-        <el-table :data="editForm.uiConfig.capabilities" border size="small">
-          <el-table-column label="图标" width="100">
-            <template #default="{ row }">
-              <el-input v-model="row.icon" size="small" placeholder="📊" />
-            </template>
-          </el-table-column>
-          <el-table-column label="颜色" width="120">
-            <template #default="{ row }">
-              <el-color-picker v-model="row.iconColor" size="small" />
-            </template>
-          </el-table-column>
-          <el-table-column label="标题" width="160">
-            <template #default="{ row }">
-              <el-input v-model="row.title" size="small" />
-            </template>
-          </el-table-column>
-          <el-table-column label="描述">
-            <template #default="{ row }">
-              <el-input v-model="row.description" size="small" />
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="60">
-            <template #default="{ $index }">
-              <el-button link type="danger" :icon="Delete" @click="removeCapability($index)" />
-            </template>
-          </el-table-column>
-        </el-table>
-
-        <el-divider content-position="left">示例问题</el-divider>
-        <div v-for="(ex, i) in editForm.uiConfig.examples" :key="i" class="example-row">
-          <el-input v-model="editForm.uiConfig.examples[i]" size="small" placeholder="示例问题" />
-          <el-button link type="danger" :icon="Delete" @click="editForm.uiConfig.examples.splice(i, 1)" />
-        </div>
-        <el-button size="small" :icon="Plus" @click="editForm.uiConfig.examples.push('')" style="margin-top: 8px">
-          添加示例
-        </el-button>
       </el-form>
 
       <template #footer>
@@ -235,7 +216,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Edit, Delete, User } from '@element-plus/icons-vue'
 import {
@@ -244,7 +225,9 @@ import {
   updateScenario,
   deleteScenario,
   fetchScenarioRoles,
-  setScenarioRoles
+  setScenarioRoles,
+  fetchDataSources,
+  fetchDataSourceTables
 } from '../api'
 
 const emit = defineEmits(['close'])
@@ -257,6 +240,10 @@ const editDialogVisible = ref(false)
 const editDialogTitle = ref('')
 const isEditMode = ref(false)
 
+// 数据范围相关
+const dataSources = ref([])
+const tableCandidates = ref([])
+
 const editForm = reactive({
   id: null,
   name: '',
@@ -265,7 +252,10 @@ const editForm = reactive({
   category: 'business',
   isEnabled: true,
   sortOrder: 99,
-  uiConfig: emptyUiConfig()
+  uiConfig: emptyUiConfig(),
+  dataSourceId: null,
+  schemaName: '',
+  allowedTableList: []
 })
 
 function emptyUiConfig() {
@@ -320,8 +310,12 @@ function handleCreate() {
     category: 'business',
     isEnabled: true,
     sortOrder: (scenarios.value.at(-1)?.sortOrder || 0) + 1,
-    uiConfig: emptyUiConfig()
+    uiConfig: emptyUiConfig(),
+    dataSourceId: null,
+    schemaName: '',
+    allowedTableList: []
   })
+  tableCandidates.value = []
   editDialogVisible.value = true
 }
 
@@ -337,24 +331,51 @@ function handleEdit(row) {
     category: row.category || 'business',
     isEnabled: row.isEnabled,
     sortOrder: row.sortOrder,
+    // uiConfig 不再 UI 编辑，但保留原值用于保存时透传（避免清空主题/欢迎语等存量配置）
     uiConfig: {
       theme: { ...emptyUiConfig().theme, ...(ui.theme || {}) },
       avatar: { ...emptyUiConfig().avatar, ...(ui.avatar || {}) },
       welcome: { ...emptyUiConfig().welcome, ...(ui.welcome || {}) },
       capabilities: Array.isArray(ui.capabilities) ? ui.capabilities.map(c => ({ ...c })) : [],
       examples: Array.isArray(ui.examples) ? [...ui.examples] : []
-    }
+    },
+    dataSourceId: row.dataSourceId ?? null,
+    schemaName: row.schemaName || '',
+    allowedTableList: Array.isArray(row.allowedTableList) ? [...row.allowedTableList] : []
   })
   editDialogVisible.value = true
+  if (editForm.dataSourceId) {
+    refreshTableCandidates(editForm.dataSourceId)
+  } else {
+    tableCandidates.value = []
+  }
 }
 
-function addCapability() {
-  editForm.uiConfig.capabilities.push({ icon: '📊', iconColor: '#2563eb', title: '', description: '' })
+async function refreshTableCandidates(dsId) {
+  if (!dsId) {
+    tableCandidates.value = []
+    return
+  }
+  try {
+    const tables = await fetchDataSourceTables(dsId)
+    tableCandidates.value = (tables || [])
+      .map(t => (typeof t === 'string' ? t : (t?.tableName || t?.name || t?.table_name)))
+      .filter(Boolean)
+      .sort()
+  } catch (e) {
+    tableCandidates.value = []
+  }
 }
 
-function removeCapability(index) {
-  editForm.uiConfig.capabilities.splice(index, 1)
-}
+watch(() => editForm.dataSourceId, (newDs, oldDs) => {
+  if (newDs === oldDs) return
+  if (!newDs) {
+    tableCandidates.value = []
+    editForm.allowedTableList = []
+    return
+  }
+  refreshTableCandidates(newDs)
+})
 
 async function handleSave() {
   if (!editForm.name?.trim() || !editForm.code?.trim()) {
@@ -370,7 +391,10 @@ async function handleSave() {
       category: editForm.category,
       isEnabled: editForm.isEnabled,
       sortOrder: editForm.sortOrder,
-      uiConfig: editForm.uiConfig
+      uiConfig: editForm.uiConfig,
+      dataSourceId: editForm.dataSourceId ?? null,
+      schemaName: editForm.schemaName?.trim() || null,
+      allowedTableList: Array.isArray(editForm.allowedTableList) ? editForm.allowedTableList : []
     }
     if (isEditMode.value) {
       await updateScenario(editForm.id, payload)
@@ -442,7 +466,17 @@ async function handleSaveAuth() {
 
 onMounted(() => {
   loadScenarios()
+  loadDataSources()
 })
+
+async function loadDataSources() {
+  try {
+    const list = await fetchDataSources()
+    dataSources.value = list || []
+  } catch (e) {
+    dataSources.value = []
+  }
+}
 </script>
 
 <style scoped>

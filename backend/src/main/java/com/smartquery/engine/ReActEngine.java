@@ -36,6 +36,7 @@ public class ReActEngine {
     private final com.smartquery.logging.ConversationStatsService statsService;
     private final List<LifecycleHook> lifecycleHooks;
     private final com.smartquery.tool.hook.AutoRepairHook autoRepairHook;
+    private final com.smartquery.service.ScenarioService scenarioService;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
     @org.springframework.beans.factory.annotation.Qualifier("llmExecutor")
@@ -65,6 +66,7 @@ public class ReActEngine {
             com.smartquery.logging.ConversationStatsService statsService,
             List<LifecycleHook> lifecycleHooks,
             com.smartquery.tool.hook.AutoRepairHook autoRepairHook,
+            com.smartquery.service.ScenarioService scenarioService,
             @org.springframework.beans.factory.annotation.Qualifier("llmExecutor") Executor llmExecutor
     ) {
         this.llmService = llmService;
@@ -75,6 +77,7 @@ public class ReActEngine {
         this.statsService = statsService;
         this.lifecycleHooks = lifecycleHooks;
         this.autoRepairHook = autoRepairHook;
+        this.scenarioService = scenarioService;
         this.llmExecutor = llmExecutor;
     }
 
@@ -152,6 +155,9 @@ public class ReActEngine {
     ) {
         // 1. 构建初始消息 (system + history + user)
         String systemPrompt = contextAssembler.fetchPromptParts(model, dataSourceId, scenarioCode, scenarioVariables).systemPrompt();
+
+        // 反查场景白名单：执行 execute_sql / schema_explore 时作为 SQL 拦截依据
+        Set<String> allowedTables = resolveAllowedTables(scenarioCode);
 
         // LifecycleHook: onSessionStart — 注入附加上下文
         StringBuilder sessionExtras = new StringBuilder();
@@ -376,7 +382,7 @@ public class ReActEngine {
 
             // 执行工具 — 先发出工具输入事件（SQL/Python 代码预览）
             ToolExecutionContext ctx = new ToolExecutionContext(
-                conversationId, dataSourceId, UUID.randomUUID().toString(), model, abortChecker, eventConsumer
+                conversationId, dataSourceId, UUID.randomUUID().toString(), model, allowedTables, abortChecker, eventConsumer
             );
 
             for (ToolOrchestrator.ToolCall tc : toolCalls) {
@@ -677,5 +683,27 @@ public class ReActEngine {
 
         eventConsumer.accept(new ReActEvent.Error("LLM 服务异常", userMessage));
         eventConsumer.accept(new ReActEvent.Done(state.turnCount(), state.totalTokens(), state.totalCost()));
+    }
+
+    /**
+     * 反查场景配置的表白名单。null/empty 表示该场景不限表（等同现状）。
+     */
+    private Set<String> resolveAllowedTables(String scenarioCode) {
+        if (scenarioCode == null || scenarioCode.isBlank()) return null;
+        try {
+            com.smartquery.entity.Scenario s = scenarioService.getByCode(scenarioCode);
+            if (s == null || s.getAllowedTables() == null || s.getAllowedTables().isBlank()) {
+                return null;
+            }
+            Set<String> set = new java.util.LinkedHashSet<>();
+            for (String token : s.getAllowedTables().split(",")) {
+                String n = com.smartquery.tool.SqlSafetyValidator.normalizeTableName(token);
+                if (n != null && !n.isEmpty()) set.add(n);
+            }
+            return set.isEmpty() ? null : set;
+        } catch (Exception e) {
+            log.debug("[REACT] failed to resolve allowedTables for scenario {}: {}", scenarioCode, e.getMessage());
+            return null;
+        }
     }
 }

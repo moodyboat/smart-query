@@ -13,18 +13,39 @@
         </el-button>
       </div>
       <el-select
-        v-model="selectedDsId"
-        placeholder="选择数据源"
-        class="ds-select"
+        v-model="selectedScenarioCode"
+        placeholder="选择场景"
+        class="scenario-select"
         size="small"
+        @change="onScenarioChange"
       >
         <el-option
-          v-for="ds in qaEnabledDataSources"
-          :key="ds.id"
-          :label="ds.name"
-          :value="ds.id"
+          v-for="s in availableScenarios"
+          :key="s.code"
+          :label="(s.icon ? s.icon + ' ' : '') + (s.name || s.code)"
+          :value="s.code"
         />
       </el-select>
+      <el-tooltip
+        :content="lockedDataSourceId != null ? '当前场景已锁定数据源，退出场景可切换' : ''"
+        :disabled="lockedDataSourceId == null"
+        placement="bottom"
+      >
+        <el-select
+          v-model="selectedDsId"
+          placeholder="选择数据源"
+          class="ds-select"
+          size="small"
+          :disabled="lockedDataSourceId != null"
+        >
+          <el-option
+            v-for="ds in qaEnabledDataSources"
+            :key="ds.id"
+            :label="ds.name"
+            :value="ds.id"
+          />
+        </el-select>
+      </el-tooltip>
     </div>
 
     <div v-if="conversations.length > 5" class="search-bar">
@@ -132,8 +153,11 @@ import { Plus, DataLine, TrendCharts, EditPen, Setting, Delete, SwitchButton, St
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { fetchConversations, fetchDataSources, createConversation, deleteConversation, renameConversation, batchDeleteConversations } from '../api'
 import { useUserStore } from '../stores/user'
+import { useConversationStore } from '../stores/conversation'
+import { getScenarioConfig, getAllScenarios } from '../config/scenarios.js'
 
 const userStore = useUserStore()
+const convStore = useConversationStore()
 const avatarText = computed(() => (userStore.displayName || 'U').charAt(0).toUpperCase())
 
 const conversations = ref([])
@@ -144,6 +168,51 @@ const searchQuery = ref('')
 const editingId = ref(null)
 const editTitle = ref('')
 const editInput = ref(null)
+
+// 场景锁定数据源：当前场景配置了 dataSourceId 时禁用切换器并强制使用该值
+const lockedDataSourceId = computed(() => {
+  const code = convStore.getCurrentScenario()
+  if (!code) return null
+  const cfg = getScenarioConfig(code)
+  return cfg?.dataSourceId ?? null
+})
+
+// 用户级场景切换：列表来自 scenarios 缓存（基线 6 + DB 覆盖，按用户角色已过滤）
+const availableScenarios = computed(() => getAllScenarios())
+const selectedScenarioCode = ref(null)
+
+/**
+ * 切换场景 = 新建该场景的会话（沿用 PromptManager 的语义：一个会话属于一个场景）。
+ * 不在当前会话中途切，避免上下文与提示词错位。
+ */
+async function onScenarioChange(code) {
+  if (!code) return
+  try {
+    const cfg = getScenarioConfig(code)
+    // 场景绑了数据源就用场景的，否则沿用当前选择
+    const dsId = cfg?.dataSourceId ?? selectedDsId.value
+    const title = cfg?.name ? `${cfg.name}对话` : '场景对话'
+    // scenario 字段持久化到 sq_conversation，刷新页面可恢复
+    const resp = await createConversation({ title, dataSourceId: dsId, scenario: code })
+    const newId = resp?.id ?? resp
+    if (!newId) throw new Error('创建会话失败')
+    convStore.setCurrentConversation(newId)
+    convStore.setScenario(code)
+    // 触发父组件加载新会话
+    emit('conversationCreated', newId)
+    emit('selectConversation', newId)
+    ElMessage.success(`已切换到「${cfg?.name || code}」场景`)
+  } catch (e) {
+    ElMessage.error('切换场景失败：' + (e.message || ''))
+    // 回滚选中态
+    selectedScenarioCode.value = convStore.getCurrentScenario()
+  }
+}
+
+// 监听外部场景变化（如 PromptManager 切了），同步下拉显示
+watch(() => convStore.getCurrentScenario(), (code) => {
+  if (code !== selectedScenarioCode.value) selectedScenarioCode.value = code
+}, { immediate: true })
 
 // Batch mode
 const batchMode = ref(false)
@@ -181,6 +250,13 @@ const isIndeterminate = computed(() => {
 
 watch(selectedDsId, (val) => {
   emit('dataSourceChanged', val)
+})
+
+// 场景变化时若锁定数据源，强制覆盖本地选择；后端 ChatController 会再校验一次
+watch(lockedDataSourceId, (newVal) => {
+  if (newVal != null && newVal !== selectedDsId.value) {
+    selectedDsId.value = newVal
+  }
 })
 
 onMounted(async () => {
@@ -289,6 +365,10 @@ function handleConvClick(conv) {
   } else {
     // Normal conversation selection
     currentConvId.value = conv.id
+    // 恢复会话绑定的场景（刷新页面/切换会话后场景跟着会话走）
+    const scenario = conv?.scenario || null
+    convStore.setScenario(scenario)
+    selectedScenarioCode.value = scenario
     emit('selectConversation', conv.id)
   }
 }

@@ -79,6 +79,25 @@ public class DataSeeder implements CommandLineRunner {
     private static final String ALTER_SQ_MINING_MODEL_ADD_USER_ID_SQL =
         "ALTER TABLE sq_mining_model ADD COLUMN user_id VARCHAR(50)";
 
+    /**
+     * 给 sq_conversation 加 scenario 列，用于刷新页面后恢复场景上下文。
+     * 列已存在或老库不支持时由 catch 吞错。
+     */
+    private static final String ALTER_SQ_CONVERSATION_ADD_SCENARIO_SQL =
+        "ALTER TABLE sq_conversation ADD COLUMN scenario VARCHAR(64)";
+
+    /**
+     * 场景化隔离：给 sq_scenario 加 4 列。
+     * 所有列 nullable + 默认 NULL，老场景未配置时行为完全等同现状。
+     * 列已存在或老库不支持时由 catch 吞错。
+     */
+    private static final String[] ALTER_SQ_SCENARIO_ISOLATION_SQLS = {
+        "ALTER TABLE sq_scenario ADD COLUMN data_source_id BIGINT",
+        "ALTER TABLE sq_scenario ADD COLUMN schema_name VARCHAR(128)",
+        "ALTER TABLE sq_scenario ADD COLUMN allowed_tables TEXT",
+        "ALTER TABLE sq_scenario ADD COLUMN prompt_override TEXT"
+    };
+
     private final UserMapper userMapper;
     private final ScenarioMapper scenarioMapper;
     private final RoleScenarioMapper roleScenarioMapper;
@@ -113,6 +132,24 @@ public class DataSeeder implements CommandLineRunner {
             log.info("[SEED] sq_mining_model 加列 user_id 成功");
         } catch (Exception e) {
             log.debug("[SEED] sq_mining_model.user_id 已存在或加列失败（可忽略）: {}", e.getMessage());
+        }
+
+        // 兼容老库：给 sq_scenario 加场景化隔离 4 列（数据源/schema/表白名单/prompt 覆盖）
+        for (String sql : ALTER_SQ_SCENARIO_ISOLATION_SQLS) {
+            try {
+                jdbcTemplate.execute(sql);
+                log.info("[SEED] sq_scenario 加列成功: {}", sql.replaceAll(".*ADD COLUMN (\\S+).*", "$1"));
+            } catch (Exception e) {
+                log.debug("[SEED] sq_scenario 加列已存在或失败（可忽略）: {}", e.getMessage());
+            }
+        }
+
+        // 兼容老库：给 sq_conversation 加 scenario 列（刷新页面恢复场景）
+        try {
+            jdbcTemplate.execute(ALTER_SQ_CONVERSATION_ADD_SCENARIO_SQL);
+            log.info("[SEED] sq_conversation 加列 scenario 成功");
+        } catch (Exception e) {
+            log.debug("[SEED] sq_conversation.scenario 已存在或加列失败（可忽略）: {}", e.getMessage());
         }
 
         seedDefaultAdmin();

@@ -78,6 +78,82 @@ public class SqlSafetyValidator {
         return ValidationResult.ok();
     }
 
+    // ------------------------------------------------------------------
+    // 场景表白名单：在 validate() 基础上叠加"SQL 涉及的表必须全部在白名单内"
+    // ------------------------------------------------------------------
+
+    private static final Pattern FROM_JOIN_PATTERN = Pattern.compile(
+        "\\b(?:FROM|JOIN|INTO|UPDATE)\\s+[`\\[\"?]?(\\w+)[`\\]\"?]?",
+        Pattern.CASE_INSENSITIVE);
+
+    /**
+     * 提取 SQL 涉及的所有表名（已 normalize：去 schema 前缀、去包裹符、小写）。
+     * 优先用 JSqlParser；解析失败回退正则。
+     */
+    public Set<String> extractTableNames(String sql) {
+        if (sql == null || sql.isBlank()) return Collections.emptySet();
+        try {
+            net.sf.jsqlparser.statement.Statement stmt = net.sf.jsqlparser.parser.CCJSqlParserUtil.parse(sql);
+            List<String> raw = new net.sf.jsqlparser.util.TablesNamesFinder().getTableList(stmt);
+            Set<String> normalized = new LinkedHashSet<>();
+            for (String t : raw) {
+                String n = normalizeTableName(t);
+                if (n != null && !n.isEmpty()) normalized.add(n);
+            }
+            return normalized;
+        } catch (Exception e) {
+            // JSqlParser 不支持的方言或语法异常 → 正则兜底
+            Set<String> fallback = new LinkedHashSet<>();
+            java.util.regex.Matcher m = FROM_JOIN_PATTERN.matcher(sql);
+            while (m.find()) {
+                String n = normalizeTableName(m.group(1));
+                if (n != null && !n.isEmpty()) fallback.add(n);
+            }
+            return fallback;
+        }
+    }
+
+    /**
+     * 表名 normalize：去 schema 前缀、去反引号/方括号/双引号、小写。
+     */
+    public static String normalizeTableName(String raw) {
+        if (raw == null) return null;
+        String s = raw.trim();
+        int dot = s.lastIndexOf('.');
+        if (dot >= 0 && dot < s.length() - 1) s = s.substring(dot + 1);
+        if ((s.startsWith("`") && s.endsWith("`"))
+            || (s.startsWith("[") && s.endsWith("]"))
+            || (s.startsWith("\"") && s.endsWith("\""))) {
+            s = s.substring(1, s.length() - 1);
+        }
+        return s.toLowerCase();
+    }
+
+    /**
+     * 在基础安全校验之上叠加表白名单校验。
+     * @param sql 待校验 SQL
+     * @param allowedTables 白名单（normalize 后的小写表名集合）；null/empty 表示不限
+     */
+    public ValidationResult validateAgainstWhitelist(String sql, Set<String> allowedTables) {
+        ValidationResult base = validate(sql);
+        if (!base.safe()) return base;
+        if (allowedTables == null || allowedTables.isEmpty()) return base;
+
+        Set<String> used = extractTableNames(sql);
+        if (used.isEmpty()) {
+            // 解析不出表名（如 SHOW TABLES），保守拒绝，避免绕过
+            return ValidationResult.unsafe("无法解析 SQL 涉及的表名，场景白名单模式下拒绝执行");
+        }
+        Set<String> violating = new LinkedHashSet<>();
+        for (String t : used) {
+            if (!allowedTables.contains(t)) violating.add(t);
+        }
+        if (!violating.isEmpty()) {
+            return ValidationResult.unsafe("SQL 引用了未授权表: " + violating);
+        }
+        return ValidationResult.ok();
+    }
+
     /**
      * 提取 SQL 的第一个关键字，跳过行首注释
      */

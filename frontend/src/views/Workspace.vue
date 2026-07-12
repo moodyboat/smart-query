@@ -61,6 +61,7 @@ import { useConversationStore } from '../stores/conversation'
 import { useUIStore } from '../stores/ui'
 import { useUserStore } from '../stores/user'
 import { preloadScenarios } from '../config/scenarios.js'
+import { fetchConversationMeta } from '../api'
 import { ROUTES } from '../constants.js'
 
 const router = useRouter()
@@ -89,6 +90,12 @@ onUnmounted(() => window.removeEventListener('resize', onResize))
 async function onSelectConversation(convId) {
   conv.setCurrentConversation(convId)
   sidebar.value?.setCurrentConversation(convId)
+
+  // 恢复会话绑定的场景（刷新页面/直接 URL 进入时 Sidebar 走不到 handleConvClick）
+  try {
+    const meta = await fetchConversationMeta(convId)
+    if (meta?.scenario) conv.setScenario(meta.scenario)
+  } catch (e) { /* scenario 恢复失败不阻塞消息加载 */ }
 
   try {
     const { formatted, chartsToRestore } = await conv.loadConversationHistory(convId)
