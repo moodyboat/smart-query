@@ -126,66 +126,84 @@ async function refresh() {
   padding: 0 4px;
 }
 .stat-section {
-  margin-bottom: 20px;
+  margin-bottom: var(--space-xl);
 }
 .stat-section h4 {
-  font-size: var(--font-base);
-  color: var(--text-primary);
-  margin: 0 0 8px 0;
+  font-size: var(--font-sm);
+  color: var(--text-muted);
+  margin: 0 0 var(--space-sm) 0;
   padding-bottom: 6px;
   border-bottom: 1px solid var(--border-lighter);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
 }
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
+  gap: var(--space-md);
 }
 .stat-card {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  padding: 12px 8px;
-  background: var(--hover);
-  border-radius: var(--radius-md);
+  align-items: flex-start;
+  padding: var(--space-md) var(--space-lg);
+  background: var(--surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  transition: all var(--transition-base);
+}
+.stat-card:hover {
+  border-color: var(--brand-primary-light);
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
 }
 .stat-value {
-  font-size: var(--font-2xl);
-  font-weight: 600;
-  color: var(--primary);
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--brand-primary);
+  line-height: 1.2;
+  letter-spacing: -0.02em;
 }
 .stat-label {
   font-size: var(--font-sm);
   color: var(--text-muted);
   margin-top: 4px;
+  font-weight: 500;
 }
 .model-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 6px 0;
+  padding: var(--space-sm) 0;
   border-bottom: 1px solid var(--border-lighter);
 }
+.model-row:last-child { border-bottom: none; }
 .model-name {
   font-size: var(--font-md);
   font-weight: 500;
+  color: var(--text-primary);
 }
 .model-stats {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-sm);
 }
 .stat-mini {
   font-size: var(--font-xs);
   color: var(--text-muted);
+  padding: 2px 8px;
+  background: var(--bg);
+  border-radius: var(--radius-pill);
 }
 .empty-hint {
   text-align: center;
   color: var(--text-muted);
   font-size: var(--font-md);
-  padding: var(--space-md);
+  padding: var(--space-xl);
 }
 .stat-actions {
   text-align: center;
-  padding: 12px 0;
+  padding: var(--space-md) 0;
 }
 </style>
