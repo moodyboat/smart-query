@@ -104,22 +104,31 @@ watch(() => props.option, renderChart, { deep: true })
 <style scoped>
 .chart-container {
   background: var(--surface);
+  border: 1px solid var(--border-light);
   border-radius: var(--radius-lg);
   overflow: hidden;
+  transition: border-color var(--transition-base), box-shadow var(--transition-base);
+}
+.chart-container:hover {
+  border-color: var(--brand-primary-light);
+  box-shadow: var(--shadow-sm);
 }
 .chart-title {
-  padding: var(--space-md) 14px var(--space-xs);
+  padding: var(--space-md) var(--space-lg) var(--space-xs);
   font-size: var(--font-base);
   font-weight: 600;
-  color: var(--text-regular);
+  color: var(--text-primary);
+  letter-spacing: -0.005em;
+  border-bottom: 1px solid var(--border-lighter);
 }
 .chart-wrapper {
   width: 100%;
   height: 360px;
   min-height: 300px;
+  padding: var(--space-sm) var(--space-xs);
 }
 .chart-error {
-  padding: 20px 14px;
+  padding: var(--space-lg) var(--space-md);
   text-align: center;
   color: var(--color-warning);
   font-size: var(--font-md);
@@ -128,8 +137,9 @@ watch(() => props.option, renderChart, { deep: true })
   justify-content: center;
   gap: var(--space-sm);
   background: var(--color-warning-light);
-  margin: var(--space-sm) var(--space-md);
+  margin: var(--space-md);
   border-radius: var(--radius-md);
+  border-left: 3px solid var(--color-warning);
 }
 .chart-error-icon { font-size: var(--font-xl); }
 </style>
