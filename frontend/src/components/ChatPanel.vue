@@ -1,5 +1,5 @@
 <template>
-  <section class="main-area" :class="{ 'scenario-mode': convStore.getCurrentScenario() }" :style="scenarioTheme.background ? { '--bg': scenarioTheme.background } : {}">
+  <section class="main-area" :class="{ 'scenario-mode': convStore.getCurrentScenario() }" :style="scenarioTheme.background ? { '--bg': scenarioTheme.background, '--scenario-header-bg': scenarioTheme.headerBg } : {}">
     <header class="chat-header">
       <button v-if="showSidebarToggle" class="hamburger-btn" @click="emit('toggleSidebar')">☰</button>
       <span class="header-title">
@@ -42,8 +42,8 @@
 
         <div class="welcome-cards" v-if="scenarioCapabilities.length > 0">
           <div class="welcome-card" v-for="(capability, index) in scenarioCapabilities" :key="index">
-            <div class="card-icon" :style="{ 'background': capability.iconColor || 'var(--primary)' }">
-              {{ capability.icon }}
+            <div class="card-icon" :style="{ '--icon-accent': capability.iconColor || 'var(--brand-primary)' }">
+              <span class="card-icon-emoji">{{ capability.icon }}</span>
             </div>
             <div class="card-title">{{ capability.title }}</div>
             <div class="card-desc">{{ capability.description }}</div>
@@ -840,12 +840,21 @@ defineExpose({ sendMessage, clearMessages, messages, updateChartOption, pendingC
 }
 
 .chat-header {
-  height: 52px; background: var(--brand-gradient); border-bottom: none;
+  height: 52px;
+  background: var(--scenario-header-bg, var(--sidebar-bg));
+  border-bottom: 1px solid var(--sidebar-border);
   display: flex; align-items: center; padding: 0 var(--space-xl);
   font-size: var(--font-lg); font-weight: 600; flex-shrink: 0;
   justify-content: space-between;
   color: var(--on-dark-text);
   box-shadow: var(--shadow-sm);
+  position: relative;
+}
+.chat-header::after {
+  content: '';
+  position: absolute; left: 0; right: 0; bottom: -1px; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--brand-primary), transparent);
+  opacity: 0.6;
 }
 .header-title { color: var(--on-dark-text); }
 .scenario-indicator {
@@ -945,18 +954,13 @@ defineExpose({ sendMessage, clearMessages, messages, updateChartOption, pendingC
 .card-icon {
   display: inline-flex; align-items: center; justify-content: center;
   width: 40px; height: 40px;
-  font-size: 22px;
   border-radius: var(--radius-md);
   margin-bottom: var(--space-sm);
-  background: var(--brand-primary-lighter);
-  position: relative;
+  background: color-mix(in srgb, var(--icon-accent) 14%, white);
+  border: 1px solid color-mix(in srgb, var(--icon-accent) 28%, transparent);
 }
-.card-icon::before {
-  content: '';
-  position: absolute; inset: 0;
-  border-radius: inherit;
-  background: var(--icon-bg, transparent);
-  opacity: 0.18;
+.card-icon-emoji {
+  font-size: 22px; line-height: 1;
 }
 .sql-icon, .py-icon, .chart-icon, .report-icon {
   font-size: var(--font-sm); font-weight: 700;
