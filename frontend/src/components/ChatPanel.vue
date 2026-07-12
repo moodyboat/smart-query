@@ -52,14 +52,14 @@
 
         <div class="welcome-examples">
           <div class="example-label">试试问我:</div>
-          <div
-            v-for="ex in exampleQueries"
-            :key="ex"
-            class="example-item"
-            :class="{ disabled: !conversationId || !dataSourceId }"
-            @click="tryExample(ex)"
-          >
-            "{{ ex }}"
+          <div class="example-chips">
+            <button
+              v-for="ex in exampleQueries"
+              :key="ex"
+              class="chip example-chip"
+              :class="{ disabled: !conversationId || !dataSourceId }"
+              @click="tryExample(ex)"
+            >{{ ex }}</button>
           </div>
         </div>
       </div>
@@ -909,51 +909,71 @@ defineExpose({ sendMessage, clearMessages, messages, updateChartOption, pendingC
 .welcome {
   text-align: center; color: var(--text-muted); padding: 60px var(--space-xl) 30px;
 }
-.welcome h3 { font-size: 22px; margin-bottom: var(--space-xs); color: var(--text-primary); }
-.welcome-desc { font-size: var(--font-base); color: var(--text-muted); margin-bottom: var(--space-2xl); }
+.welcome h3 {
+  font-size: 26px; margin-bottom: var(--space-sm); color: var(--text-primary);
+  font-weight: 700; letter-spacing: -0.01em;
+}
+.welcome-desc {
+  font-size: var(--font-lg); color: var(--text-secondary);
+  margin-bottom: var(--space-2xl);
+}
 
 .welcome-cards {
-  display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--space-md);
-  max-width: 500px; margin: 0 auto var(--space-2xl); text-align: left;
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-md);
+  max-width: 760px; margin: 0 auto var(--space-2xl); text-align: left;
 }
-@media (max-width: 767px) {
+@media (max-width: 1023px) {
+  .welcome-cards { grid-template-columns: repeat(2, 1fr); max-width: 500px; }
+}
+@media (max-width: 567px) {
   .welcome-cards { grid-template-columns: 1fr; }
 }
 .welcome-card {
-  padding: var(--space-md) 14px; background: var(--surface); border-radius: var(--radius-lg);
-  border: 1px solid var(--border); transition: all 0.2s;
+  padding: var(--space-lg); background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
 }
 .welcome-card:hover {
-  border-color: var(--border-hover);
-  transform: none;
-  box-shadow: none;
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+  border-color: var(--brand-primary-light);
 }
 .card-icon {
-  display: inline-block; font-size: var(--font-xs); font-weight: 700;
-  padding: 2px var(--space-sm); border-radius: var(--radius-sm); color: var(--color-primary); margin-bottom: var(--space-xs);
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px;
+  font-size: 22px;
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-sm);
+  background: var(--brand-primary-lighter);
+  position: relative;
 }
-.sql-icon { color: var(--color-primary); }
-.py-icon { color: var(--color-primary); }
-.chart-icon, .report-icon { color: var(--color-primary); font-size: var(--font-md); padding: 2px var(--space-xs); }
-.card-title { font-size: var(--font-md); font-weight: 600; color: var(--text-regular); margin-bottom: 2px; }
-.card-desc { font-size: var(--font-sm); color: var(--text-muted); }
+.card-icon::before {
+  content: '';
+  position: absolute; inset: 0;
+  border-radius: inherit;
+  background: var(--icon-bg, transparent);
+  opacity: 0.18;
+}
+.sql-icon, .py-icon, .chart-icon, .report-icon {
+  font-size: var(--font-sm); font-weight: 700;
+  position: relative; z-index: 1;
+}
+.card-title { font-size: var(--font-base); font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
+.card-desc { font-size: var(--font-sm); color: var(--text-muted); line-height: 1.5; }
 
-.welcome-examples { max-width: 500px; margin: 0 auto; }
-.example-label { font-size: var(--font-sm); color: var(--text-muted); margin-bottom: var(--space-sm); }
-.example-item {
-  padding: var(--space-sm) var(--space-lg); background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius-lg); font-size: var(--font-md); color: var(--text-secondary); margin-bottom: var(--space-sm);
-  cursor: pointer; transition: all 0.2s;
+.welcome-examples { max-width: 600px; margin: 0 auto; }
+.example-label { font-size: var(--font-sm); color: var(--text-muted); margin-bottom: var(--space-md); }
+.example-chips {
+  display: flex; flex-wrap: wrap; gap: var(--space-sm); justify-content: center;
 }
-.example-item:hover {
-  border-color: var(--border-hover);
-  color: var(--color-primary);
-  background: var(--surface-hover);
-  transform: none;
-  box-shadow: none;
+.example-chip {
+  font-size: var(--font-base); padding: 8px 16px;
 }
-.example-item.disabled { opacity: 0.5; cursor: not-allowed; }
-.example-item.disabled:hover { border-color: var(--border); color: var(--text-secondary); background: var(--surface); transform: none; }
+.example-chip.disabled { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
 
 .input-area {
   padding: var(--space-lg) var(--space-xl); background: var(--surface);

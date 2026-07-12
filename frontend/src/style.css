@@ -100,6 +100,31 @@
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.04);
   --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.08);
   --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --shadow-xl: 0 8px 32px rgba(15, 23, 42, 0.10);
+  --shadow-brand: 0 4px 14px rgba(37, 99, 235, 0.18);
+
+  /* ===== 深色 Sidebar 色板（现代企业 SaaS 风）===== */
+  --sidebar-bg: #0f172a;              /* slate-900 */
+  --sidebar-bg-soft: #1e293b;         /* slate-800 */
+  --sidebar-fg: #cbd5e1;              /* slate-300 */
+  --sidebar-fg-strong: #f1f5f9;       /* slate-100 */
+  --sidebar-fg-muted: #64748b;        /* slate-500 */
+  --sidebar-border: rgba(255, 255, 255, 0.06);
+  --sidebar-hover: rgba(255, 255, 255, 0.05);
+  --sidebar-active: rgba(99, 102, 241, 0.18);
+  --sidebar-active-bar: linear-gradient(180deg, #6366f1 0%, #2563eb 100%);
+
+  /* ===== 玻璃态 / 胶囊按钮 ===== */
+  --glass-bg: rgba(255, 255, 255, 0.72);
+  --glass-border: rgba(255, 255, 255, 0.5);
+  --glass-blur: 16px;
+
+  --chip-bg: #f1f5f9;                /* slate-100 */
+  --chip-bg-hover: var(--brand-primary-lighter);
+  --chip-fg: var(--text-secondary);
+  --chip-fg-hover: var(--brand-primary);
+  --chip-border: transparent;
+  --chip-border-hover: var(--brand-primary-light);
 
   /* Typography */
   --font-xs: 11px;
@@ -205,4 +230,42 @@ body {
 }
 .back-arrow {
   font-size: var(--font-2xl);
+}
+
+/* ===== 通用胶囊按钮（示例问题 / 标签 / 快捷入口）===== */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+  background: var(--chip-bg);
+  color: var(--chip-fg);
+  font-size: var(--font-base);
+  line-height: 1;
+  border: 1px solid var(--chip-border);
+  cursor: pointer;
+  transition: all var(--transition-base);
+  white-space: nowrap;
+}
+.chip:hover {
+  background: var(--chip-bg-hover);
+  color: var(--chip-fg-hover);
+  border-color: var(--chip-border-hover);
+  transform: translateY(-1px);
+}
+
+/* ===== 玻璃卡片（欢迎区/能力卡）===== */
+.glass-card {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--transition-base), box-shadow var(--transition-base);
+}
+.glass-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
 }
