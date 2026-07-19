@@ -72,6 +72,11 @@ smart-query:
         api-key: ${GLM_API_KEY:9c82f455ae15490ca9372df1a707fbdb.4oDb1blqKcUWMVXr}
         max-tokens: 8192
         temperature: 0.1
+      glm-4.5:
+        api-url: https://open.bigmodel.cn/api/coding/paas/v4/chat/completions
+        api-key: ${GLM_API_KEY:9c82f455ae15490ca9372df1a707fbdb.4oDb1blqKcUWMVXr}
+        max-tokens: 4096
+        temperature: 0.1
       glm-4:
         api-url: https://open.bigmodel.cn/api/coding/paas/v4/chat/completions
         api-key: ${GLM_API_KEY:9c82f455ae15490ca9372df1a707fbdb.4oDb1blqKcUWMVXr}
@@ -126,7 +131,7 @@ smart-query:
 
   # 上下文压缩器
   compactor:
-    model: glm-4
+    model: glm-4.5
     default-keep-recent-turns: 4
     micro-compact-keep-turns: 5
     max-summary-length: 3000
@@ -208,7 +213,7 @@ smart-query:
   # 对话摘要
   summary:
     enabled: true
-    model: glm-4
+    model: glm-4.5
     max-tokens: 2000
     cache-ttl-minutes: 30
 
