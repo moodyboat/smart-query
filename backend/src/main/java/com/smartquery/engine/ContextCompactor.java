@@ -29,7 +29,7 @@ public class ContextCompactor {
     private final LlmService llmService;
     private final ConversationEventLogger eventLogger;
 
-    @Value("${compactor.model:glm-4}")
+    @Value("${smart-query.llm.default-model:glm-5.1}")
     private String summarizationModel;
 
     @Value("${compactor.default-keep-recent-turns:4}")

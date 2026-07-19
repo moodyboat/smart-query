@@ -280,55 +280,22 @@ public class OpenAiCompatibleService implements LlmService {
     @org.springframework.beans.factory.annotation.Value("${smart-query.llm.default-max-tokens:4096}")
     private int defaultMaxTokens;
 
-    @org.springframework.beans.factory.annotation.Value("${smart-query.llm.models.glm-5.1.api-key:}")
-    private String glm51ApiKey;
-
-    @org.springframework.beans.factory.annotation.Value("${smart-query.llm.models.glm-4.api-key:}")
-    private String glm4ApiKey;
-
-    @org.springframework.beans.factory.annotation.Value("${smart-query.llm.models.glm-5.1.api-url:https://open.bigmodel.cn/api/coding/paas/v4/chat/completions}")
-    private String glm51ApiUrl;
-
-    @org.springframework.beans.factory.annotation.Value("${smart-query.llm.models.glm-4.api-url:https://open.bigmodel.cn/api/coding/paas/v4/chat/completions}")
-    private String glm4ApiUrl;
-
+    /**
+     * 统一回退配置：当 models map（DB + yml）里都找不到 model 时使用。
+     * 不再为具体 model 名（glm-5.1/glm-4 等）硬编码 case。
+     * apiUrl 来自 default-api-url；apiKey 优先 env LLM_API_KEY，次选 GLM_API_KEY。
+     */
     private LlmConfigEntity getDefaultConfig(String model) {
         LlmConfigEntity config = new LlmConfigEntity();
         config.setModelCode(model);
 
-        // 根据模型代码选择对应的配置
-        String apiUrl = null;
-        String apiKey = null;
-        int maxTokens = defaultMaxTokens;
-
-        switch (model) {
-            case "glm-5.1":
-                apiUrl = glm51ApiUrl;
-                apiKey = glm51ApiKey;
-                maxTokens = 8192;
-                break;
-            case "glm-4":
-                apiUrl = glm4ApiUrl;
-                apiKey = glm4ApiKey;
-                maxTokens = 4096;
-                break;
-            default:
-                // 使用环境变量作为最后回退
-                apiUrl = System.getenv("LLM_API_URL");
-                apiKey = System.getenv("LLM_API_KEY");
-        }
-
-        // 如果仍然为空，使用默认值
-        if (apiUrl == null || apiUrl.isBlank()) {
-            apiUrl = defaultApiUrl;
-        }
-        if (apiKey == null) {
-            apiKey = "";
-        }
+        String apiUrl = defaultApiUrl;
+        String apiKey = System.getenv().getOrDefault("LLM_API_KEY", System.getenv("GLM_API_KEY"));
+        if (apiKey == null) apiKey = "";
 
         config.setApiUrl(apiUrl);
         config.setApiKey(apiKey);
-        config.setMaxTokens(maxTokens);
+        config.setMaxTokens(defaultMaxTokens);
         config.setTemperature(java.math.BigDecimal.valueOf(0.1));
 
         log.debug("[LLM] getDefaultConfig for model={}, apiUrl={}, hasApiKey={}", model, apiUrl, !apiKey.isBlank());

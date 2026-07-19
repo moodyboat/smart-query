@@ -30,7 +30,7 @@ public class ConversationSummaryService {
     @Value("${smart-query.summary.enabled:true}")
     private boolean summaryEnabled;
 
-    @Value("${smart-query.summary.model:#{null}}")
+    @Value("${smart-query.llm.default-model:glm-5.1}")
     private String summaryModel;
 
     @Value("${smart-query.summary.max-tokens:2000}")

@@ -55,7 +55,7 @@ public class SummaryController {
     @PostMapping("/test/{conversationId}")
     public Result<Map<String, Object>> testSummary(
             @PathVariable Long conversationId,
-            @RequestParam(defaultValue = "glm-4") String model) {
+            @RequestParam(defaultValue = "${smart-query.llm.default-model:glm-5.1}") String model) {
         // 这里可以添加测试逻辑
         Map<String, Object> result = new HashMap<>();
         result.put("message", "摘要测试功能待实现");

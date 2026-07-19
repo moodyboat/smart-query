@@ -27,8 +27,6 @@ public record AppState(
     List<StepRecord> steps,
     boolean aborted
 ) {
-    public static final String DEFAULT_MODEL = "glm-5.1";
-
     public record ModelUsage(
         int inputTokens,
         int outputTokens,
@@ -60,7 +58,7 @@ public record AppState(
             null,
             null,
             new ArrayList<>(),
-            DEFAULT_MODEL,
+            null,
             ModelUsage.zero(),
             "normal",
             0,

@@ -5,7 +5,6 @@ import com.smartquery.llm.LlmService;
 import com.smartquery.mapper.ChatMessageMapper;
 import com.smartquery.mapper.ChartMapper;
 import com.smartquery.entity.Chart;
-import com.smartquery.store.AppState;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -26,6 +25,9 @@ public class ReportSummaryService {
     private final ChatMessageMapper chatMessageMapper;
     private final ChartMapper chartMapper;
     private final ObjectMapper objectMapper;
+
+    @org.springframework.beans.factory.annotation.Value("${smart-query.llm.default-model:glm-5.1}")
+    private String defaultModel;
 
     /**
      * 生成对话总结报告
@@ -325,7 +327,7 @@ public class ReportSummaryService {
      * 获取默认模型
      */
     private String getDefaultModel() {
-        return AppState.DEFAULT_MODEL;
+        return defaultModel;
     }
 
     /**

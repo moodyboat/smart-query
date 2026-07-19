@@ -207,3 +207,36 @@ Word 报告中的图表使用 **ECharts 服务端渲染**，无浏览器、无�
 - **[已彻底清理·2026-06-21] 算法注册孤儿**：`mining/AlgorithmRegistry`（137 行，硬编码 9 种算法）全无外部引用——`AlgorithmService` 自己定义 ALIAS_MAP 从 DB `AlgorithmMapper` 取数据，根本不依赖 Registry。已删除。
 - **[部署] 容器化已落地，CI 已补编译/构建**：已有 `backend/Dockerfile`（Node20+JRE17）、`frontend/Dockerfile`（nginx）、`docker-compose.yml`（**DM8 系统库走 host.docker.internal:5236** + mysql 业务库示例容器 + redis + backend + frontend + python 执行镜像）、`scripts/`（build/airpack）、`docs/guides/DEPLOYMENT.md`、`.env.example`、`.github/workflows/build.yml`（编译+构建，无测试）。开发模式 `start.sh` = `mvn spring-boot:run` + `npm run dev`。详见 `docs/DEPENDENCY_AUDIT.md`。
 - **[已确认·2026-06-21] ReAct 最大轮次**：`application.yml` `react.max-turns: 15` 生效（`ReActEngine.java:48` `@Value("${react.max-turns:20}")` 默认 20 被 yml 覆盖为 15）。CLAUDE.md 旧值 15 正确。
+
+## 业务场景（2026-07-19 新增）：财司指标分析 `metric_analysis`
+
+为 `指标体系梳理` 文件夹（位于本目录下）建好的元数据 + 结果表 + 字典表专门定制的问数场景，演示"基于业务元数据驱动的智能问数"模式。
+
+### 已创建对象
+
+| 类型 | ID | 名称 / code | 说明 |
+|---|---|---|---|
+| DataSource | 8 | 财司指标库(MySQL) | `host.docker.internal:3306/dws`，root/900110 |
+| Scenario | 8 | 财司指标分析 (`metric_analysis`) | 锁定数据源 8，限定 3 张表 |
+| PromptTemplate | 7 | metric_analysis_system | type=system, isDefault=true |
+
+### 限定的 3 张表（`sq_scenario.allowed_tables`）
+
+- `dws.dws_metric_info` — 指标基本信息表，117 行（54 基础 + 15 一级复合 + 48 二级复合）
+- `dws.dws_metric_val` — 指标结果表，约 102 万行（2020-06 ~ 2026-07）
+- `dim.dw_code_dict` — 数据标准代码字典，25,398 行（390 个字段）
+
+### 关键字段说明（已写入 prompt）
+
+- `metric_code` 编码格式：`业务线-主题-序号-类型`（B=基础，C=复合）
+- `schd_lvl` 调度层级：0=基础，1=日均类一级复合，2=同环比类二级复合
+- `metric_exp` 公式格式：基础 `sum(FIELD 中文)`，复合中文可读（如 `(本期基础 - 去年同期基础) / 去年同期基础`）
+- `dim` 字段为 JSON，需用 `JSON_EXTRACT(dim, '$.KEY')` 解析
+
+### 部署注意
+
+`sq_scenario` 表原有的列缺 4 个新字段（`data_source_id`、`schema_name`、`allowed_tables`、`prompt_override`）。已通过 `ALTER TABLE` 补齐，但镜像里 MyBatis 实体旧版 jar 不会持久化这些字段，**重建 backend 镜像后才能完整写入**。
+
+### 已知问题
+
+- **GLM API key 余额不足**：当前 `.env` 里的 `9c82f4...` 已耗尽，所有 LLM 调用返回 `1113 余额不足`。需要充值或换 key 才能跑通对话。

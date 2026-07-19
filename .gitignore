@@ -54,3 +54,7 @@ logs/
 tmp/
 .gstack/
 backend/charts/
+
+# 指标体系梳理项目（含大文件 212MB SQL dump，不入仓库）
+指标体系梳理/
+
