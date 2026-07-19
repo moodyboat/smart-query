@@ -149,10 +149,12 @@
             v-model="editForm.allowedTableList"
             multiple
             filterable
+            allow-create
+            default-first-option
             collapse-tags
             collapse-tags-tooltip
             :disabled="!editForm.dataSourceId"
-            placeholder="留空=该数据源全部表可见"
+            placeholder="留空=该数据源全部表可见；支持手动输入跨库表名(如 dim.dw_code_dict)"
             style="width: 100%"
           >
             <el-option
@@ -163,7 +165,7 @@
             />
           </el-select>
           <div class="muted" style="margin-top: 4px; font-size: 12px">
-            选了数据源但未选表 = 该数据源全部表可见；选了表 = 仅这些表对 LLM 可见，SQL 越界会被执行层拦截。
+            选了数据源但未选表 = 该数据源全部表可见；选了表 = 仅这些表对 LLM 可见，SQL 越界会被执行层拦截。支持手动输入跨库表名。
           </div>
         </el-form-item>
       </el-form>
