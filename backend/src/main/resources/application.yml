@@ -104,7 +104,7 @@ smart-query:
     timeout-seconds: 120
     http-timeout-seconds: 180
     connect-timeout-seconds: 30
-    max-retries: 5
+    max-retries: 10
     retry-delay-ms: 2000
     max-retry-delay-ms: 10000
     default-api-url: https://open.bigmodel.cn/api/paas/v4/chat/completions

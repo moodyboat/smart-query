@@ -51,6 +51,14 @@ public class ReActEngine {
     @Value("${react.max-token-budget:200000}")
     private int maxTokenBudget;
 
+    /**
+     * 上一轮工具调用是否有失败。如果有，下一轮是"修复轮次"，不受 maxTurns 限制。
+     * 区分：
+     *   - LLM HTTP 层重试（限流/500/网络错误）：受 smart-query.llm.max-retries 限制（默认 10）
+     *   - SQL/Python 执行失败的修复循环：不受 maxTurns 限制，直到修好或 LLM 自己放弃
+     */
+    private volatile boolean previousToolsFailed = false;
+
     @Value("${react.micro-compact-threshold:60000}")
     private int microCompactThreshold;
 
@@ -210,7 +218,7 @@ public class ReActEngine {
                 eventConsumer.accept(new ReActEvent.Done(state.turnCount(), state.totalTokens(), state.totalCost()));
                 break;
             }
-            if (state.turnCount() >= maxTurns) {
+            if (state.turnCount() >= maxTurns && !previousToolsFailed) {
                 state = state.withTerminated("达到最大轮次 " + maxTurns);
                 eventConsumer.accept(new ReActEvent.Done(state.turnCount(), state.totalTokens(), state.totalCost()));
                 break;
@@ -392,6 +400,13 @@ public class ReActEngine {
             long toolStartMs = System.currentTimeMillis();
             List<ToolResult> toolResults = toolOrchestrator.executeAll(toolCalls, ctx);
             long totalToolDuration = System.currentTimeMillis() - toolStartMs;
+
+            // 检查本轮工具是否有失败 → 设置 previousToolsFailed 标志
+            boolean anyToolFailed = toolResults.stream().anyMatch(tr -> !tr.success());
+            if (anyToolFailed) {
+                log.info("[REACT] tool execution had failures, next turn will be repair (exempt from maxTurns)");
+            }
+            previousToolsFailed = anyToolFailed;
 
             // 构建 tool_result 消息 + 实时发出工具事件
             long perToolDuration = toolCalls.size() > 0 ? totalToolDuration / toolCalls.size() : 0;
