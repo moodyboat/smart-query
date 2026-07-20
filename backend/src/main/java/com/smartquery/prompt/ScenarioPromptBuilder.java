@@ -10,7 +10,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -88,49 +87,6 @@ public class ScenarioPromptBuilder {
     }
 
     /**
-     * 根据场景ID构建系统提示词
-     */
-    public String buildByScenarioId(Long scenarioId, Map<String, Object> variables) {
-        Scenario scenario = scenarioService.getById(scenarioId);
-        if (scenario == null) {
-            log.warn("[SCENARIO-PROMPT] 场景不存在: ID={}, 使用默认场景", scenarioId);
-            scenario = scenarioService.getByCode(DEFAULT_SCENARIO_CODE);
-        }
-
-        if (scenario == null || !scenario.getIsEnabled()) {
-            return "";
-        }
-
-        return buildByScenario(scenario.getCode(), variables);
-    }
-
-    /**
-     * 获取场景信息
-     */
-    public Scenario getScenario(String scenarioCode) {
-        Scenario scenario = scenarioService.getByCode(scenarioCode);
-        if (scenario == null) {
-            return scenarioService.getByCode(DEFAULT_SCENARIO_CODE);
-        }
-        return scenario;
-    }
-
-    /**
-     * 获取所有启用的场景
-     */
-    public List<Scenario> getEnabledScenarios() {
-        return scenarioService.getEnabledScenarios();
-    }
-
-    /**
-     * 验证场景是否可用
-     */
-    public boolean isScenarioAvailable(String scenarioCode) {
-        Scenario scenario = scenarioService.getByCode(scenarioCode);
-        return scenario != null && scenario.getIsEnabled();
-    }
-
-    /**
      * 变量配置内部类
      */
     private static class PromptVariable {
@@ -150,45 +106,5 @@ public class ScenarioPromptBuilder {
 
         public String getDescription() { return description; }
         public void setDescription(String description) { this.description = description; }
-    }
-
-    /**
-     * 变量构建器 - 帮助构建变量映射
-     */
-    public static class VariableBuilder {
-        private final Map<String, Object> variables = new HashMap<>();
-
-        public VariableBuilder put(String key, Object value) {
-            variables.put(key, value);
-            return this;
-        }
-
-        public VariableBuilder putDatabaseSchema(String schema) {
-            variables.put("database_schema", schema);
-            return this;
-        }
-
-        public VariableBuilder putDataSourceInfo(String dataSourceName, String dataSourceType) {
-            variables.put("datasource_name", dataSourceName);
-            variables.put("datasource_type", dataSourceType);
-            return this;
-        }
-
-        public VariableBuilder putUserInfo(String userName, String userRole) {
-            variables.put("user_name", userName);
-            variables.put("user_role", userRole);
-            return this;
-        }
-
-        public Map<String, Object> build() {
-            return new HashMap<>(variables);
-        }
-    }
-
-    /**
-     * 创建变量构建器
-     */
-    public static VariableBuilder variables() {
-        return new VariableBuilder();
     }
 }

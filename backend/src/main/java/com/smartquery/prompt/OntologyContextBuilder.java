@@ -16,10 +16,10 @@ public class OntologyContextBuilder {
 
     private final OntologyService ontologyService;
 
-    @Value("${ontology-context.cache-ttl-ms:600000}")
+    @Value("${smart-query.ontology-context.cache-ttl-ms:600000}")
     private long cacheTtlMs;
 
-    @Value("${ontology-context.token-budget:4000}")
+    @Value("${smart-query.ontology-context.token-budget:4000}")
     private int tokenBudget;
 
     private static final int CHARS_PER_TOKEN = com.smartquery.common.TokenConstants.CHARS_PER_TOKEN;
@@ -60,19 +60,5 @@ public class OntologyContextBuilder {
     public boolean hasOntology(Long dataSourceId) {
         if (dataSourceId == null) return false;
         return buildOntologyContext(dataSourceId) != null;
-    }
-
-    public void clearCache() {
-        ontologyCache.clear();
-        log.info("[ONTOLOGY-CTX] cache cleared");
-    }
-
-    public void evictCache(Long dataSourceId) {
-        ontologyCache.remove(dataSourceId);
-        log.info("[ONTOLOGY-CTX] evicted cache for dataSourceId={}", dataSourceId);
-    }
-
-    public Map<String, Object> getCacheStats() {
-        return Map.of("size", ontologyCache.size(), "ttlMs", cacheTtlMs);
     }
 }

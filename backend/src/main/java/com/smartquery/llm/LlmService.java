@@ -23,6 +23,4 @@ public interface LlmService {
     }
 
     boolean isAvailable(String model);
-
-    List<String> getAvailableModels();
 }

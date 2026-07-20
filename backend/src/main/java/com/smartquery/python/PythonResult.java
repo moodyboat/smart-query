@@ -12,10 +12,6 @@ public record PythonResult(
     List<String> artifacts,
     int executionTimeMs
 ) {
-    public static PythonResult success(String stdout, List<String> artifacts, int timeMs) {
-        return new PythonResult(stdout, "", 0, artifacts, timeMs);
-    }
-
     public static PythonResult error(String stderr, int exitCode, int timeMs) {
         return new PythonResult("", stderr, exitCode, List.of(), timeMs);
     }

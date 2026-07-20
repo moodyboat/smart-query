@@ -18,10 +18,10 @@ public class SchemaContextBuilder {
 
     private final DataDictMapper dataDictMapper;
 
-    @Value("${schema-context.sample-values-truncation:200}")
+    @Value("${smart-query.schema-context.sample-values-truncation:200}")
     private int sampleValuesTruncation;
 
-    @Value("${schema-context.cache-ttl-ms:300000}")
+    @Value("${smart-query.schema-context.cache-ttl-ms:300000}")
     private long cacheTtlMs;
 
     private static final int CHARS_PER_TOKEN = com.smartquery.common.TokenConstants.CHARS_PER_TOKEN;
@@ -118,30 +118,11 @@ public class SchemaContextBuilder {
     /**
      * 表名归一化：去 schema 前缀（取最后一段）、去反引号/方括号/双引号、转小写。
      * 例：`ods_dm.users` → users；`[Users]` → users；`` `User` `` → user。
+     * <p>实现委托给 {@link com.smartquery.tool.SqlSafetyValidator#normalizeTableName}，
+     * 全局唯一实现，避免双份维护漂移。
      */
     public static String normalizeTableName(String raw) {
-        if (raw == null) return null;
-        String s = raw.trim();
-        // 去 schema/database 前缀
-        int dot = s.lastIndexOf('.');
-        if (dot >= 0 && dot < s.length() - 1) s = s.substring(dot + 1);
-        // 去包裹符号
-        if ((s.startsWith("`") && s.endsWith("`"))
-            || (s.startsWith("[") && s.endsWith("]"))
-            || (s.startsWith("\"") && s.endsWith("\""))) {
-            s = s.substring(1, s.length() - 1);
-        }
-        return s.toLowerCase();
-    }
-
-    public void clearCache() {
-        schemaCache.clear();
-        log.info("[SCHEMA-CTX] cache cleared");
-    }
-
-    public void evictStaleEntries() {
-        long now = System.currentTimeMillis();
-        schemaCache.entrySet().removeIf(e -> now - e.getValue().cachedAt > cacheTtlMs);
+        return com.smartquery.tool.SqlSafetyValidator.normalizeTableName(raw);
     }
 
     public Map<String, Object> getCacheStats() {

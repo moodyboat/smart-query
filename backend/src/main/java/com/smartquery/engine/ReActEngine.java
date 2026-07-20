@@ -42,27 +42,35 @@ public class ReActEngine {
     @org.springframework.beans.factory.annotation.Qualifier("llmExecutor")
     private final Executor llmExecutor;
 
-    @Value("${llm.timeout-seconds:120}")
+    @Value("${smart-query.llm.timeout-seconds:120}")
     private int llmTimeoutSeconds;
 
-    @Value("${react.max-turns:20}")
+    @Value("${smart-query.react.max-turns:20}")
     private int maxTurns;
 
-    @Value("${react.max-token-budget:200000}")
+    @Value("${smart-query.react.max-token-budget:200000}")
     private int maxTokenBudget;
 
     /**
-     * 上一轮工具调用是否有失败。如果有，下一轮是"修复轮次"，不受 maxTurns 限制。
+     * 硬上限轮次：无论 previousToolsFailed / token 计数是否准确，达到此值必终止。
+     * 防御 LLM 返回 token=0（某些代理端点）导致 maxTokenBudget 失效 + previousToolsFailed 绕过 maxTurns 时的死循环。
+     */
+    @Value("${smart-query.react.hard-cap-turns:50}")
+    private int hardCapTurns;
+
+    /**
+     * LLM HTTP 层重试上限（限流 429 / 5xx / 网络错误）。
      * 区分：
-     *   - LLM HTTP 层重试（限流/500/网络错误）：受 smart-query.llm.max-retries 限制（默认 10）
+     *   - LLM HTTP 层重试：受本变量限制
      *   - SQL/Python 执行失败的修复循环：不受 maxTurns 限制，直到修好或 LLM 自己放弃
      */
-    private volatile boolean previousToolsFailed = false;
+    @Value("${smart-query.react.llm-max-attempts:2}")
+    private int llmMaxAttempts;
 
-    @Value("${react.micro-compact-threshold:60000}")
+    @Value("${smart-query.react.micro-compact-threshold:60000}")
     private int microCompactThreshold;
 
-    @Value("${react.compact-threshold:80000}")
+    @Value("${smart-query.react.compact-threshold:80000}")
     private int compactThreshold;
 
     public ReActEngine(
@@ -203,6 +211,10 @@ public class ReActEngine {
         // 2. 初始化状态
         ReActState state = ReActState.initial(messages);
 
+        // 上一轮工具调用是否有失败。如果有，下一轮是"修复轮次"，不受 maxTurns 限制。
+        // 方法局部变量，避免 @Component 单例字段在多会话并发时互相污染。
+        boolean previousToolsFailed = false;
+
         // 3. 获取工具定义 (无数据源时过滤掉 DB 依赖工具)
         if (toolDefs == null) {
             toolDefs = toolRegistry.getToolDefinitions(dataSourceId);
@@ -220,6 +232,12 @@ public class ReActEngine {
             }
             if (maxTurns > 0 && state.turnCount() >= maxTurns && !previousToolsFailed) {
                 state = state.withTerminated("达到最大轮次 " + maxTurns);
+                eventConsumer.accept(new ReActEvent.Done(state.turnCount(), state.totalTokens(), state.totalCost()));
+                break;
+            }
+            // 硬上限：不受 maxTurns/previousToolsFailed 影响，绝对兜底
+            if (hardCapTurns > 0 && state.turnCount() >= hardCapTurns) {
+                state = state.withTerminated("达到硬上限轮次 " + hardCapTurns + "（防御死循环）");
                 eventConsumer.accept(new ReActEvent.Done(state.turnCount(), state.totalTokens(), state.totalCost()));
                 break;
             }
@@ -259,7 +277,7 @@ public class ReActEngine {
             // LLM 调用失败重试机制（可恢复错误）
             boolean llmSuccess = false;
             int llmAttempts = 0;
-            final int maxLlmAttempts = 2;
+            final int maxLlmAttempts = llmMaxAttempts;
 
             while (!llmSuccess && llmAttempts <= maxLlmAttempts) {
                 llmAttempts++;
@@ -310,12 +328,6 @@ public class ReActEngine {
                     handleLlmFailure(state, eventConsumer, "unknown");
                     return;
                 }
-            }
-
-            if (!llmSuccess) {
-                log.error("[REACT] All LLM attempts failed");
-                handleLlmFailure(state, eventConsumer, "exhausted");
-                return;
             }
 
             List<LlmChunk> chunks = chunksHolder[0];
@@ -405,8 +417,10 @@ public class ReActEngine {
             boolean anyToolFailed = toolResults.stream().anyMatch(tr -> !tr.success());
             if (anyToolFailed) {
                 log.info("[REACT] tool execution had failures, next turn will be repair (exempt from maxTurns)");
+                previousToolsFailed = true;
+            } else {
+                previousToolsFailed = false;
             }
-            previousToolsFailed = anyToolFailed;
 
             // 构建 tool_result 消息 + 实时发出工具事件
             long perToolDuration = toolCalls.size() > 0 ? totalToolDuration / toolCalls.size() : 0;
@@ -483,7 +497,7 @@ public class ReActEngine {
                 default -> {}
             }
         } catch (Exception e) {
-            log.debug("[REACT] emitToolInputPreview skipped for {}: {}", toolName, e.getMessage());
+            log.warn("[REACT] emitToolInputPreview failed for {}: {}", toolName, e.getMessage());
         }
     }
 
@@ -519,7 +533,7 @@ public class ReActEngine {
                 }
             }
         } catch (Exception e) {
-            log.debug("[REACT] emitToolEvent skipped for {}: {}", toolName, e.getMessage());
+            log.warn("[REACT] emitToolEvent failed for {}: {}", toolName, e.getMessage());
         }
     }
 
@@ -705,20 +719,26 @@ public class ReActEngine {
      */
     private Set<String> resolveAllowedTables(String scenarioCode) {
         if (scenarioCode == null || scenarioCode.isBlank()) return null;
+        com.smartquery.entity.Scenario s;
         try {
-            com.smartquery.entity.Scenario s = scenarioService.getByCode(scenarioCode);
-            if (s == null || s.getAllowedTables() == null || s.getAllowedTables().isBlank()) {
-                return null;
-            }
-            Set<String> set = new java.util.LinkedHashSet<>();
-            for (String token : s.getAllowedTables().split(",")) {
-                String n = com.smartquery.tool.SqlSafetyValidator.normalizeTableName(token);
-                if (n != null && !n.isEmpty()) set.add(n);
-            }
-            return set.isEmpty() ? null : set;
+            s = scenarioService.getByCode(scenarioCode);
         } catch (Exception e) {
-            log.debug("[REACT] failed to resolve allowedTables for scenario {}: {}", scenarioCode, e.getMessage());
+            // 场景查询失败属于基础设施异常（DB 不可达等），不能静默放开白名单
+            log.error("[REACT] failed to load scenario {} for whitelist check — refusing to proceed", scenarioCode, e);
+            throw new IllegalStateException("场景白名单加载失败，拒绝执行查询: " + scenarioCode, e);
+        }
+        if (s == null) {
+            log.warn("[REACT] scenario {} not found — proceeding without whitelist", scenarioCode);
             return null;
         }
+        if (s.getAllowedTables() == null || s.getAllowedTables().isBlank()) {
+            return null;
+        }
+        Set<String> set = new java.util.LinkedHashSet<>();
+        for (String token : s.getAllowedTables().split(",")) {
+            String n = com.smartquery.tool.SqlSafetyValidator.normalizeTableName(token);
+            if (n != null && !n.isEmpty()) set.add(n);
+        }
+        return set.isEmpty() ? null : set;
     }
 }

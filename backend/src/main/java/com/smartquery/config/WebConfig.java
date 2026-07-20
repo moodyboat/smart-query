@@ -3,7 +3,6 @@ package com.smartquery.config;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
@@ -12,7 +11,6 @@ import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 import java.util.concurrent.Executor;
-import java.util.concurrent.ThreadPoolExecutor;
 
 @Configuration
 public class WebConfig implements WebMvcConfigurer {
@@ -50,16 +48,7 @@ public class WebConfig implements WebMvcConfigurer {
 
     @Bean("asyncExecutor")
     public Executor asyncExecutor() {
-        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(corePoolSize);
-        executor.setMaxPoolSize(maxPoolSize);
-        executor.setQueueCapacity(queueCapacity);
-        executor.setThreadNamePrefix("sq-");
-        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
-        executor.setWaitForTasksToCompleteOnShutdown(true);
-        executor.setAwaitTerminationSeconds(30);
-        executor.initialize();
-        return executor;
+        return ThreadPoolFactory.build("sq", corePoolSize, maxPoolSize, queueCapacity, ThreadPoolFactory.RejectedPolicy.CALLER_RUNS);
     }
 
     @Value("${smart-query.thread-pool.llm.core-size:8}")
@@ -73,16 +62,7 @@ public class WebConfig implements WebMvcConfigurer {
 
     @Bean("llmExecutor")
     public Executor llmExecutor() {
-        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(llmCorePoolSize);
-        executor.setMaxPoolSize(llmMaxPoolSize);
-        executor.setQueueCapacity(llmQueueCapacity);
-        executor.setThreadNamePrefix("llm-");
-        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
-        executor.setWaitForTasksToCompleteOnShutdown(true);
-        executor.setAwaitTerminationSeconds(10);
-        executor.initialize();
-        return executor;
+        return ThreadPoolFactory.build("llm", llmCorePoolSize, llmMaxPoolSize, llmQueueCapacity, ThreadPoolFactory.RejectedPolicy.ABORT);
     }
 
     @Override

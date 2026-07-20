@@ -47,13 +47,4 @@ public class PromptTemplateService extends ServiceImpl<PromptTemplateMapper, Pro
         wrapper.eq(PromptTemplate::getCode, code);
         return getOne(wrapper);
     }
-
-    /**
-     * 根据场景编码获取默认提示词
-     */
-    public PromptTemplate getDefaultPromptByScenarioCode(String scenarioCode) {
-        // 这里需要关联查询，先获取场景再获取提示词
-        // 简化实现，在Controller中处理
-        return null;
-    }
 }

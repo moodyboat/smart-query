@@ -6,6 +6,7 @@ import com.smartquery.common.Result;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartquery.dto.MetadataConfigDTO;
 import com.smartquery.entity.MetadataConfig;
+import com.smartquery.mapper.DataSourceMapper;
 import com.smartquery.service.MetadataConfigService;
 import com.smartquery.datasource.DataSourceManager;
 import org.springframework.beans.BeanUtils;
@@ -29,6 +30,9 @@ public class MetadataConfigController {
 
     @Autowired
     private DataSourceManager dataSourceManager;
+
+    @Autowired
+    private DataSourceMapper dataSourceMapper;
 
     @Autowired
     private ObjectMapper objectMapper;
@@ -166,21 +170,20 @@ public class MetadataConfigController {
     @PostMapping("/import/{dataSourceId}")
     public Result<List<MetadataConfigDTO>> importFromSchema(@PathVariable Long dataSourceId) {
         try {
-            // 使用DataSourceManager获取JdbcTemplate
             var jdbc = dataSourceManager.getJdbcTemplate(dataSourceId);
+            var dsCfg = dataSourceMapper.selectById(dataSourceId);
+            var dialect = com.smartquery.util.DbMetadataUtil.Dialect.of(dsCfg != null ? dsCfg.getType() : null);
 
-            // 获取数据源的所有表
-            List<Map<String, Object>> tables = jdbc.queryForList(
-                "SELECT TABLE_NAME AS name, TABLE_COMMENT AS comment, TABLE_ROWS AS `rows` " +
-                "FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME");
+            // 跨库元数据：MySQL 走 information_schema，DM/GBase 走 ALL_TABLES/ALL_TAB_COLUMNS
+            List<Map<String, Object>> tables = com.smartquery.util.DbMetadataUtil.listTables(jdbc, dialect);
 
             List<MetadataConfigDTO> importedConfigs = new ArrayList<>();
             int importedCount = 0;
             int skippedCount = 0;
 
             for (Map<String, Object> tableInfo : tables) {
-                String tableName = (String) tableInfo.get("name");
-                String tableComment = (String) tableInfo.get("comment");
+                String tableName = String.valueOf(tableInfo.get("name"));
+                String tableComment = tableInfo.get("comment") != null ? String.valueOf(tableInfo.get("comment")) : "";
 
                 if (tableName == null || tableName.isEmpty()) {
                     continue;
@@ -195,30 +198,24 @@ public class MetadataConfigController {
                 MetadataConfig tableConfig = metadataConfigService.getOne(tableWrapper);
 
                 // 如果表配置不存在，创建一个
-                boolean tableConfigCreated = false;
                 if (tableConfig == null) {
                     tableConfig = new MetadataConfig();
                     tableConfig.setDataSourceId(dataSourceId);
                     tableConfig.setTableName(tableName);
                     tableConfig.setColumnName(""); // 表级配置使用空字符串而不是null
-                    tableConfig.setName(tableComment != null && !tableComment.isEmpty() ? tableComment : tableName);
+                    tableConfig.setName(!tableComment.isEmpty() ? tableComment : tableName);
                     tableConfig.setConfigType("table");
                     tableConfig.setDescription("表配置");
                     metadataConfigService.save(tableConfig);
-                    tableConfigCreated = true;
                     importedConfigs.add(convertToDTO(tableConfig));
                 }
 
-                // 获取表的列信息
-                List<Map<String, Object>> columns = jdbc.queryForList(
-                    "SELECT COLUMN_NAME AS name, COLUMN_TYPE AS type, IS_NULLABLE AS nullable, " +
-                    "COLUMN_KEY AS `key`, COLUMN_COMMENT AS comment " +
-                    "FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION",
-                    tableName);
+                // 获取表的列信息（跨库）
+                List<Map<String, Object>> columns = com.smartquery.util.DbMetadataUtil.listColumns(jdbc, dialect, tableName);
 
                 for (Map<String, Object> columnInfo : columns) {
-                    String columnName = (String) columnInfo.get("name");
-                    String columnComment = (String) columnInfo.get("comment");
+                    String columnName = String.valueOf(columnInfo.get("name"));
+                    String columnComment = columnInfo.get("comment") != null ? String.valueOf(columnInfo.get("comment")) : "";
 
                     // 只导入有注释的字段，或者至少有字段名的
                     if (columnName != null && !columnName.isEmpty()) {
@@ -232,18 +229,17 @@ public class MetadataConfigController {
                         MetadataConfig existing = metadataConfigService.getOne(wrapper);
 
                         if (existing == null) {
-                            // 创建新的元数据配置
                             MetadataConfig config = new MetadataConfig();
                             config.setDataSourceId(dataSourceId);
                             config.setTableName(tableName);
                             config.setColumnName(columnName);
-                            config.setName(columnComment != null && !columnComment.isEmpty() ? columnComment : columnName);
-                            config.setConfigType("column"); // 使用正确的配置类型
+                            config.setName(!columnComment.isEmpty() ? columnComment : columnName);
+                            config.setConfigType("column");
                             config.setDescription("从表结构自动导入");
 
                             // 如果是枚举类型，尝试解析枚举值作为数据字典
-                            String columnType = (String) columnInfo.get("type");
-                            if (columnType != null && columnType.startsWith("enum")) {
+                            String columnType = columnInfo.get("type") != null ? String.valueOf(columnInfo.get("type")) : "";
+                            if (columnType.startsWith("enum")) {
                                 List<MetadataConfigDTO.Dictionary> dictionary = parseEnumDictionary(columnType);
                                 if (!dictionary.isEmpty()) {
                                     try {

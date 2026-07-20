@@ -26,8 +26,6 @@ public class DataSourceUsageService {
      * 获取数据源使用统计
      */
     public List<DataSourceUsageStats> getUsageStats(String timeRange) {
-        String timeCondition = getTimeCondition(timeRange);
-
         String sql = """
             SELECT
                 ds.id AS dataSourceId,
@@ -116,40 +114,12 @@ public class DataSourceUsageService {
         );
     }
 
-    /**
-     * 记录数据源使用
-     */
-    public void recordUsage(Long dataSourceId, boolean success, long executionTimeMs) {
-        // 可以通过 sq_query_history 表自动统计，这里可以添加额外的统计逻辑
-        // 例如：记录到 Redis 缓存中以便实时查询
-        log.debug("Recorded usage for datasource {}: success={}, time={}ms",
-            dataSourceId, success, executionTimeMs);
-    }
-
-    private String getTimeCondition(String timeRange) {
-        return switch (timeRange.toLowerCase()) {
-            case "daily" -> "1 DAY";
-            case "weekly" -> "7 DAY";
-            case "monthly" -> "30 DAY";
-            default -> "7 DAY";
-        };
-    }
-
     private int getDays(String timeRange) {
         return switch (timeRange.toLowerCase()) {
             case "daily" -> 1;
             case "weekly" -> 7;
             case "monthly" -> 30;
             default -> 7;
-        };
-    }
-
-    private String getTimeIntervalSql(String timeRange) {
-        return switch (timeRange.toLowerCase()) {
-            case "daily" -> "1 DAY";
-            case "weekly" -> "7 DAY";
-            case "monthly" -> "30 DAY";
-            default -> "7 DAY";
         };
     }
 }

@@ -10,10 +10,6 @@ public record PromptContext(
     String model,
     Long dataSourceId
 ) {
-    public static PromptContext of(boolean hasDataSource, String model, Long dataSourceId) {
-        return new PromptContext(hasDataSource, false, true, model, dataSourceId);
-    }
-
     public static PromptContext of(boolean hasDataSource, boolean hasMiningModel, String model, Long dataSourceId) {
         return new PromptContext(hasDataSource, hasMiningModel, true, model, dataSourceId);
     }

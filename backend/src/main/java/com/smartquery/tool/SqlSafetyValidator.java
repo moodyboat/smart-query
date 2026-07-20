@@ -16,15 +16,10 @@ public class SqlSafetyValidator {
 
     private final Set<String> allowedStatements;
     private final Set<String> deniedKeywords;
-    private final int maxRows;
-    private final int queryTimeoutSeconds;
 
-    public SqlSafetyValidator(Set<String> allowedStatements, Set<String> deniedKeywords,
-                              int maxRows, int queryTimeoutSeconds) {
+    public SqlSafetyValidator(Set<String> allowedStatements, Set<String> deniedKeywords) {
         this.allowedStatements = allowedStatements;
         this.deniedKeywords = deniedKeywords;
-        this.maxRows = maxRows;
-        this.queryTimeoutSeconds = queryTimeoutSeconds;
     }
 
     public static SqlSafetyValidator defaults() {
@@ -32,9 +27,7 @@ public class SqlSafetyValidator {
             Set.of("SELECT", "SHOW", "DESCRIBE", "EXPLAIN"),
             Set.of("DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "CREATE",
                    "TRUNCATE", "GRANT", "REVOKE", "REPLACE", "RENAME",
-                   "CALL", "EXEC", "EXECUTE", "LOAD DATA", "INTO OUTFILE", "INTO DUMPFILE"),
-            Integer.getInteger("sql-safety.max-rows", 1000),
-            Integer.getInteger("sql-safety.query-timeout-seconds", 30)
+                   "CALL", "EXEC", "EXECUTE", "LOAD DATA", "INTO OUTFILE", "INTO DUMPFILE")
         );
     }
 

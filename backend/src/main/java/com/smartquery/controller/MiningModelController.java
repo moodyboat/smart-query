@@ -7,13 +7,16 @@ import com.smartquery.common.RateLimiter;
 import com.smartquery.common.Result;
 import com.smartquery.common.UserContextHolder;
 import com.smartquery.datasource.DataSourceManager;
+import com.smartquery.entity.DataSource;
 import com.smartquery.entity.MiningModel;
 import com.smartquery.entity.ModelExecution;
 import com.smartquery.entity.PredictionResult;
 import com.smartquery.logging.ConversationEventLogger;
+import com.smartquery.mapper.DataSourceMapper;
 import com.smartquery.mapper.MiningModelMapper;
 import com.smartquery.mapper.ModelExecutionMapper;
 import com.smartquery.service.MiningService;
+import com.smartquery.util.DbMetadataUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -54,6 +57,7 @@ public class MiningModelController {
     private int ratePredict;
     private final MiningService miningService;
     private final DataSourceManager dataSourceManager;
+    private final DataSourceMapper dataSourceMapper;
     private final ConversationEventLogger eventLogger;
     private final RateLimiter rateLimiter;
     private final Ownership ownership;
@@ -445,10 +449,9 @@ public class MiningModelController {
         MiningModel model = loadOwned(id);
         JdbcTemplate jdbc = dataSourceManager.getJdbcTemplate(model.getDataSourceId());
         com.smartquery.common.IdentifierValidator.validateTableName(tableName);
-        Integer count = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?",
-            Integer.class, tableName);
-        if (count == null || count == 0) {
+        DataSource dsCfg = dataSourceMapper.selectById(model.getDataSourceId());
+        DbMetadataUtil.Dialect dialect = DbMetadataUtil.Dialect.of(dsCfg != null ? dsCfg.getType() : null);
+        if (!DbMetadataUtil.tableExists(jdbc, dialect, tableName)) {
             throw new BusinessException("表不存在: " + tableName);
         }
         List<Map<String, Object>> rows = jdbc.queryForList(

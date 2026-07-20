@@ -18,6 +18,15 @@ import java.util.concurrent.ConcurrentHashMap;
 @RequiredArgsConstructor
 public class DataSourceManager {
 
+    /** 探测/权限校验 SQL — 集中常量，避免散落字符串字面量。 */
+    private static final String SQL_PROBE = "SELECT 1";
+    private static final String SQL_VERSION = "SELECT VERSION()";
+    private static final String SQL_CURRENT_DB_MYSQL = "SELECT DATABASE()";
+    private static final String SQL_CURRENT_SCHEMA_ANSI = "SELECT CURRENT_SCHEMA()";
+    private static final String SQL_SHOW_TABLES = "SHOW TABLES LIMIT 1";
+    private static final String SQL_DESCRIBE_SCHEMA_TABLES = "DESCRIBE information_schema.tables";
+    private static final String SQL_EXPLAIN_PROBE = "EXPLAIN SELECT 1";
+
     private final DataSourceMapper dataSourceMapper;
     private final Map<Long, HikariDataSource> dataSourcePool = new ConcurrentHashMap<>();
     private final Map<Long, JdbcTemplate> jdbcTemplatePool = new ConcurrentHashMap<>();
@@ -41,14 +50,6 @@ public class DataSourceManager {
     }
 
     /**
-     * 注册数据源
-     */
-    public void registerDataSource(Long dataSourceId) {
-        createJdbcTemplate(dataSourceId);
-        log.info("[DATASOURCE] registered: id={}", dataSourceId);
-    }
-
-    /**
      * 销毁数据源
      */
     public void destroyDataSource(Long dataSourceId) {
@@ -66,7 +67,7 @@ public class DataSourceManager {
     public boolean testConnection(Long dataSourceId) {
         try {
             JdbcTemplate jdbc = getJdbcTemplate(dataSourceId);
-            jdbc.queryForObject("SELECT 1", Integer.class);
+            jdbc.queryForObject(SQL_PROBE, Integer.class);
             return true;
         } catch (Exception e) {
             log.warn("[DATASOURCE] test connection failed: id={}, error={}", dataSourceId, e.getMessage());
@@ -85,7 +86,7 @@ public class DataSourceManager {
             JdbcTemplate jdbc = getJdbcTemplate(dataSourceId);
 
             // 测试基本连接
-            jdbc.queryForObject("SELECT 1", Integer.class);
+            jdbc.queryForObject(SQL_PROBE, Integer.class);
             long latency = System.currentTimeMillis() - startTime;
             result.put("success", true);
             result.put("latencyMs", latency);
@@ -93,50 +94,51 @@ public class DataSourceManager {
 
             // 获取数据库版本
             try {
-                String version = jdbc.queryForObject("SELECT VERSION()", String.class);
+                String version = jdbc.queryForObject(SQL_VERSION, String.class);
                 result.put("databaseVersion", version);
             } catch (Exception e) {
                 result.put("databaseVersion", "Unknown");
             }
 
-            // 获取当前数据库/模式
+            // 获取当前数据库/模式（MySQL 用 DATABASE()，PostgreSQL/Oracle 用 CURRENT_SCHEMA()）
             try {
-                String currentDb = jdbc.queryForObject("SELECT DATABASE()", String.class);
+                String currentDb = jdbc.queryForObject(SQL_CURRENT_DB_MYSQL, String.class);
                 result.put("currentSchema", currentDb);
             } catch (Exception e) {
                 try {
-                    String currentDb = jdbc.queryForObject("SELECT CURRENT_SCHEMA()", String.class);
+                    String currentDb = jdbc.queryForObject(SQL_CURRENT_SCHEMA_ANSI, String.class);
                     result.put("currentSchema", currentDb);
                 } catch (Exception ex) {
                     result.put("currentSchema", "Unknown");
                 }
             }
 
-            // 测试权限
+            // 测试权限：SELECT 1 / SHOW TABLES / DESCRIBE 系统表 / EXPLAIN。
+            // DESCRIBE 用 information_schema.tables（MySQL 跨库都有），不指定业务表名以保持跨库可移植。
             Map<String, Object> permissions = new LinkedHashMap<>();
             try {
-                jdbc.queryForObject("SELECT 1", Integer.class);
+                jdbc.queryForObject(SQL_PROBE, Integer.class);
                 permissions.put("canSelect", true);
             } catch (Exception e) {
                 permissions.put("canSelect", false);
             }
 
             try {
-                jdbc.queryForList("SHOW TABLES LIMIT 1");
+                jdbc.queryForList(SQL_SHOW_TABLES);
                 permissions.put("canShow", true);
             } catch (Exception e) {
                 permissions.put("canShow", false);
             }
 
             try {
-                jdbc.queryForObject("DESCRIBE sq_conversation", String.class);
+                jdbc.queryForList(SQL_DESCRIBE_SCHEMA_TABLES);
                 permissions.put("canDescribe", true);
             } catch (Exception e) {
                 permissions.put("canDescribe", false);
             }
 
             try {
-                jdbc.queryForList("EXPLAIN SELECT 1");
+                jdbc.queryForList(SQL_EXPLAIN_PROBE);
                 permissions.put("canExplain", true);
             } catch (Exception e) {
                 permissions.put("canExplain", false);
@@ -196,32 +198,5 @@ public class DataSourceManager {
         }
 
         return ds;
-    }
-
-    public int cleanupStalePools() {
-        int removed = 0;
-        var iter = dataSourcePool.entrySet().iterator();
-        while (iter.hasNext()) {
-            var entry = iter.next();
-            HikariDataSource ds = entry.getValue();
-            if (ds.isClosed()) {
-                iter.remove();
-                jdbcTemplatePool.remove(entry.getKey());
-                removed++;
-            } else if (ds.getHikariPoolMXBean() != null
-                    && ds.getHikariPoolMXBean().getActiveConnections() == 0
-                    && ds.getHikariPoolMXBean().getIdleConnections() == ds.getMaximumPoolSize()) {
-                ds.close();
-                iter.remove();
-                jdbcTemplatePool.remove(entry.getKey());
-                removed++;
-                log.info("[DATASOURCE] evicted idle pool: id={}", entry.getKey());
-            }
-        }
-        return removed;
-    }
-
-    public int poolCount() {
-        return dataSourcePool.size();
     }
 }

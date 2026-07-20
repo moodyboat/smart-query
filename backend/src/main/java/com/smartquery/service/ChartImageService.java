@@ -251,23 +251,4 @@ public class ChartImageService {
             return new byte[0];
         }
     }
-
-    /**
-     * 从图表实体生成图片
-     */
-    public byte[] generateImageFromChart(String echartsOption, String title) {
-        if (echartsOption == null || echartsOption.isEmpty()) {
-            log.warn("[CHART-IMAGE] ECharts配置为空");
-            return generateErrorPlaceholder();
-        }
-
-        return convertEchartsToImage(echartsOption);
-    }
-
-    /**
-     * 获取图片尺寸
-     */
-    public int[] getImageSize() {
-        return new int[]{imageWidth, imageHeight};
-    }
 }

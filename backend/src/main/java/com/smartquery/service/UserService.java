@@ -3,6 +3,7 @@ package com.smartquery.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.smartquery.common.BusinessException;
 import com.smartquery.common.UserContextHolder;
+import com.smartquery.common.UserRoles;
 import com.smartquery.dto.ChangePasswordRequest;
 import com.smartquery.dto.CreateUserRequest;
 import com.smartquery.dto.UpdateUserRequest;
@@ -25,7 +26,7 @@ public class UserService {
     /** 仅 admin 可调用用户管理接口（同包/外部 Controller 共用） */
     public void requireAdmin() {
         UserContextHolder.UserContext ctx = UserContextHolder.get();
-        if (ctx == null || !"admin".equals(ctx.role())) {
+        if (ctx == null || !UserRoles.ADMIN.equals(ctx.role())) {
             throw new BusinessException(403, "无权限，仅管理员可操作");
         }
     }
@@ -43,7 +44,7 @@ public class UserService {
     public UserInfo create(CreateUserRequest request) {
         requireAdmin();
         if (request.getRole() == null || request.getRole().isBlank()) {
-            request.setRole("user");
+            request.setRole(UserRoles.USER);
         }
         Long existing = userMapper.selectCount(new LambdaQueryWrapper<User>()
             .eq(User::getUsername, request.getUsername()));
@@ -72,9 +73,9 @@ public class UserService {
         if (request.getRole() != null && !request.getRole().isBlank()) user.setRole(request.getRole());
         if (request.getEnabled() != null) {
             // 禁止禁用/降级最后一个管理员
-            if ("admin".equals(user.getRole()) && (request.getEnabled() == 0 || !"admin".equals(request.getRole()))) {
+            if (UserRoles.ADMIN.equals(user.getRole()) && (request.getEnabled() == 0 || !UserRoles.ADMIN.equals(request.getRole()))) {
                 Long adminCount = userMapper.selectCount(new LambdaQueryWrapper<User>()
-                    .eq(User::getRole, "admin").eq(User::getEnabled, 1));
+                    .eq(User::getRole, UserRoles.ADMIN).eq(User::getEnabled, 1));
                 if (adminCount != null && adminCount <= 1) {
                     throw new BusinessException(400, "不能禁用或降级最后一个管理员");
                 }
@@ -121,9 +122,9 @@ public class UserService {
         if (user == null) {
             return;
         }
-        if ("admin".equals(user.getRole())) {
+        if (UserRoles.ADMIN.equals(user.getRole())) {
             Long adminCount = userMapper.selectCount(new LambdaQueryWrapper<User>()
-                .eq(User::getRole, "admin"));
+                .eq(User::getRole, UserRoles.ADMIN));
             if (adminCount != null && adminCount <= 1) {
                 throw new BusinessException(400, "不能删除最后一个管理员");
             }

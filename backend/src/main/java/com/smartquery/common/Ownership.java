@@ -27,7 +27,7 @@ public class Ownership {
 
     public boolean isAdmin() {
         UserContextHolder.UserContext ctx = UserContextHolder.get();
-        return ctx != null && "admin".equals(ctx.role());
+        return ctx != null && UserRoles.ADMIN.equals(ctx.role());
     }
 
     public String currentUserIdString() {

@@ -1,6 +1,5 @@
 package com.smartquery.tool.impl;
 
-import com.smartquery.datasource.DataSourceContextHolder;
 import com.smartquery.datasource.DataSourceManager;
 import com.smartquery.entity.DataSource;
 import com.smartquery.mapper.DataSourceMapper;
@@ -75,7 +74,6 @@ public class SchemaExploreTool implements LlmTool {
         }
 
         try {
-            DataSourceContextHolder.set(dsId);
             JdbcTemplate jdbc = dataSourceManager.getJdbcTemplate(dsId);
             DataSource dsCfg = dataSourceMapper.selectById(dsId);
             DbMetadataUtil.Dialect dialect = DbMetadataUtil.Dialect.of(dsCfg != null ? dsCfg.getType() : null);
@@ -90,8 +88,6 @@ public class SchemaExploreTool implements LlmTool {
             return ToolResult.ok(getName(), result, System.currentTimeMillis() - start);
         } catch (Exception e) {
             return ToolResult.error(getName(), "Schema 探索错误: " + e.getMessage(), System.currentTimeMillis() - start);
-        } finally {
-            DataSourceContextHolder.clear();
         }
     }
 

@@ -11,13 +11,11 @@ public sealed interface ReActEvent {
     // === 基础事件 ===
     record Thinking(String content) implements ReActEvent {}
     record ThinkingDelta(String content) implements ReActEvent {}
-    record SqlGenerated(String sql, String explanation) implements ReActEvent {}
     record SqlExecuting(String sql) implements ReActEvent {}
     record Result(String summary, List<Map<String, Object>> data, int totalRows, String error) implements ReActEvent {}
     record Info(String message) implements ReActEvent {}
 
     // === Python 数据挖掘 ===
-    record PythonGenerating(String code) implements ReActEvent {}
     record PythonExecuting(String code, int executionTimeMs) implements ReActEvent {}
     record PythonProgress(String output, int elapsedMs) implements ReActEvent {}
     record PythonResultEvent(String stdout, String stderr, int exitCode, List<String> artifacts) implements ReActEvent {}
@@ -27,7 +25,6 @@ public sealed interface ReActEvent {
     record DashboardGenerated(Long dashboardId, String title, String layout, List<Long> chartIds) implements ReActEvent {}
 
     // === 报告 ===
-    record SectionGenerated(int sectionIndex, String title, String content) implements ReActEvent {}
     record ReportGenerated(Long reportId, String title, int sectionCount,
                            List<Map<String, Object>> sections, String conclusion) implements ReActEvent {}
 

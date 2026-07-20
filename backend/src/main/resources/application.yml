@@ -97,18 +97,18 @@ smart-query:
         model-name: qwen2.5:7b
         max-tokens: 4096
         temperature: 0.1
-    retry:
-      max-attempts: 3
-      backoff-multiplier: 2
-      initial-delay-ms: 1000
-    timeout-seconds: 120
-    http-timeout-seconds: 180
-    connect-timeout-seconds: 30
+    # LLM HTTP 客户端重试（限流 429 / 5xx / 网络错误时生效）
     max-retries: 10
     retry-delay-ms: 2000
     max-retry-delay-ms: 10000
-    default-api-url: https://open.bigmodel.cn/api/paas/v4/chat/completions
+    # LLM 默认配置兜底（DB 中无对应 model 配置时使用）
+    default-api-url: https://open.bigmodel.cn/api/coding/paas/v4/chat/completions
     default-max-tokens: 4096
+    # 单次 LLM 调用超时（ReAct 引擎内 CompletableFuture.get 用）
+    timeout-seconds: 120
+    # HTTP 客户端超时
+    http-timeout-seconds: 180
+    connect-timeout-seconds: 30
 
   # Session
   session-timeout-minutes: 30
@@ -117,33 +117,62 @@ smart-query:
   sse:
     timeout-ms: 300000
 
-  # Rate limiting
+  # 限流（ChatController 每用户每分钟提问数；RateLimiter 内部窗口/清理周期）
   rate-limit:
     chat-per-minute: 30
+    window-ms: 60000
+    cleanup-interval-ms: 120000
+    bucket-expiry-ms: 120000
 
   # ReAct 引擎
   react:
+    # 0 表示不限轮次（由 max-token-budget 兜底）；正数表示最多 N 轮
     max-turns: 0
-    max-tokens-per-turn: 8000
-    auto-compact-threshold: 80000
-    micro-compact-threshold: 60000
     max-token-budget: 200000
+    # 硬上限轮次：无论 previousToolsFailed/token 计数是否准确，达到此值必终止。
+    # 防御 LLM 返回 token=0（某些代理端点）+ 工具持续失败时的死循环。
+    hard-cap-turns: 50
+    # 触发上下文精简的两个阈值（token 数）
+    compact-threshold: 80000
+    micro-compact-threshold: 60000
+    # ReAct 层 LLM 调用重试上限（超时/可恢复错误时重试几次）
+    llm-max-attempts: 2
 
   # 上下文压缩器
   compactor:
     default-keep-recent-turns: 4
     micro-compact-keep-turns: 5
     max-summary-length: 3000
+    assistant-content-threshold: 1500
+    assistant-max-lines: 30
+    llm-summary-input-limit: 6000
+    extract-content-limit: 8000
+    tool-result-stub-threshold: 200
+    stub-prefix-length: 100
+    stub-summary-length: 80
+    extract-user-content-length: 300
+    extract-tool-content-length: 200
+    truncation-user-length: 150
+    truncation-tool-length: 100
 
   # 提示词配置
   prompt:
     system-token-budget: 16000
+    cache-ttl-ms: 300000
 
   # Schema 探索
   schema:
     explore-sample-rows: 5
 
-  # 数据挖掘调度
+  # Schema / Ontology 上下文构建（缓存与截断）
+  schema-context:
+    sample-values-truncation: 200
+    cache-ttl-ms: 300000
+  ontology-context:
+    cache-ttl-ms: 600000
+    token-budget: 4000
+
+  # 数据挖掘调度与训练
   mining:
     schedule:
       poll-interval-ms: 60000
@@ -153,6 +182,38 @@ smart-query:
     predict-timeout-ms: 120000
     overfitting-gap-threshold: 0.15
     min-training-rows: 20
+    # mining 工具（mining_model 工具）执行超时；compare/tune/history 上限
+    tool-timeout-ms: 300000
+    compare:
+      max-algorithms: 5
+    tune:
+      max-combinations: 12
+    history-limit: 20
+    workspace: ${user.home}/smartquery-models
+    random-state: 42
+    max-concurrent-training: 4
+    queue-timeout-minutes: 5
+    rate-train: 5
+    rate-predict: 20
+    # 数据挖掘专用线程池（与 LLM / Web 线程池分离）
+    thread-pool:
+      core-size: 2
+      max-size: 4
+      queue-capacity: 20
+
+  # Pipeline 流程编排
+  pipeline:
+    execution-timeout-ms: 600000
+    preview-timeout-ms: 120000
+    default-cv-folds: 5
+    default-test-size: 0.2
+    default-bins: 5
+    sample-rows: 10
+    error-truncation: 5000
+    log-truncation: 4000
+    event-error-truncation: 300
+    execution-log-truncation: 50000
+    preview-error-truncation: 2000
 
   # 动态数据源连接池
   datasource:
@@ -176,10 +237,19 @@ smart-query:
     stream-drain-timeout-seconds: 5
     artifact-dir: /tmp/smartquery-artifacts
     workspace-base: /tmp/smartquery-workspace
+    # docker 模式专属（execution-mode=docker 时生效）
+    docker-network: smart-query-net
+    docker-shared-volume: smartquery-shared
+    docker-workspace-volume: smartquery-workspace
+    # 内存监控周期（docker 模式下定期采样容器 RSS）
+    mem-monitor-initial-delay-seconds: 2
+    mem-monitor-period-seconds: 5
+    # 进度上报间隔（长任务每 N 毫秒推送一次 stdout 进度）
+    progress-report-interval: 1000
     # 熔断器配置
     circuit-breaker:
-      failure-threshold: 10
-      recovery-timeout-ms: 30000
+      failure-threshold: 5
+      recovery-timeout-ms: 60000
 
   # ECharts 服务端渲染 (SSR) — 用于 Word 报告图表图片生成
   # 通过 Node 进程用 ECharts SSR SVG 模式渲染真实图表，无浏览器、无截图
@@ -191,7 +261,7 @@ smart-query:
     default-width: 800
     default-height: 600
 
-  # SQL 安全
+  # SQL 安全（关键字列表硬编码在 SqlSafetyValidator，此处仅保留注释；如需外置可改 Bean）
   sql-safety:
     level: normal
     allowed-statements: SELECT,SHOW,DESCRIBE,EXPLAIN
@@ -209,45 +279,33 @@ smart-query:
     metadata-max-python-stdout: 3000
     history-trim-chars: 100
 
-  # 对话摘要
-  summary:
-    enabled: true
-    max-tokens: 2000
-    cache-ttl-minutes: 30
+  # 事件日志截断
+  event-log:
+    truncation-short: 500
+    truncation-medium: 1000
+    truncation-long: 2000
+    user-message-max: 1000
 
-  # 日志
-  logging:
-    structured: true
-    trace-all-requests: true
-    ring-buffer-size: 100
-
-  # 线程池
-  thread-pool:
-    core-size: 4
-    max-size: 8
-    queue-capacity: 100
-
-  # 任务协调器
-  coordinator:
-    enabled: true
-    parallel-execution: true
-    max-concurrent-tasks: 5
-    task-timeout-seconds: 300
-    enable-task-retry: true
-    max-retry-attempts: 2
-    retry-delay-ms: 1000
+  # 自动标题
+  auto-title:
+    max-length: 20
 
   # 图表和报告
   chart:
     image-timeout-seconds: 30
     image-width: 800
     image-height: 600
-    storage-path: ./charts  # 图表图片存储路径
-    use-phantomjs: false
-  report:
-    enable-llm-summary: true
-    fallback-to-simple: true
-    max-appendix-messages: 20
+    storage-path: ./charts
+
+  # 线程池（Web/MVC 异步 + LLM 调用专用）
+  thread-pool:
+    core-size: 4
+    max-size: 8
+    queue-capacity: 100
+    llm:
+      core-size: 8
+      max-size: 16
+      queue-capacity: 100
 
 logging:
   level:

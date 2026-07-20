@@ -24,15 +24,6 @@ public class MetadataConfigService extends ServiceImpl<MetadataConfigMapper, Met
     }
 
     /**
-     * 根据表名获取元数据配置
-     */
-    public List<MetadataConfig> getByTableName(String tableName) {
-        LambdaQueryWrapper<MetadataConfig> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(MetadataConfig::getTableName, tableName);
-        return list(wrapper);
-    }
-
-    /**
      * 获取表的元数据配置
      */
     public List<MetadataConfig> getTableMetadata(Long dataSourceId, String tableName) {

@@ -27,7 +27,7 @@ public class ChartGenerateTool implements LlmTool {
     private final ObjectMapper objectMapper;
     private final ChartImageService chartImageService;
 
-    @Value("${smart-query.chart.storage.path:./charts}")
+    @Value("${smart-query.chart.storage-path:./charts}")
     private String chartStoragePath;
 
     @Override

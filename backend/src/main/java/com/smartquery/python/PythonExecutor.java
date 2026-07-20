@@ -1,6 +1,5 @@
 package com.smartquery.python;
 
-import com.smartquery.datasource.DataSourceContextHolder;
 import com.smartquery.datasource.DataSourceManager;
 import com.smartquery.entity.DataSource;
 import com.smartquery.util.DbUrlUtil;
@@ -65,7 +64,7 @@ public class PythonExecutor {
     @Value("${smart-query.python.stream-drain-timeout-seconds:5}")
     private int streamDrainTimeoutSeconds;
 
-    @Value("${smart-query.python.docker-image:python:3.11-slim}")
+    @Value("${smart-query.python.docker-image:smart-query-python:latest}")
     private String dockerImage;
 
     /** DooD 共享卷名（后端经宿主 docker socket 调 python 容器时，按卷名挂载共享 artifact/workspace） */

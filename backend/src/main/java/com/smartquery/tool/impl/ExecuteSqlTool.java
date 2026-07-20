@@ -1,6 +1,5 @@
 package com.smartquery.tool.impl;
 
-import com.smartquery.datasource.DataSourceContextHolder;
 import com.smartquery.datasource.DataSourceManager;
 import com.smartquery.tool.*;
 import lombok.RequiredArgsConstructor;
@@ -85,7 +84,6 @@ public class ExecuteSqlTool implements LlmTool {
             // Strip any remaining {{filter.xxx}} placeholders the LLM added for future filtering
             sql = sql.replaceAll(" ?\\{\\{filter\\.[^}]+}}", "");
 
-            DataSourceContextHolder.set(dsId);
             JdbcTemplate jdbc = dataSourceManager.getJdbcTemplate(dsId);
             jdbc.setQueryTimeout(queryTimeoutSeconds);
 
@@ -99,8 +97,6 @@ public class ExecuteSqlTool implements LlmTool {
         } catch (Exception e) {
             log.error("[TOOL] execute_sql error: {}", e.getMessage(), e);
             return ToolResult.error(getName(), "SQL 执行错误: " + e.getMessage(), System.currentTimeMillis() - start);
-        } finally {
-            DataSourceContextHolder.clear();
         }
     }
 

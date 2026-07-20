@@ -12,18 +12,18 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Component
 public class RateLimiter {
 
-    @Value("${rate-limiter.cleanup-interval-ms:120000}")
+    @Value("${smart-query.rate-limit.cleanup-interval-ms:120000}")
     private long cleanupIntervalMs;
 
-    @Value("${rate-limiter.bucket-expiry-ms:120000}")
+    @Value("${smart-query.rate-limit.bucket-expiry-ms:120000}")
     private long bucketExpiryMs;
 
-    @Value("${rate-limiter.window-ms:60000}")
+    @Value("${smart-query.rate-limit.window-ms:60000}")
     private long windowMs;
 
     private final Map<String, Bucket> buckets = new ConcurrentHashMap<>();
 
-    @org.springframework.scheduling.annotation.Scheduled(fixedRateString = "${rate-limiter.cleanup-interval-ms:120000}")
+    @org.springframework.scheduling.annotation.Scheduled(fixedRateString = "${smart-query.rate-limit.cleanup-interval-ms:120000}")
     public void cleanup() {
         long now = System.currentTimeMillis();
         int before = buckets.size();

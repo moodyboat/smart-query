@@ -44,40 +44,40 @@ public class PipelineService {
     private final ObjectMapper objectMapper;
     private final ConversationEventLogger eventLogger;
 
-    @Value("${pipeline.execution-timeout-ms:600000}")
+    @Value("${smart-query.pipeline.execution-timeout-ms:600000}")
     private int executionTimeoutMs;
 
     @Value("${smart-query.mining.random-state:42}")
     private int randomState;
 
-    @Value("${pipeline.preview-timeout-ms:120000}")
+    @Value("${smart-query.pipeline.preview-timeout-ms:120000}")
     private int previewTimeoutMs;
 
-    @Value("${pipeline.default-cv-folds:5}")
+    @Value("${smart-query.pipeline.default-cv-folds:5}")
     private int defaultCvFolds;
 
-    @Value("${pipeline.default-test-size:0.2}")
+    @Value("${smart-query.pipeline.default-test-size:0.2}")
     private double defaultTestSize;
 
-    @Value("${pipeline.default-bins:5}")
+    @Value("${smart-query.pipeline.default-bins:5}")
     private int defaultBins;
 
-    @Value("${pipeline.sample-rows:10}")
+    @Value("${smart-query.pipeline.sample-rows:10}")
     private int sampleRows;
 
-    @Value("${pipeline.error-truncation:5000}")
+    @Value("${smart-query.pipeline.error-truncation:5000}")
     private int errorTruncation;
 
-    @Value("${pipeline.log-truncation:4000}")
+    @Value("${smart-query.pipeline.log-truncation:4000}")
     private int logTruncation;
 
-    @Value("${pipeline.event-error-truncation:300}")
+    @Value("${smart-query.pipeline.event-error-truncation:300}")
     private int eventErrorTruncation;
 
-    @Value("${pipeline.execution-log-truncation:50000}")
+    @Value("${smart-query.pipeline.execution-log-truncation:50000}")
     private int executionLogTruncation;
 
-    @Value("${pipeline.preview-error-truncation:2000}")
+    @Value("${smart-query.pipeline.preview-error-truncation:2000}")
     private int previewErrorTruncation;
 
     @SuppressWarnings("unchecked")
@@ -1516,16 +1516,7 @@ public class PipelineService {
     }
 
     private Map<String, Object> parseResultMarker(String stdout, String marker) {
-        Map<String, Object> result = new HashMap<>();
-        if (stdout == null) return result;
-        for (String line : stdout.split("\n")) {
-            if (line.contains(marker)) {
-                try { result = objectMapper.readValue(line.substring(line.indexOf(marker) + marker.length()).trim(), Map.class); }
-                catch (Exception e) { log.warn("[PIPELINE] Failed to parse marker: {}", e.getMessage()); }
-                break;
-            }
-        }
-        return result;
+        return MiningLogUtils.parseResultMarker(stdout, marker, "PIPELINE", objectMapper);
     }
 
     private String strVal(Object val) { return val != null ? String.valueOf(val) : null; }
@@ -1557,16 +1548,9 @@ public class PipelineService {
         }
         return resolved;
     }
-    private String sanitizeCredentials(String text) {
-        if (text == null) return null;
-        return text.replaceAll("mysql\\+pymysql://([^:]+):[^@]+@", "mysql+pymysql://$1:***@");
-    }
 
-    private String toJson(Object obj) { try { return obj == null ? null : objectMapper.writeValueAsString(obj); } catch (Exception e) { return String.valueOf(obj); } }
+    private String toJson(Object obj) { return MiningLogUtils.toJson(obj, objectMapper); }
     private String truncateLog(String log, int maxLen) {
-        if (log == null) return null;
-        String cleaned = log.replaceAll("[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f]", "");
-        cleaned = sanitizeCredentials(cleaned);
-        return cleaned.length() <= maxLen ? cleaned : cleaned.substring(0, maxLen) + "\n... (truncated)";
+        return MiningLogUtils.truncateLog(log, maxLen, true);
     }
 }

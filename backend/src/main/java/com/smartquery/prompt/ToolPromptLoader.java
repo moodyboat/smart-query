@@ -58,14 +58,6 @@ public class ToolPromptLoader {
     }
 
     /**
-     * 加载动态模板并替换占位符
-     */
-    public String loadAndRender(String templatePath, Map<String, String> context) {
-        String template = loadResource(templatePath);
-        return renderPrompt(template, context);
-    }
-
-    /**
      * 直译 renderPromptTemplate: 替换 {{key}} 占位符 + 处理条件块
      * 带编译缓存：相同 template+context 5 分钟内直接返回缓存结果
      */
@@ -141,33 +133,6 @@ public class ToolPromptLoader {
         }
     }
 
-    /**
-     * 解析 frontmatter，返回元数据 + 去除 frontmatter 的内容
-     */
-    public ParsedPrompt parseWithFrontmatter(String content) {
-        if (content == null || content.isBlank()) {
-            return new ParsedPrompt(content, Map.of());
-        }
-        Matcher m = FRONTMATTER_PATTERN.matcher(content);
-        if (!m.find()) {
-            return new ParsedPrompt(content, Map.of());
-        }
-
-        Map<String, String> meta = new LinkedHashMap<>();
-        String yaml = m.group(1);
-        for (String line : yaml.split("\n")) {
-            int colonIdx = line.indexOf(':');
-            if (colonIdx > 0) {
-                String key = line.substring(0, colonIdx).trim();
-                String value = line.substring(colonIdx + 1).trim();
-                meta.put(key, value);
-            }
-        }
-
-        String body = content.substring(m.end());
-        return new ParsedPrompt(body, meta);
-    }
-
     private String processConditionals(String template, Map<String, String> context) {
         Matcher m = CONDITIONAL_PATTERN.matcher(template);
         StringBuffer sb = new StringBuffer();
@@ -195,6 +160,4 @@ public class ToolPromptLoader {
             return "";
         }
     }
-
-    public record ParsedPrompt(String content, Map<String, String> metadata) {}
 }

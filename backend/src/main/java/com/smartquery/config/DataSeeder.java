@@ -1,6 +1,7 @@
 package com.smartquery.config;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.smartquery.common.UserRoles;
 import com.smartquery.entity.RoleScenario;
 import com.smartquery.entity.Scenario;
 import com.smartquery.entity.User;
@@ -166,7 +167,7 @@ public class DataSeeder implements CommandLineRunner {
         admin.setUsername(adminUsername);
         admin.setPasswordHash(passwordEncoder.encode(adminPassword));
         admin.setDisplayName(adminDisplayName);
-        admin.setRole("admin");
+        admin.setRole(UserRoles.ADMIN);
         admin.setEnabled(1);
         userMapper.insert(admin);
         log.info("[SEED] 已初始化默认管理员账号: {} （首次登录后请尽快修改密码）", adminUsername);
@@ -184,7 +185,7 @@ public class DataSeeder implements CommandLineRunner {
         }
 
         for (Scenario s : allScenarios) {
-            ensureGrant("admin", s.getId());
+            ensureGrant(UserRoles.ADMIN, s.getId());
         }
 
         Scenario general = allScenarios.stream()
@@ -192,7 +193,7 @@ public class DataSeeder implements CommandLineRunner {
             .findFirst()
             .orElse(null);
         if (general != null) {
-            ensureGrant("user", general.getId());
+            ensureGrant(UserRoles.USER, general.getId());
         }
 
         log.info("[SEED] 角色-场景授权兜底完成：admin 全部 {} 个场景，user 仅 general",

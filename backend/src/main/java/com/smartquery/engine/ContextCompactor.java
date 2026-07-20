@@ -2,6 +2,7 @@ package com.smartquery.engine;
 
 import com.smartquery.llm.LlmService;
 import com.smartquery.logging.ConversationEventLogger;
+import com.smartquery.prompt.ToolPromptLoader;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -28,68 +29,59 @@ public class ContextCompactor {
 
     private final LlmService llmService;
     private final ConversationEventLogger eventLogger;
+    private final ToolPromptLoader promptLoader;
 
     @Value("${smart-query.llm.default-model:glm-5.1}")
     private String summarizationModel;
 
-    @Value("${compactor.default-keep-recent-turns:4}")
+    @Value("${smart-query.compactor.default-keep-recent-turns:4}")
     private int defaultKeepRecentTurns;
 
-    @Value("${compactor.micro-compact-keep-turns:5}")
+    @Value("${smart-query.compactor.micro-compact-keep-turns:5}")
     private int microCompactKeepTurns;
 
-    @Value("${compactor.max-summary-length:3000}")
+    @Value("${smart-query.compactor.max-summary-length:3000}")
     private int maxSummaryLength;
 
-    @Value("${compactor.assistant-content-threshold:1500}")
+    @Value("${smart-query.compactor.assistant-content-threshold:1500}")
     private int assistantContentThreshold;
 
-    @Value("${compactor.assistant-max-lines:30}")
+    @Value("${smart-query.compactor.assistant-max-lines:30}")
     private int assistantMaxLines;
 
-    @Value("${compactor.llm-summary-input-limit:6000}")
+    @Value("${smart-query.compactor.llm-summary-input-limit:6000}")
     private int llmSummaryInputLimit;
 
-    @Value("${compactor.extract-content-limit:8000}")
+    @Value("${smart-query.compactor.extract-content-limit:8000}")
     private int extractContentLimit;
 
-    @Value("${compactor.tool-result-stub-threshold:200}")
+    @Value("${smart-query.compactor.tool-result-stub-threshold:200}")
     private int toolResultStubThreshold;
 
-    @Value("${compactor.stub-prefix-length:100}")
+    @Value("${smart-query.compactor.stub-prefix-length:100}")
     private int stubPrefixLength;
 
-    @Value("${compactor.stub-summary-length:80}")
+    @Value("${smart-query.compactor.stub-summary-length:80}")
     private int stubSummaryLength;
 
-    @Value("${compactor.extract-user-content-length:300}")
+    @Value("${smart-query.compactor.extract-user-content-length:300}")
     private int extractUserContentLength;
 
-    @Value("${compactor.extract-tool-content-length:200}")
+    @Value("${smart-query.compactor.extract-tool-content-length:200}")
     private int extractToolContentLength;
 
-    @Value("${compactor.truncation-user-length:150}")
+    @Value("${smart-query.compactor.truncation-user-length:150}")
     private int truncationUserLength;
 
-    @Value("${compactor.truncation-tool-length:100}")
+    @Value("${smart-query.compactor.truncation-tool-length:100}")
     private int truncationToolLength;
 
-    private static final String SUMMARIZATION_PROMPT = """
-        你是一个对话摘要助手。请将以下对话历史压缩为结构化摘要，保留以下关键信息：
+    private static final String SUMMARIZATION_PROMPT_RESOURCE = "compaction-summary";
 
-        1. 用户的核心问题和意图
-        2. 已执行的关键 SQL 查询（表名、条件、结果行数）
-        3. 已执行的关键 Python 分析（算法、结论）
-        4. 生成的可视化（图表类型、标题）
-        5. 已创建的模型（算法、目标列、关键指标）
-        6. 重要决策和中间结论
-
-        用简洁的要点格式输出，不要输出多余内容。中文输出。
-        """;
-
-    public ContextCompactor(LlmService llmService, ConversationEventLogger eventLogger) {
+    public ContextCompactor(LlmService llmService, ConversationEventLogger eventLogger, ToolPromptLoader promptLoader) {
         this.llmService = llmService;
         this.eventLogger = eventLogger;
+        this.promptLoader = promptLoader;
     }
 
     /**
@@ -308,8 +300,13 @@ public class ContextCompactor {
 
         try {
             String userContent = "对话历史:\n" + truncate(rawContent, llmSummaryInputLimit);
+            String systemPrompt = promptLoader.loadSystemSection(SUMMARIZATION_PROMPT_RESOURCE);
+            if (systemPrompt == null || systemPrompt.isBlank()) {
+                log.warn("[COMPACT] summarization prompt template missing, aborting LLM summary");
+                return null;
+            }
             List<Map<String, String>> messages = List.of(
-                Map.of("role", "system", "content", SUMMARIZATION_PROMPT),
+                Map.of("role", "system", "content", systemPrompt),
                 Map.of("role", "user", "content", userContent)
             );
 

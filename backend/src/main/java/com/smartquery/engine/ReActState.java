@@ -1,6 +1,5 @@
 package com.smartquery.engine;
 
-import com.smartquery.store.AppState;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;

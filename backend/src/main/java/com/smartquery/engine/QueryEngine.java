@@ -4,7 +4,6 @@ import com.smartquery.entity.ChatMessage;
 import com.smartquery.entity.Conversation;
 import com.smartquery.entity.QueryHistory;
 import com.smartquery.llm.LlmService;
-import com.smartquery.logging.CostTracker;
 import com.smartquery.logging.QueryTracer;
 import com.smartquery.mapper.ChatMessageMapper;
 import com.smartquery.mapper.ConversationMapper;
@@ -32,7 +31,6 @@ public class QueryEngine {
     private final ConversationMapper conversationMapper;
     private final QueryHistoryMapper queryHistoryMapper;
     private final QueryTracer queryTracer;
-    private final CostTracker costTracker;
     private final LlmService llmService;
     private final QueryContextAssembler contextAssembler;
     private final com.smartquery.logging.ConversationEventLogger eventLogger;
@@ -374,7 +372,7 @@ public class QueryEngine {
             conv.setTitle(title);
             conversationMapper.updateById(conv);
         } catch (Exception e) {
-            log.debug("[QUERY] auto-title update skipped: {}", e.getMessage());
+            log.warn("[QUERY] auto-title update failed: {}", e.getMessage());
         }
     }
 
@@ -387,10 +385,6 @@ public class QueryEngine {
                 eventLogger.logEvent(conversationId, traceId, "thinking", payload);
             } else if (event instanceof ReActEvent.ThinkingDelta) {
                 // Skip delta events to keep JSONL concise
-            } else if (event instanceof ReActEvent.SqlGenerated e) {
-                payload.put("sql", truncate(e.sql(), eventLogTruncLong));
-                if (e.explanation() != null) payload.put("explanation", truncate(e.explanation(), eventLogTruncShort));
-                eventLogger.logEvent(conversationId, traceId, "sql_generated", payload);
             } else if (event instanceof ReActEvent.SqlExecuting e) {
                 payload.put("sql", e.sql());
                 eventLogger.logEvent(conversationId, traceId, "sql_executing", payload);
@@ -400,9 +394,6 @@ public class QueryEngine {
                 if (e.error() != null) payload.put("error", e.error());
                 if (e.summary() != null) payload.put("summary", truncate(e.summary(), eventLogTruncShort));
                 eventLogger.logEvent(conversationId, traceId, "sql_result", payload);
-            } else if (event instanceof ReActEvent.PythonGenerating e) {
-                payload.put("code", truncate(e.code(), eventLogTruncLong));
-                eventLogger.logEvent(conversationId, traceId, "python_generating", payload);
             } else if (event instanceof ReActEvent.PythonExecuting e) {
                 payload.put("code", truncate(e.code(), eventLogTruncLong));
                 eventLogger.logEvent(conversationId, traceId, "python_executing", payload);
@@ -424,11 +415,6 @@ public class QueryEngine {
                 payload.put("title", e.title());
                 payload.put("chartIds", e.chartIds());
                 eventLogger.logEvent(conversationId, traceId, "dashboard_generated", payload);
-            } else if (event instanceof ReActEvent.SectionGenerated e) {
-                payload.put("sectionIndex", e.sectionIndex());
-                payload.put("title", e.title());
-                payload.put("content", truncate(e.content(), eventLogTruncShort));
-                eventLogger.logEvent(conversationId, traceId, "section_generated", payload);
             } else if (event instanceof ReActEvent.ReportGenerated e) {
                 payload.put("reportId", e.reportId());
                 payload.put("title", e.title());
@@ -457,7 +443,7 @@ public class QueryEngine {
                 eventLogger.logEvent(conversationId, traceId, "error", payload);
             }
         } catch (Exception e) {
-            log.debug("[QUERY] JSONL logging skipped: {}", e.getMessage());
+            log.warn("[QUERY] JSONL logging failed: {}", e.getMessage());
         }
     }
 
@@ -498,7 +484,7 @@ public class QueryEngine {
                     Map.of("toolName", "mining_model", "action", e.action()));
             }
         } catch (Exception ex) {
-            log.debug("[QUERY] span tracking skipped: {}", ex.getMessage());
+            log.warn("[QUERY] span tracking failed: {}", ex.getMessage());
         }
     }
 
@@ -631,7 +617,7 @@ public class QueryEngine {
                         }
                     }
                 } catch (Exception e) {
-                    log.debug("[QUERY] metadata enrichment skipped: {}", e.getMessage());
+                    log.warn("[QUERY] metadata enrichment failed: {}", e.getMessage());
                 }
                 m.put("content", enriched.toString());
             } else {

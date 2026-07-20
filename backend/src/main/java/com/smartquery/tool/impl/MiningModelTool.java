@@ -30,16 +30,16 @@ public class MiningModelTool implements LlmTool {
     private final AlgorithmService algorithmService;
     private final ObjectMapper objectMapper;
 
-    @Value("${mining-tool.timeout-ms:300000}")
+    @Value("${smart-query.mining.tool-timeout-ms:300000}")
     private long miningToolTimeoutMs;
 
-    @Value("${mining.compare.max-algorithms:5}")
+    @Value("${smart-query.mining.compare.max-algorithms:5}")
     private int compareMaxAlgorithms;
 
-    @Value("${mining.tune.max-combinations:12}")
+    @Value("${smart-query.mining.tune.max-combinations:12}")
     private int tuneMaxCombinations;
 
-    @Value("${mining.history-limit:20}")
+    @Value("${smart-query.mining.history-limit:20}")
     private int historyLimit;
 
     @Override

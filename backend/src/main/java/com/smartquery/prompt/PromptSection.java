@@ -17,24 +17,12 @@ public record PromptSection(
     PromptCondition condition,
     int tokenBudget
 ) {
-    public static PromptSection cached(String name, String content) {
-        return new PromptSection(name, content, true, PromptPriority.DEFAULT, null, 0);
-    }
-
-    public static PromptSection uncached(String name, String content) {
-        return new PromptSection(name, content, false, PromptPriority.DEFAULT, null, 0);
-    }
-
     public static PromptSection of(PromptPriority priority, String name, String content) {
         return new PromptSection(name, content, true, priority, null, 0);
     }
 
     public static PromptSection conditional(PromptPriority priority, String name, String content, PromptCondition condition) {
         return new PromptSection(name, content, false, priority, condition, 0);
-    }
-
-    public static PromptSection budgeted(PromptPriority priority, String name, String content, int tokenBudget) {
-        return new PromptSection(name, content, true, priority, null, tokenBudget);
     }
 
     public boolean shouldInject(PromptContext ctx) {

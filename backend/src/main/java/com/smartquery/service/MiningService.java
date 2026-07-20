@@ -630,10 +630,6 @@ public class MiningService {
         return predictionService.batchPredict(modelId);
     }
 
-    public Map<String, Object> batchPredict(Long modelId, String resultTable) {
-        return predictionService.batchPredict(modelId, resultTable);
-    }
-
     public Map<String, Object> batchPredictWithOverrides(Long modelId, String inputTable, String resultTable, String inputFilter) {
         MiningModel model = miningModelMapper.selectById(modelId);
         if (model == null) throw new IllegalArgumentException("模型不存在: " + modelId);
@@ -1266,19 +1262,12 @@ public class MiningService {
             .contains(dataType.toLowerCase());
     }
 
-    private Map<String, Object> parseTrainingOutput(String stdout) { return parseResultMarker(stdout, "[TRAIN_RESULT]"); }
+    private Map<String, Object> parseTrainingOutput(String stdout) {
+        return MiningLogUtils.parseResultMarker(stdout, "[TRAIN_RESULT]", "MINING", objectMapper);
+    }
 
     private Map<String, Object> parseResultMarker(String stdout, String marker) {
-        Map<String, Object> result = new HashMap<>();
-        if (stdout == null) return result;
-        for (String line : stdout.split("\n")) {
-            if (line.contains(marker)) {
-                try { result = objectMapper.readValue(line.substring(line.indexOf(marker) + marker.length()).trim(), Map.class); }
-                catch (Exception e) { log.warn("[MINING] Failed to parse marker '{}': {}", marker, e.getMessage()); }
-                break;
-            }
-        }
-        return result;
+        return MiningLogUtils.parseResultMarker(stdout, marker, "MINING", objectMapper);
     }
 
     private List<String> parseJsonList(String json) {
@@ -1317,9 +1306,7 @@ public class MiningService {
     }
 
     private String toJson(Object obj) {
-        if (obj == null) return null;
-        try { return objectMapper.writeValueAsString(obj); }
-        catch (Exception e) { return String.valueOf(obj); }
+        return MiningLogUtils.toJson(obj, objectMapper);
     }
 
     private String validationMode(MiningModel model) {
@@ -1328,11 +1315,7 @@ public class MiningService {
     }
 
     private String truncateLog(String log, int maxLen) {
-        if (log == null) return null;
-        // Strip control characters that break JSON serialization
-        String cleaned = log.replaceAll("[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f]", "");
-        if (cleaned.length() <= maxLen) return cleaned;
-        return cleaned.substring(0, maxLen) + "\n... (truncated)";
+        return MiningLogUtils.truncateLog(log, maxLen, false);
     }
 
     private void validateTableName(String name) {

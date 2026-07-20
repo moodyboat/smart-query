@@ -8,6 +8,7 @@ import com.smartquery.dto.ScenarioDTO;
 import com.smartquery.entity.Scenario;
 import com.smartquery.service.PromptTemplateService;
 import com.smartquery.service.RoleScenarioService;
+import com.smartquery.common.UserRoles;
 import com.smartquery.service.ScenarioAuthService;
 import com.smartquery.service.ScenarioService;
 import com.smartquery.service.UserService;
@@ -55,7 +56,7 @@ public class ScenarioController {
     @GetMapping
     public Result<List<ScenarioDTO>> list() {
         String role = currentRole();
-        List<Scenario> scenarios = ScenarioAuthService.ROLE_ADMIN.equals(role)
+        List<Scenario> scenarios = UserRoles.ADMIN.equals(role)
             ? scenarioService.getEnabledScenarios()
             : scenarioService.getEnabledScenariosByIds(roleScenarioService.getScenarioIdsByRole(role));
         List<ScenarioDTO> dtos = scenarios.stream().map(this::convertToDTO).collect(Collectors.toList());

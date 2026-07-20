@@ -37,13 +37,13 @@ public class OpenAiCompatibleService implements LlmService {
     @org.springframework.beans.factory.annotation.Value("${smart-query.llm.http-timeout-seconds:180}")
     private int httpTimeoutSeconds;
 
-    @org.springframework.beans.factory.annotation.Value("${smart-query.llm.max-retries:100}")
+    @org.springframework.beans.factory.annotation.Value("${smart-query.llm.max-retries:10}")
     private int maxRetries;
 
-    @org.springframework.beans.factory.annotation.Value("${smart-query.llm.retry-delay-ms:1000}")
+    @org.springframework.beans.factory.annotation.Value("${smart-query.llm.retry-delay-ms:2000}")
     private long retryDelayMs;
 
-    @org.springframework.beans.factory.annotation.Value("${smart-query.llm.max-retry-delay-ms:30000}")
+    @org.springframework.beans.factory.annotation.Value("${smart-query.llm.max-retry-delay-ms:10000}")
     private long maxRetryDelayMs;
 
     @org.springframework.beans.factory.annotation.Value("${smart-query.llm.connect-timeout-seconds:30}")
@@ -93,8 +93,7 @@ public class OpenAiCompatibleService implements LlmService {
 
                 // 验证 messages 格式，避免非法格式导致 API 调用失败
                 if (!validateMessages(messages)) {
-                    log.error("[LLM] Invalid messages format, skipping attempt {}", attempt);
-                    break;
+                    throw new RuntimeException("LLM messages 格式非法（role/content 缺失或超长），拒绝调用");
                 }
 
                 Map<String, Object> body = new LinkedHashMap<>();
@@ -124,8 +123,7 @@ public class OpenAiCompatibleService implements LlmService {
 
                 if (response.statusCode() == 429 || response.statusCode() >= 500) {
                     if (attempt < maxRetries) {
-                        long raw = retryDelayMs * (1L << Math.min(attempt, 30));
-                        long delay = Math.min(raw, maxRetryDelayMs);
+                        long delay = computeRetryDelayMs(attempt);
                         log.warn("[LLM] retry after {}ms (attempt {}/{}, max-cap {}ms), status={}", delay, attempt + 1, maxRetries, maxRetryDelayMs, response.statusCode());
                         Thread.sleep(delay);
                         continue;
@@ -143,11 +141,6 @@ public class OpenAiCompatibleService implements LlmService {
                     throw new RuntimeException("LLM API error: " + response.statusCode() + " " + errorBody);
                 }
 
-                if (response.statusCode() != 200) {
-                    String errorBody = new String(response.body().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-                    throw new RuntimeException("LLM API error: " + response.statusCode() + " " + errorBody);
-                }
-
                 return parseSseStream(response.body(), textTokenConsumer);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -156,8 +149,7 @@ public class OpenAiCompatibleService implements LlmService {
                 if (attempt == maxRetries) {
                     throw new RuntimeException("LLM call failed after " + maxRetries + " retries", e);
                 }
-                long raw = retryDelayMs * (1L << Math.min(attempt, 30));
-                long delay = Math.min(raw, maxRetryDelayMs);
+                long delay = computeRetryDelayMs(attempt);
                 log.warn("[LLM] attempt {}/{} failed: {} - {} (retry after {}ms)", attempt + 1, maxRetries, e.getClass().getSimpleName(), e.getMessage(), delay);
                 log.debug("[LLM] exception details:", e);
                 try {
@@ -169,6 +161,15 @@ public class OpenAiCompatibleService implements LlmService {
             }
         }
         return List.of();
+    }
+
+    /**
+     * 计算重试退避：指数退避 retryDelayMs * 2^attempt，封顶 maxRetryDelayMs。
+     * Math.min(attempt, 30) 防止 long 溢出（2^30 已是 10 亿级）。
+     */
+    private long computeRetryDelayMs(int attempt) {
+        long raw = retryDelayMs * (1L << Math.min(attempt, 30));
+        return Math.min(raw, maxRetryDelayMs);
     }
 
     /**
@@ -348,16 +349,8 @@ public class OpenAiCompatibleService implements LlmService {
             resolveConfig(model);
             return true;
         } catch (Exception e) {
+            log.warn("[LLM] model {} not available: {}", model, e.getMessage());
             return false;
         }
-    }
-
-    @Override
-    public List<String> getAvailableModels() {
-        List<LlmConfigEntity> configs = llmConfigMapper.selectList(
-            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<LlmConfigEntity>()
-                .eq(LlmConfigEntity::getStatus, 1)
-        );
-        return configs.stream().map(LlmConfigEntity::getModelCode).toList();
     }
 }

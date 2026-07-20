@@ -296,16 +296,6 @@ public class AutoRepairHook implements ToolHook {
     }
 
     /**
-     * 截断SQL用于显示
-     */
-    private String truncateSql(String sql) {
-        if (sql == null) return "";
-        int maxLength = 100;
-        if (sql.length() <= maxLength) return sql;
-        return sql.substring(0, maxLength) + "...";
-    }
-
-    /**
      * 截断字符串用于显示
      */
     private String truncateString(String str, int maxLength) {

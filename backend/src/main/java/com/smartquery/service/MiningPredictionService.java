@@ -392,20 +392,7 @@ public class MiningPredictionService {
     }
 
     private Map<String, Object> parseResultMarker(String stdout, String marker) {
-        Map<String, Object> result = new HashMap<>();
-        if (stdout == null) return result;
-        for (String line : stdout.split("\n")) {
-            if (line.contains(marker)) {
-                try {
-                    String json = line.substring(line.indexOf(marker) + marker.length()).trim();
-                    result = objectMapper.readValue(json, Map.class);
-                } catch (Exception e) {
-                    log.warn("[PREDICT] Failed to parse marker '{}': {}", marker, e.getMessage());
-                }
-                break;
-            }
-        }
-        return result;
+        return MiningLogUtils.parseResultMarker(stdout, marker, "PREDICT", objectMapper);
     }
 
     private String safeJsonEmbed(String json) {
@@ -419,16 +406,11 @@ public class MiningPredictionService {
     }
 
     private String toJson(Object obj) {
-        if (obj == null) return null;
-        try { return objectMapper.writeValueAsString(obj); }
-        catch (Exception e) { return String.valueOf(obj); }
+        return MiningLogUtils.toJson(obj, objectMapper);
     }
 
     private String truncateLog(String log, int maxLen) {
-        if (log == null) return null;
-        String cleaned = log.replaceAll("[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f]", "");
-        if (cleaned.length() <= maxLen) return cleaned;
-        return cleaned.substring(0, maxLen) + "\n... (truncated)";
+        return MiningLogUtils.truncateLog(log, maxLen, false);
     }
 
     private void logPredictionEvent(MiningModel model, String eventType, Map<String, Object> extra) {
