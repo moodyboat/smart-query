@@ -218,7 +218,7 @@ public class ReActEngine {
                 eventConsumer.accept(new ReActEvent.Done(state.turnCount(), state.totalTokens(), state.totalCost()));
                 break;
             }
-            if (state.turnCount() >= maxTurns && !previousToolsFailed) {
+            if (maxTurns > 0 && state.turnCount() >= maxTurns && !previousToolsFailed) {
                 state = state.withTerminated("达到最大轮次 " + maxTurns);
                 eventConsumer.accept(new ReActEvent.Done(state.turnCount(), state.totalTokens(), state.totalCost()));
                 break;

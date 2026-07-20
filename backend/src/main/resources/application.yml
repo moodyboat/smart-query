@@ -123,7 +123,7 @@ smart-query:
 
   # ReAct 引擎
   react:
-    max-turns: 15
+    max-turns: 0
     max-tokens-per-turn: 8000
     auto-compact-threshold: 80000
     micro-compact-threshold: 60000
