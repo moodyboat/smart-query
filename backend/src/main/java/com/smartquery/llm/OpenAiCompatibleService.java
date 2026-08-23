@@ -133,12 +133,12 @@ public class OpenAiCompatibleService implements LlmService {
 
                 if (response.statusCode() != 200) {
                     String errorBody = new String(response.body().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-                    // 4xx 错误不重试，直接失败
+                    // 4xx 错误不重试，直接失败（参数非法、鉴权失败、模型不存在等）
                     if (response.statusCode() >= 400 && response.statusCode() < 500) {
                         log.error("[LLM] client error {} (not retryable): {}", response.statusCode(), errorBody);
-                        throw new RuntimeException("LLM API client error: " + response.statusCode() + " " + errorBody);
+                        throw new LlmClientException("LLM API client error: " + response.statusCode() + " " + errorBody);
                     }
-                    throw new RuntimeException("LLM API error: " + response.statusCode() + " " + errorBody);
+                    throw new LlmClientException("LLM API error: " + response.statusCode() + " " + errorBody);
                 }
 
                 return parseSseStream(response.body(), textTokenConsumer);
@@ -146,6 +146,10 @@ public class OpenAiCompatibleService implements LlmService {
                 Thread.currentThread().interrupt();
                 throw new RuntimeException("LLM call interrupted", e);
             } catch (Exception e) {
+                // 4xx 客户端错误不重试（参数非法、鉴权失败等，重试结果相同，只会消耗配额和时间）
+                if (e instanceof LlmClientException lce) {
+                    throw lce;
+                }
                 if (attempt == maxRetries) {
                     throw new RuntimeException("LLM call failed after " + maxRetries + " retries", e);
                 }
@@ -351,6 +355,16 @@ public class OpenAiCompatibleService implements LlmService {
         } catch (Exception e) {
             log.warn("[LLM] model {} not available: {}", model, e.getMessage());
             return false;
+        }
+    }
+
+    /**
+     * 4xx 客户端错误专用异常 — 绕过 chatWithToolsStreaming 的重试循环。
+     * 参数非法、鉴权失败、模型不存在等场景，重试结果相同，应立即失败。
+     */
+    public static class LlmClientException extends RuntimeException {
+        LlmClientException(String message) {
+            super(message);
         }
     }
 }
