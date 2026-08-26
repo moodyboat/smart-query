@@ -33,7 +33,7 @@ CREATE TABLE `sq_algorithm` (
 
 LOCK TABLES `sq_algorithm` WRITE;
 /*!40000 ALTER TABLE `sq_algorithm` DISABLE KEYS */;
-INSERT INTO `sq_algorithm` VALUES (1,'random_forest','随机森林','集成学习方法，通过构建多棵决策树提高预测精度和稳定性','[\"classification\", \"regression\"]','[{\"key\": \"n_estimators\", \"max\": 1000, \"min\": 1, \"hint\": \"n_estimators\", \"step\": 1, \"type\": \"int\", \"label\": \"树的数量\", \"defaultValue\": 100}, {\"key\": \"max_depth\", \"max\": 100, \"min\": 1, \"hint\": \"max_depth\", \"step\": 1, \"type\": \"int\", \"label\": \"最大深度\", \"defaultValue\": 10}, {\"key\": \"min_samples_split\", \"max\": 100, \"min\": 2, \"hint\": \"min_samples_split\", \"step\": 1, \"type\": \"int\", \"label\": \"最小分裂样本数\", \"defaultValue\": 2}, {\"key\": \"min_samples_leaf\", \"max\": 50, \"min\": 1, \"hint\": \"min_samples_leaf\", \"step\": 1, \"type\": \"int\", \"label\": \"叶节点最小样本数\", \"defaultValue\": 1}]','from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor\nmodel_cls = RandomForestClassifier if y is not None and y.nunique() <= 20 else RandomForestRegressor\nclf = model_cls(**params)',1,'🌲','分类/回归','2026-06-19 10:32:37','2026-06-19 10:32:37',0),(2,'xgboost','XGBoost','高效梯度提升算法，适合结构化数据的分类和回归任务','[\"classification\", \"regression\"]','[{\"key\": \"n_estimators\", \"max\": 1000, \"min\": 1, \"hint\": \"n_estimators\", \"step\": 1, \"type\": \"int\", \"label\": \"树的数量\", \"defaultValue\": 100}, {\"key\": \"max_depth\", \"max\": 50, \"min\": 1, \"hint\": \"max_depth\", \"step\": 1, \"type\": \"int\", \"label\": \"最大深度\", \"defaultValue\": 6}, {\"key\": \"learning_rate\", \"max\": 1, \"min\": 0.001, \"hint\": \"learning_rate\", \"step\": 0.01, \"type\": \"float\", \"label\": \"学习率\", \"defaultValue\": 0.3}, {\"key\": \"subsample\", \"max\": 1, \"min\": 0.1, \"hint\": \"subsample\", \"step\": 0.1, \"type\": \"float\", \"label\": \"子采样率\", \"defaultValue\": 1}]','from xgboost import XGBClassifier, XGBRegressor\nmodel_cls = XGBClassifier if y is not None and y.nunique() <= 20 else XGBRegressor\nclf = model_cls(**params)',1,'📈','分类/回归','2026-06-19 10:32:37','2026-06-19 10:32:37',0),(3,'decision_tree','决策树','基于特征进行递归分裂的树模型，可解释性强','[\"classification\", \"regression\"]','[{\"key\": \"max_depth\", \"max\": 100, \"min\": 1, \"hint\": \"max_depth\", \"step\": 1, \"type\": \"int\", \"label\": \"最大深度\", \"defaultValue\": 10}, {\"key\": \"min_samples_split\", \"max\": 100, \"min\": 2, \"hint\": \"min_samples_split\", \"step\": 1, \"type\": \"int\", \"label\": \"最小分裂样本数\", \"defaultValue\": 2}, {\"key\": \"criterion\", \"hint\": \"criterion\", \"type\": \"select\", \"label\": \"分裂标准\", \"options\": [\"gini\", \"entropy\"], \"defaultValue\": \"gini\"}]','from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor\nmodel_cls = DecisionTreeClassifier if y is not None and y.nunique() <= 20 else DecisionTreeRegressor\nclf = model_cls(**params)',1,'🌳','分类/回归','2026-06-19 10:32:37','2026-06-19 10:32:37',0),(4,'logistic_regression','逻辑回归','线性分类模型，适合二分类和多分类任务','[\"classification\"]','[{\"key\": \"C\", \"max\": 100, \"min\": 0.01, \"hint\": \"C\", \"step\": 0.1, \"type\": \"float\", \"label\": \"正则化强度\", \"defaultValue\": 1}, {\"key\": \"max_iter\", \"max\": 10000, \"min\": 10, \"hint\": \"max_iter\", \"step\": 1, \"type\": \"int\", \"label\": \"最大迭代次数\", \"defaultValue\": 100}, {\"key\": \"solver\", \"hint\": \"solver\", \"type\": \"select\", \"label\": \"求解器\", \"options\": [\"lbfgs\", \"liblinear\", \"saga\"], \"defaultValue\": \"lbfgs\"}]','from sklearn.linear_model import LogisticRegression\nfrom sklearn.preprocessing import StandardScaler\nscaler = StandardScaler()\nX = pd.DataFrame(scaler.fit_transform(X), columns=X.columns)\nclf = LogisticRegression(**params)',1,'📐','分类','2026-06-19 10:32:37','2026-06-19 10:32:37',0),(5,'svm','支持向量机','通过寻找最优超平面进行分类，适合中小规模数据集','[\"classification\", \"regression\"]','[{\"key\": \"C\", \"max\": 100, \"min\": 0.01, \"hint\": \"C\", \"step\": 0.1, \"type\": \"float\", \"label\": \"正则化强度\", \"defaultValue\": 1}, {\"key\": \"kernel\", \"hint\": \"kernel\", \"type\": \"select\", \"label\": \"核函数\", \"options\": [\"rbf\", \"linear\", \"poly\"], \"defaultValue\": \"rbf\"}, {\"key\": \"gamma\", \"hint\": \"gamma\", \"type\": \"select\", \"label\": \"Gamma\", \"options\": [\"scale\", \"auto\"], \"defaultValue\": \"scale\"}]','from sklearn.svm import SVC, SVR\nmodel_cls = SVC if y is not None and y.nunique() <= 20 else SVR\nclf = model_cls(**params)',1,'🔶','分类/回归','2026-06-19 10:32:37','2026-06-19 10:32:37',0),(6,'knn','K近邻','基于距离度量的惰性学习算法，简单直观','[\"classification\", \"regression\"]','[{\"key\": \"n_neighbors\", \"max\": 100, \"min\": 1, \"hint\": \"n_neighbors\", \"step\": 1, \"type\": \"int\", \"label\": \"邻居数 K\", \"defaultValue\": 5}, {\"key\": \"weights\", \"hint\": \"weights\", \"type\": \"select\", \"label\": \"权重\", \"options\": [\"uniform\", \"distance\"], \"defaultValue\": \"uniform\"}]','from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor\nmodel_cls = KNeighborsClassifier if y is not None and y.nunique() <= 20 else KNeighborsRegressor\nclf = model_cls(**params)',1,'🔗','分类/回归','2026-06-19 10:32:37','2026-06-19 10:32:37',0),(7,'gradient_boosting','梯度提升','串行构建弱学习器的集成方法，预测精度高','[\"classification\", \"regression\"]','[{\"key\": \"n_estimators\", \"max\": 1000, \"min\": 1, \"hint\": \"n_estimators\", \"step\": 1, \"type\": \"int\", \"label\": \"树的数量\", \"defaultValue\": 100}, {\"key\": \"max_depth\", \"max\": 50, \"min\": 1, \"hint\": \"max_depth\", \"step\": 1, \"type\": \"int\", \"label\": \"最大深度\", \"defaultValue\": 3}, {\"key\": \"learning_rate\", \"max\": 1, \"min\": 0.001, \"hint\": \"learning_rate\", \"step\": 0.01, \"type\": \"float\", \"label\": \"学习率\", \"defaultValue\": 0.1}]','from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor\nmodel_cls = GradientBoostingClassifier if y is not None and y.nunique() <= 20 else GradientBoostingRegressor\nclf = model_cls(**params)',1,'🚀','分类/回归','2026-06-19 10:32:37','2026-06-19 10:32:37',0),(8,'lightgbm','LightGBM','微软开源的快速梯度提升框架，训练速度快、内存占用低','[\"classification\", \"regression\"]','[{\"key\": \"n_estimators\", \"max\": 1000, \"min\": 1, \"hint\": \"n_estimators\", \"step\": 1, \"type\": \"int\", \"label\": \"树的数量\", \"defaultValue\": 100}, {\"key\": \"max_depth\", \"max\": 50, \"min\": 1, \"hint\": \"max_depth\", \"step\": 1, \"type\": \"int\", \"label\": \"最大深度\", \"defaultValue\": -1}, {\"key\": \"learning_rate\", \"max\": 1, \"min\": 0.001, \"hint\": \"learning_rate\", \"step\": 0.01, \"type\": \"float\", \"label\": \"学习率\", \"defaultValue\": 0.1}, {\"key\": \"num_leaves\", \"max\": 256, \"min\": 2, \"hint\": \"num_leaves\", \"step\": 1, \"type\": \"int\", \"label\": \"叶子节点数\", \"defaultValue\": 31}]','from lightgbm import LGBMClassifier, LGBMRegressor\nmodel_cls = LGBMClassifier if y is not None and y.nunique() <= 20 else LGBMRegressor\nclf = model_cls(**params)',1,'💡','分类/回归','2026-06-19 10:32:37','2026-06-19 10:32:37',0),(9,'kmeans','K-Means 聚类','基于距离的无监督聚类算法，将数据分为K个簇','[\"clustering\"]','[{\"key\": \"n_clusters\", \"max\": 50, \"min\": 2, \"hint\": \"n_clusters\", \"step\": 1, \"type\": \"int\", \"label\": \"聚类数\", \"defaultValue\": 3}, {\"key\": \"max_iter\", \"max\": 1000, \"min\": 10, \"hint\": \"max_iter\", \"step\": 1, \"type\": \"int\", \"label\": \"最大迭代次数\", \"defaultValue\": 300}]','from sklearn.cluster import KMeans\nparams.setdefault(\'n_clusters\', 3)\nclf = KMeans(**params)',1,'🎯','聚类','2026-06-19 10:32:37','2026-06-19 10:32:37',0);
+INSERT INTO `sq_algorithm` VALUES (1,'random_forest','随机森林','集成学习方法，通过构建多棵决策树提高预测精度和稳定性','[\"classification\", \"regression\"]','[{\"key\": \"n_estimators\", \"max\": 1000, \"min\": 1, \"hint\": \"n_estimators\", \"step\": 1, \"type\": \"int\", \"label\": \"树的数量\", \"defaultValue\": 100}, {\"key\": \"max_depth\", \"max\": 100, \"min\": 1, \"hint\": \"max_depth\", \"step\": 1, \"type\": \"int\", \"label\": \"最大深度\", \"defaultValue\": 10}, {\"key\": \"min_samples_split\", \"max\": 100, \"min\": 2, \"hint\": \"min_samples_split\", \"step\": 1, \"type\": \"int\", \"label\": \"最小分裂样本数\", \"defaultValue\": 2}, {\"key\": \"min_samples_leaf\", \"max\": 50, \"min\": 1, \"hint\": \"min_samples_leaf\", \"step\": 1, \"type\": \"int\", \"label\": \"叶节点最小样本数\", \"defaultValue\": 1}]','from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor\nmodel_cls = RandomForestClassifier if _model_type == \'classification\' else RandomForestRegressor\nclf = model_cls(**params)',1,'🌲','分类/回归','2026-06-19 10:32:37','2026-06-19 10:32:37',0),(2,'xgboost','XGBoost','高效梯度提升算法，适合结构化数据的分类和回归任务','[\"classification\", \"regression\"]','[{\"key\": \"n_estimators\", \"max\": 1000, \"min\": 1, \"hint\": \"n_estimators\", \"step\": 1, \"type\": \"int\", \"label\": \"树的数量\", \"defaultValue\": 100}, {\"key\": \"max_depth\", \"max\": 50, \"min\": 1, \"hint\": \"max_depth\", \"step\": 1, \"type\": \"int\", \"label\": \"最大深度\", \"defaultValue\": 6}, {\"key\": \"learning_rate\", \"max\": 1, \"min\": 0.001, \"hint\": \"learning_rate\", \"step\": 0.01, \"type\": \"float\", \"label\": \"学习率\", \"defaultValue\": 0.3}, {\"key\": \"subsample\", \"max\": 1, \"min\": 0.1, \"hint\": \"subsample\", \"step\": 0.1, \"type\": \"float\", \"label\": \"子采样率\", \"defaultValue\": 1}]','from xgboost import XGBClassifier, XGBRegressor\nmodel_cls = XGBClassifier if _model_type == \'classification\' else XGBRegressor\nclf = model_cls(**params)',1,'📈','分类/回归','2026-06-19 10:32:37','2026-06-19 10:32:37',0),(3,'decision_tree','决策树','基于特征进行递归分裂的树模型，可解释性强','[\"classification\", \"regression\"]','[{\"key\": \"max_depth\", \"max\": 100, \"min\": 1, \"hint\": \"max_depth\", \"step\": 1, \"type\": \"int\", \"label\": \"最大深度\", \"defaultValue\": 10}, {\"key\": \"min_samples_split\", \"max\": 100, \"min\": 2, \"hint\": \"min_samples_split\", \"step\": 1, \"type\": \"int\", \"label\": \"最小分裂样本数\", \"defaultValue\": 2}, {\"key\": \"criterion\", \"hint\": \"criterion\", \"type\": \"select\", \"label\": \"分裂标准\", \"options\": [\"gini\", \"entropy\"], \"defaultValue\": \"gini\"}]','from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor\nmodel_cls = DecisionTreeClassifier if _model_type == \'classification\' else DecisionTreeRegressor\nclf = model_cls(**params)',1,'🌳','分类/回归','2026-06-19 10:32:37','2026-06-19 10:32:37',0),(4,'logistic_regression','逻辑回归','线性分类模型，适合二分类和多分类任务','[\"classification\"]','[{\"key\": \"C\", \"max\": 100, \"min\": 0.01, \"hint\": \"C\", \"step\": 0.1, \"type\": \"float\", \"label\": \"正则化强度\", \"defaultValue\": 1}, {\"key\": \"max_iter\", \"max\": 10000, \"min\": 10, \"hint\": \"max_iter\", \"step\": 1, \"type\": \"int\", \"label\": \"最大迭代次数\", \"defaultValue\": 100}, {\"key\": \"solver\", \"hint\": \"solver\", \"type\": \"select\", \"label\": \"求解器\", \"options\": [\"lbfgs\", \"liblinear\", \"saga\"], \"defaultValue\": \"lbfgs\"}]','from sklearn.linear_model import LogisticRegression\nclf = LogisticRegression(**params)',1,'📐','分类','2026-06-19 10:32:37','2026-06-19 10:32:37',0),(5,'svm','支持向量机','通过寻找最优超平面进行分类，适合中小规模数据集','[\"classification\", \"regression\"]','[{\"key\": \"C\", \"max\": 100, \"min\": 0.01, \"hint\": \"C\", \"step\": 0.1, \"type\": \"float\", \"label\": \"正则化强度\", \"defaultValue\": 1}, {\"key\": \"kernel\", \"hint\": \"kernel\", \"type\": \"select\", \"label\": \"核函数\", \"options\": [\"rbf\", \"linear\", \"poly\"], \"defaultValue\": \"rbf\"}, {\"key\": \"gamma\", \"hint\": \"gamma\", \"type\": \"select\", \"label\": \"Gamma\", \"options\": [\"scale\", \"auto\"], \"defaultValue\": \"scale\"}]','from sklearn.svm import SVC, SVR\nmodel_cls = SVC if _model_type == \'classification\' else SVR\nclf = model_cls(**params)',1,'🔶','分类/回归','2026-06-19 10:32:37','2026-06-19 10:32:37',0),(6,'knn','K近邻','基于距离度量的惰性学习算法，简单直观','[\"classification\", \"regression\"]','[{\"key\": \"n_neighbors\", \"max\": 100, \"min\": 1, \"hint\": \"n_neighbors\", \"step\": 1, \"type\": \"int\", \"label\": \"邻居数 K\", \"defaultValue\": 5}, {\"key\": \"weights\", \"hint\": \"weights\", \"type\": \"select\", \"label\": \"权重\", \"options\": [\"uniform\", \"distance\"], \"defaultValue\": \"uniform\"}]','from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor\nmodel_cls = KNeighborsClassifier if _model_type == \'classification\' else KNeighborsRegressor\nclf = model_cls(**params)',1,'🔗','分类/回归','2026-06-19 10:32:37','2026-06-19 10:32:37',0),(7,'gradient_boosting','梯度提升','串行构建弱学习器的集成方法，预测精度高','[\"classification\", \"regression\"]','[{\"key\": \"n_estimators\", \"max\": 1000, \"min\": 1, \"hint\": \"n_estimators\", \"step\": 1, \"type\": \"int\", \"label\": \"树的数量\", \"defaultValue\": 100}, {\"key\": \"max_depth\", \"max\": 50, \"min\": 1, \"hint\": \"max_depth\", \"step\": 1, \"type\": \"int\", \"label\": \"最大深度\", \"defaultValue\": 3}, {\"key\": \"learning_rate\", \"max\": 1, \"min\": 0.001, \"hint\": \"learning_rate\", \"step\": 0.01, \"type\": \"float\", \"label\": \"学习率\", \"defaultValue\": 0.1}]','from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor\nmodel_cls = GradientBoostingClassifier if _model_type == \'classification\' else GradientBoostingRegressor\nclf = model_cls(**params)',1,'🚀','分类/回归','2026-06-19 10:32:37','2026-06-19 10:32:37',0),(8,'lightgbm','LightGBM','微软开源的快速梯度提升框架，训练速度快、内存占用低','[\"classification\", \"regression\"]','[{\"key\": \"n_estimators\", \"max\": 1000, \"min\": 1, \"hint\": \"n_estimators\", \"step\": 1, \"type\": \"int\", \"label\": \"树的数量\", \"defaultValue\": 100}, {\"key\": \"max_depth\", \"max\": 50, \"min\": 1, \"hint\": \"max_depth\", \"step\": 1, \"type\": \"int\", \"label\": \"最大深度\", \"defaultValue\": -1}, {\"key\": \"learning_rate\", \"max\": 1, \"min\": 0.001, \"hint\": \"learning_rate\", \"step\": 0.01, \"type\": \"float\", \"label\": \"学习率\", \"defaultValue\": 0.1}, {\"key\": \"num_leaves\", \"max\": 256, \"min\": 2, \"hint\": \"num_leaves\", \"step\": 1, \"type\": \"int\", \"label\": \"叶子节点数\", \"defaultValue\": 31}]','from lightgbm import LGBMClassifier, LGBMRegressor\nmodel_cls = LGBMClassifier if _model_type == \'classification\' else LGBMRegressor\nclf = model_cls(**params)',1,'💡','分类/回归','2026-06-19 10:32:37','2026-06-19 10:32:37',0),(9,'kmeans','K-Means 聚类','基于距离的无监督聚类算法，将数据分为K个簇','[\"clustering\"]','[{\"key\": \"n_clusters\", \"max\": 50, \"min\": 2, \"hint\": \"n_clusters\", \"step\": 1, \"type\": \"int\", \"label\": \"聚类数\", \"defaultValue\": 3}, {\"key\": \"max_iter\", \"max\": 1000, \"min\": 10, \"hint\": \"max_iter\", \"step\": 1, \"type\": \"int\", \"label\": \"最大迭代次数\", \"defaultValue\": 300}]','from sklearn.cluster import KMeans\nparams.setdefault(\'n_clusters\', 3)\nclf = KMeans(**params)',1,'🎯','聚类','2026-06-19 10:32:37','2026-06-19 10:32:37',0);
 /*!40000 ALTER TABLE `sq_algorithm` ENABLE KEYS */;
 UNLOCK TABLES;
 DROP TABLE IF EXISTS `sq_chart`;
@@ -262,6 +262,8 @@ CREATE TABLE `sq_mining_model` (
   `feature_importance` json DEFAULT NULL COMMENT '特征重要性',
   `training_log` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci COMMENT '训练日志',
   `model_path` varchar(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '持久化模型路径(.pkl)',
+  `artifact_sha256` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `artifact_schema_version` int DEFAULT NULL,
   `status` enum('draft','training','trained','published','offline','failed') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'draft',
   `version` int NOT NULL DEFAULT '1',
   `schedule_cron` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '调度cron表达式',
@@ -282,6 +284,19 @@ CREATE TABLE `sq_mining_model` (
   `test_size` double DEFAULT '0.2' COMMENT '测试集比例',
   `temporal_column` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '时间列(用于时序验证)',
   `validation_metrics` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci COMMENT '验证指标JSON(样本外/时序验证结果)',
+  `positive_class` varchar(255) DEFAULT NULL,
+  `group_columns` text COMMENT '实体隔离列JSON数组',
+  `oos_table` varchar(255) DEFAULT NULL COMMENT '独立锁定OOS表',
+  `oos_filter` text,
+  `calibration_method` varchar(20) DEFAULT 'none',
+  `threshold_policy` text COMMENT '决策阈值策略JSON',
+  `governance_policy` text COMMENT '发布治理门槛JSON',
+  `evaluation_status` varchar(30) DEFAULT 'pending',
+  `approved_by_user_id` varchar(64) DEFAULT NULL,
+  `approved_at` datetime DEFAULT NULL,
+  `monitoring_baseline` longtext,
+  `last_drift_metrics` longtext,
+  `last_drift_at` datetime DEFAULT NULL,
   `last_synced_at` datetime DEFAULT NULL COMMENT 'Last pipeline-model sync timestamp',
   PRIMARY KEY (`id`),
   KEY `idx_pipeline` (`pipeline_id`),
@@ -304,6 +319,7 @@ CREATE TABLE `sq_mining_pipeline` (
   `description` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
   `data_source_id` bigint NOT NULL,
   `conversation_id` bigint DEFAULT NULL COMMENT '来源对话ID',
+  `user_id` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '归属用户ID（多租户隔离）',
   `status` enum('draft','ready','running','completed','failed') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'draft',
   `nodes` json NOT NULL COMMENT '流程节点定义 [{id,type,config,position}]',
   `edges` json DEFAULT NULL COMMENT '节点连线 [{source,target}]',
@@ -316,7 +332,8 @@ CREATE TABLE `sq_mining_pipeline` (
   `last_synced_at` datetime DEFAULT NULL COMMENT 'Last model-pipeline sync timestamp',
   PRIMARY KEY (`id`),
   KEY `idx_datasource` (`data_source_id`),
-  KEY `idx_conversation` (`conversation_id`)
+  KEY `idx_conversation` (`conversation_id`),
+  KEY `idx_pipeline_user` (`user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
@@ -330,16 +347,29 @@ DROP TABLE IF EXISTS `sq_model_execution`;
 CREATE TABLE `sq_model_execution` (
   `id` bigint NOT NULL AUTO_INCREMENT,
   `model_id` bigint NOT NULL,
-  `trigger_type` enum('manual','schedule','chat') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'manual',
-  `status` enum('pending','running','success','failed') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending',
+  `triggered_by_user_id` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '触发训练的用户ID，调度任务为NULL',
+  `trigger_type` varchar(30) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'manual',
+  `status` enum('pending','queued','running','success','failed','canceled') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending',
   `hyperparameters` json DEFAULT NULL COMMENT '本次执行使用的超参数快照',
   `metrics` json DEFAULT NULL COMMENT '本次执行结果指标',
   `execution_log` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
   `execution_time_ms` int DEFAULT NULL,
+  `progress_percent` int NOT NULL DEFAULT '0',
+  `current_stage` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `progress_message` varchar(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `cancel_requested` tinyint(1) NOT NULL DEFAULT '0',
+  `artifact_path` varchar(1000) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `artifact_sha256` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `artifact_schema_version` int DEFAULT NULL,
+  `started_at` datetime DEFAULT NULL,
+  `finished_at` datetime DEFAULT NULL,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   KEY `idx_model` (`model_id`),
-  KEY `idx_status` (`status`)
+  KEY `idx_status` (`status`),
+  KEY `idx_execution_trigger_user` (`triggered_by_user_id`),
+  KEY `idx_execution_model_status` (`model_id`,`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
@@ -347,6 +377,19 @@ LOCK TABLES `sq_model_execution` WRITE;
 /*!40000 ALTER TABLE `sq_model_execution` DISABLE KEYS */;
 /*!40000 ALTER TABLE `sq_model_execution` ENABLE KEYS */;
 UNLOCK TABLES;
+DROP TABLE IF EXISTS `sq_task_event`;
+CREATE TABLE `sq_task_event` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `topic` varchar(160) NOT NULL,
+  `owner_user_id` varchar(64) NOT NULL,
+  `event_name` varchar(50) NOT NULL,
+  `payload` longtext NOT NULL,
+  `terminal` tinyint(1) NOT NULL DEFAULT '0',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_task_event_replay` (`topic`,`owner_user_id`,`id`),
+  KEY `idx_task_event_created` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 DROP TABLE IF EXISTS `sq_ontology_dimension`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;

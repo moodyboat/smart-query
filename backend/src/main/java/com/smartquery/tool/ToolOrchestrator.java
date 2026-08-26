@@ -1,5 +1,6 @@
 package com.smartquery.tool;
 
+import com.smartquery.common.UserContextHolder;
 import com.smartquery.logging.ConversationEventLogger;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -137,6 +138,14 @@ public class ToolOrchestrator {
     }
 
     private ToolResult executeSingle(ToolCall toolCall, ToolExecutionContext context) {
+        // The actor is part of the immutable tool context. Re-bind it even when a
+        // future executor implementation does not propagate ThreadLocal values.
+        try (UserContextHolder.Scope ignored = UserContextHolder.open(context.actor())) {
+            return executeSingleAsActor(toolCall, context);
+        }
+    }
+
+    private ToolResult executeSingleAsActor(ToolCall toolCall, ToolExecutionContext context) {
         Optional<LlmTool> opt = toolRegistry.getTool(toolCall.toolName());
         if (opt.isEmpty()) {
             return ToolResult.error(toolCall.toolName(),

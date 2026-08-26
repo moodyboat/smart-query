@@ -7,7 +7,5 @@ xgboost>=1.7,<2
 lightgbm>=4.0,<5
 matplotlib>=3.7,<4
 pymysql>=1.1,<2
-sqlalchemy>=2.0,<3
+sqlalchemy==2.0.52
 joblib>=1.2,<2
-# 业务库为达梦 DM8 时启用（DbUrlUtil.buildSqlalchemyUrl case "dm" → dm+dmPython://）：
-# dmPython>=3.1,<4  # 达梦官方 Python 驱动，需从达梦安装目录或 https://package.dameng.com/ 获取

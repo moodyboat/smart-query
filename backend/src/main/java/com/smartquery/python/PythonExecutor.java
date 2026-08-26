@@ -7,6 +7,7 @@ import com.smartquery.mapper.DataSourceMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
 
 import java.io.*;
@@ -86,6 +87,9 @@ public class PythonExecutor {
 
     @Value("${smart-query.python.progress-report-interval:5}")
     private int progressReportInterval;
+
+    private final ConcurrentMap<String, Process> activeProcesses = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, String> activeContainerNames = new ConcurrentHashMap<>();
 
     public PythonExecutor(DataSourceMapper dataSourceMapper, PythonCircuitBreaker circuitBreaker) {
         this.dataSourceMapper = dataSourceMapper;
@@ -249,6 +253,168 @@ public class PythonExecutor {
     }
 
     /**
+     * Executes a trusted, version-controlled Python program from the application classpath.
+     *
+     * <p>Unlike {@link #execute(String, Long, int)}, this method does not create Python source
+     * from Java strings and does not wrap the program. Runtime input must be passed through
+     * explicit command-line arguments/files. This is the entry point used by the mining
+     * train/predict protocol.</p>
+     */
+    public PythonResult executeResource(String resourcePath, List<String> arguments,
+                                        Long dataSourceId, int timeoutMs) {
+        return executeResource(resourcePath, arguments, dataSourceId, timeoutMs, null);
+    }
+
+    public PythonResult executeResource(String resourcePath, List<String> arguments,
+                                        Long dataSourceId, int timeoutMs, String executionKey) {
+        return executeResource(resourcePath, arguments, dataSourceId, timeoutMs, executionKey, null);
+    }
+
+    public PythonResult executeResource(String resourcePath, List<String> arguments,
+                                        Long dataSourceId, int timeoutMs, String executionKey,
+                                        java.util.function.Consumer<String> logConsumer) {
+        timeoutMs = Math.min(Math.max(timeoutMs, 1000), maxTimeoutMs);
+        long start = System.currentTimeMillis();
+
+        if (!circuitBreaker.allowExecution()) {
+            int elapsed = (int) (System.currentTimeMillis() - start);
+            return PythonResult.error("Python 执行暂时不可用（熔断保护中，连续失败 " +
+                circuitBreaker.getConsecutiveFailures() + " 次），请稍后重试", -10, elapsed);
+        }
+
+        ScheduledExecutorService memoryMonitor = null;
+        Path programFile = null;
+        Process activeProcess = null;
+        String activeContainerName = null;
+        try {
+            ClassPathResource resource = new ClassPathResource(resourcePath);
+            if (!resource.exists()) {
+                return PythonResult.error("Python 运行器不存在: " + resourcePath, -4,
+                    (int) (System.currentTimeMillis() - start));
+            }
+
+            Path scriptDir = Path.of(artifactDir);
+            Files.createDirectories(scriptDir);
+            programFile = Files.createTempFile(scriptDir, "smartquery_runtime_", ".py");
+            try (InputStream input = resource.getInputStream()) {
+                Files.copy(input, programFile, StandardCopyOption.REPLACE_EXISTING);
+            }
+            restrictOwnerOnly(programFile);
+
+            String dbUrl = resolveDataSourceUrl(dataSourceId);
+            List<String> safeArguments = arguments == null ? List.of() : List.copyOf(arguments);
+            ProcessBuilder pb;
+            if ("docker".equals(executionMode)) {
+                if (executionKey != null && !executionKey.isBlank()) {
+                    activeContainerName = executionKey.toLowerCase(Locale.ROOT)
+                        .replaceAll("[^a-z0-9_.-]", "-");
+                    activeContainerNames.put(executionKey, activeContainerName);
+                }
+                pb = buildDockerProcess(programFile, dataSourceId, dbUrl, safeArguments, activeContainerName);
+            } else {
+                List<String> command = new ArrayList<>();
+                command.add(resolvedPythonCmd);
+                command.add(programFile.toString());
+                command.addAll(safeArguments);
+                pb = new ProcessBuilder(command);
+            }
+            pb.redirectErrorStream(false);
+            pb.environment().put("PYTHONIOENCODING", "utf-8");
+            if (dbUrl != null && !dbUrl.isBlank()) {
+                pb.environment().put("_SMARTQUERY_DB_URL", dbUrl);
+            }
+
+            log.debug("[PYTHON] Starting trusted runtime: resource={}, script={}", resourcePath, programFile);
+            Process process = pb.start();
+            activeProcess = process;
+            if (executionKey != null && !executionKey.isBlank()) {
+                activeProcesses.put(executionKey, process);
+            }
+            if (!"docker".equals(executionMode) && maxMemoryMb > 0) {
+                memoryMonitor = startMemoryMonitor(process, maxMemoryMb);
+            }
+
+            StringBuilder stdoutBuilder = new StringBuilder();
+            CompletableFuture<Void> stdoutReadFuture = CompletableFuture.runAsync(() -> {
+                try (BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        stdoutBuilder.append(line).append('\n');
+                        if (logConsumer != null) {
+                            try { logConsumer.accept(line); } catch (Exception ignored) {}
+                        }
+                    }
+                } catch (IOException ignored) {
+                }
+            });
+            CompletableFuture<String> stderrFuture = readAsync(process.getErrorStream());
+
+            boolean completed = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS);
+            int elapsed = (int) (System.currentTimeMillis() - start);
+            if (!completed) {
+                process.destroyForcibly();
+                process.waitFor(5, TimeUnit.SECONDS);
+                stdoutReadFuture.cancel(true);
+                stderrFuture.cancel(true);
+                if (memoryMonitor != null) memoryMonitor.shutdownNow();
+                Files.deleteIfExists(programFile);
+                return PythonResult.timeout("执行超时 (" + timeoutMs + "ms)", elapsed);
+            }
+
+            if (memoryMonitor != null) memoryMonitor.shutdownNow();
+            stdoutReadFuture.get(streamDrainTimeoutSeconds, TimeUnit.SECONDS);
+            String stdout = truncateOutput(stdoutBuilder.toString());
+            String stderr = truncateOutput(stderrFuture.get(streamDrainTimeoutSeconds, TimeUnit.SECONDS));
+            int exitCode = process.exitValue();
+            Files.deleteIfExists(programFile);
+
+            if (exitCode == 0) circuitBreaker.recordSuccess();
+            else circuitBreaker.recordFailure();
+
+            log.info("[PYTHON] trusted runtime exit={}, time={}ms, stdout={}chars, stderr={}chars",
+                exitCode, elapsed, stdout.length(), stderr.length());
+            return new PythonResult(stdout, stderr, exitCode, List.of(), elapsed);
+        } catch (Exception e) {
+            int elapsed = (int) (System.currentTimeMillis() - start);
+            circuitBreaker.recordFailure();
+            if (memoryMonitor != null) memoryMonitor.shutdownNow();
+            try { Files.deleteIfExists(programFile); } catch (Exception ignored) {}
+            log.error("[PYTHON] Trusted runtime failed: resource={}, error={}", resourcePath, e.getMessage(), e);
+            return PythonResult.error("执行异常: " + e.getClass().getSimpleName() + " - " + e.getMessage(), -2, elapsed);
+        } finally {
+            if (executionKey != null && activeProcess != null) {
+                activeProcesses.remove(executionKey, activeProcess);
+            }
+            if (executionKey != null) activeContainerNames.remove(executionKey);
+        }
+    }
+
+    /** Best-effort cancellation for a running trusted runtime process. */
+    public boolean cancelExecution(String executionKey) {
+        if (executionKey == null || executionKey.isBlank()) return false;
+        String containerName = activeContainerNames.get(executionKey);
+        if (containerName != null) {
+            try {
+                Process stop = new ProcessBuilder("docker", "stop", "--time", "2", containerName).start();
+                stop.waitFor(5, TimeUnit.SECONDS);
+            } catch (Exception e) {
+                log.warn("[PYTHON] Failed to stop container {}: {}", containerName, e.getMessage());
+            }
+        }
+        Process process = activeProcesses.get(executionKey);
+        if (process == null || !process.isAlive()) return containerName != null;
+        process.destroy();
+        try {
+            if (!process.waitFor(2, TimeUnit.SECONDS)) process.destroyForcibly();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            process.destroyForcibly();
+        }
+        return true;
+    }
+
+    /**
      * 包装用户代码: 注入 DB 连接 + 安全限制
      * @return [wrappedCode, dbUrl or null]
      */
@@ -369,12 +535,25 @@ public class PythonExecutor {
     }
 
     private ProcessBuilder buildDockerProcess(Path scriptFile, Long dataSourceId, String dbUrl) {
+        return buildDockerProcess(scriptFile, dataSourceId, dbUrl, List.of());
+    }
+
+    private ProcessBuilder buildDockerProcess(Path scriptFile, Long dataSourceId, String dbUrl,
+                                              List<String> arguments) {
+        return buildDockerProcess(scriptFile, dataSourceId, dbUrl, arguments, null);
+    }
+
+    private ProcessBuilder buildDockerProcess(Path scriptFile, Long dataSourceId, String dbUrl,
+                                              List<String> arguments, String containerName) {
         String memLimit = maxMemoryMb + "m";
         String cpuLimit = String.valueOf(maxCpus);
         boolean dood = dockerSharedVolume != null && !dockerSharedVolume.isBlank();
 
         java.util.List<String> cmd = new java.util.ArrayList<>();
         cmd.add("docker"); cmd.add("run"); cmd.add("--rm");
+        if (containerName != null && !containerName.isBlank()) {
+            cmd.add("--name"); cmd.add(containerName);
+        }
         cmd.add("--memory=" + memLimit);
         cmd.add("--cpus=" + cpuLimit);
         if (dood) {
@@ -402,7 +581,24 @@ public class PythonExecutor {
         cmd.add("python");
         // 脚本路径：DooD 下脚本在共享卷的 artifactDir 内（python 容器同路径可见）；否则走 /scripts
         cmd.add(dood ? scriptFile.toString() : "/scripts/" + scriptFile.getFileName());
+        cmd.addAll(arguments);
         return new ProcessBuilder(cmd);
+    }
+
+    private String resolveDataSourceUrl(Long dataSourceId) {
+        if (dataSourceId == null) return null;
+        DataSource ds = dataSourceMapper.selectById(dataSourceId);
+        return ds == null ? null : DbUrlUtil.buildSqlalchemyUrl(ds);
+    }
+
+    private void restrictOwnerOnly(Path path) {
+        try {
+            Files.setPosixFilePermissions(path, java.util.Set.of(
+                java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                java.nio.file.attribute.PosixFilePermission.OWNER_WRITE));
+        } catch (UnsupportedOperationException | IOException e) {
+            log.debug("[PYTHON] Cannot set POSIX permissions (non-POSIX filesystem): {}", e.getMessage());
+        }
     }
 
     private ScheduledExecutorService startMemoryMonitor(Process process, int maxMb) {

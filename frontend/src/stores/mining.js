@@ -1,10 +1,10 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import {
-  API_BASE,
   fetchMiningModels, fetchMiningModel, fetchDataSources,
   trainMiningModel, publishMiningModel, offlineMiningModel
 } from '../api'
+import { createAuthenticatedEventStream } from '../api/sse.js'
 import { MODEL_STATUS } from '../constants'
 
 export const useMiningStore = defineStore('mining', () => {
@@ -88,10 +88,10 @@ export const useMiningStore = defineStore('mining', () => {
       if (currentUrl.includes(`/${modelId}/status-stream`)) return currentUrl
       closeEventSource()
     }
-    const url = `${API_BASE}/mining/model/${modelId}/status-stream`
-    const eventSource = new EventSource(url)
+    const url = `/api/v1/mining/model/${modelId}/status-stream`
+    const eventSource = createAuthenticatedEventStream(url)
     activeEventSource.value = eventSource
-    eventSource.onmessage = (event) => {
+    eventSource.addEventListener('model_status', (event) => {
       try {
         const data = JSON.parse(event.data)
         if (data.type === 'model_status' && data.modelId === modelId) {
@@ -106,12 +106,14 @@ export const useMiningStore = defineStore('mining', () => {
           }
         }
       } catch {}
-    }
-    eventSource.onerror = () => {
+    })
+    eventSource.onerror = (error) => {
       console.warn('[MiningStore] SSE connection lost for model', modelId)
-      eventSource.close()
-      activeEventSource.value = null
-      refreshModel(modelId)
+      if (!error.willReconnect) {
+        eventSource.close()
+        activeEventSource.value = null
+        refreshModel(modelId)
+      }
     }
     return eventSource
   }

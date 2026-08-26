@@ -129,8 +129,8 @@
           <el-select :model-value="node.config?.validationMode || 'train_test'" style="width: 100%" :teleported="false" :disabled="readonly" @update:model-value="update('validationMode', $event)">
             <el-option label="训练/测试分割" value="train_test" />
             <el-option label="交叉验证" value="cv" />
-            <el-option label="样本外验证" value="oos" />
-            <el-option label="时间外验证" value="temporal" />
+            <el-option label="独立样本外验证" value="oos" />
+            <el-option label="滚动时间外验证" value="temporal" />
           </el-select>
         </el-form-item>
         <el-form-item label="测试比例">
@@ -142,6 +142,51 @@
             <el-option label="不使用" :value="0" />
             <el-option v-for="n in [3, 5, 10]" :key="n" :label="`${n}-Fold`" :value="n" />
           </el-select>
+        </el-form-item>
+        <el-form-item label="实体隔离列">
+          <el-select :model-value="node.config?.groupColumns || []" multiple filterable allow-create default-first-option
+            placeholder="企业ID/客户ID/合同ID" style="width:100%" :teleported="false" :disabled="readonly"
+            @update:model-value="update('groupColumns', $event)" />
+        </el-form-item>
+        <el-form-item v-if="node.config?.validationMode === 'temporal'" label="时间列">
+          <el-input :model-value="node.config?.temporalColumn || ''" :disabled="readonly"
+            placeholder="created_at" @update:model-value="update('temporalColumn', $event)" />
+        </el-form-item>
+        <template v-if="node.config?.validationMode === 'oos'">
+          <el-form-item label="OOS表">
+            <el-input :model-value="node.config?.oosTable || ''" :disabled="readonly"
+              placeholder="独立锁定样本表" @update:model-value="update('oosTable', $event)" />
+          </el-form-item>
+          <el-form-item label="OOS条件">
+            <el-input :model-value="node.config?.oosFilter || ''" :disabled="readonly"
+              placeholder="可选快照条件" @update:model-value="update('oosFilter', $event)" />
+          </el-form-item>
+        </template>
+        <el-form-item label="风险正类">
+          <el-input :model-value="node.config?.positiveClass || ''" :disabled="readonly"
+            placeholder="例如 1 / risk" @update:model-value="update('positiveClass', $event)" />
+        </el-form-item>
+        <el-form-item label="概率校准">
+          <el-select :model-value="node.config?.calibrationMethod || 'none'" style="width:100%"
+            :teleported="false" :disabled="readonly" @update:model-value="update('calibrationMethod', $event)">
+            <el-option label="不校准" value="none" />
+            <el-option label="Platt (sigmoid)" value="sigmoid" />
+            <el-option label="Isotonic" value="isotonic" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="阈值策略">
+          <el-select :model-value="node.config?.thresholdPolicy?.mode || 'default'" style="width:100%"
+            :teleported="false" :disabled="readonly" @update:model-value="updateThreshold('mode', $event)">
+            <el-option label="默认0.5" value="default" />
+            <el-option label="最大F1" value="max_f1" />
+            <el-option label="最低召回率" value="min_recall" />
+            <el-option label="最小业务成本" value="min_cost" />
+            <el-option label="固定阈值" value="fixed" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="node.config?.thresholdPolicy?.mode === 'min_recall'" label="目标召回">
+          <el-input-number :model-value="node.config?.thresholdPolicy?.targetRecall ?? 0.8" :min="0" :max="1"
+            :step="0.05" :disabled="readonly" @update:model-value="updateThreshold('targetRecall', $event)" />
         </el-form-item>
       </el-form>
     </template>
@@ -293,6 +338,11 @@ function formatMetricName(key) {
 function update(key, value) {
   const config = { ...props.node.config, [key]: value }
   emit('update', { nodeId: props.node.id, nodeType: props.node.type, config })
+}
+
+function updateThreshold(key, value) {
+  const thresholdPolicy = { ...(props.node.config?.thresholdPolicy || {}), [key]: value }
+  update('thresholdPolicy', thresholdPolicy)
 }
 
 function updateParam(key, value) {

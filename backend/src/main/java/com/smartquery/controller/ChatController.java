@@ -7,6 +7,7 @@ import com.smartquery.engine.QueryEngine;
 import com.smartquery.engine.ReActEvent;
 import com.smartquery.logging.ConversationStatsService;
 import com.smartquery.service.ScenarioAuthService;
+import com.smartquery.service.ResourceAccessService;
 import com.smartquery.tool.ToolRegistry;
 import com.smartquery.entity.ChatMessage;
 import com.smartquery.logging.ConversationEventLogger;
@@ -14,7 +15,6 @@ import com.smartquery.logging.DiagnosticsTimer;
 import com.smartquery.prompt.SchemaContextBuilder;
 import com.smartquery.prompt.ToolPromptLoader;
 import com.smartquery.mapper.ChatMessageMapper;
-import com.smartquery.mapper.ConversationMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -35,7 +35,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class ChatController {
 
     private final QueryEngine queryEngine;
-    private final ConversationMapper conversationMapper;
     private final ChatMessageMapper chatMessageMapper;
     private final ConversationEventLogger eventLogger;
     private final ConversationStatsService statsService;
@@ -52,6 +51,7 @@ public class ChatController {
     private final Environment environment;
     private final ScenarioAuthService scenarioAuthService;
     private final com.smartquery.service.ScenarioService scenarioService;
+    private final ResourceAccessService resourceAccess;
 
     @org.springframework.beans.factory.annotation.Value("${smart-query.llm.default-model:glm-5.1}")
     private String defaultModel;
@@ -98,6 +98,9 @@ public class ChatController {
         @RequestParam(defaultValue = "") String model,
         @RequestParam(defaultValue = "") String scenario
     ) {
+        // Authenticate the resource before reading its datasource, taking its
+        // per-conversation lock, or starting an asynchronous tool loop.
+        var conversation = resourceAccess.requireConversation(conversationId);
         // 场景授权校验：防止前端绕过传未授权的 scenarioCode 越权使用敏感业务提示词
         if (scenario != null && !scenario.isBlank()) {
             UserContextHolder.UserContext ctx = UserContextHolder.get();
@@ -131,12 +134,7 @@ public class ChatController {
             dsId = dataSourceId;
         }
         if (dsId == null) {
-            try {
-                var conv = conversationMapper.selectById(conversationId);
-                if (conv != null) dsId = conv.getDataSourceId();
-            } catch (Exception e) {
-                log.debug("[CHAT] failed to resolve dataSourceId from conversation: {}", e.getMessage());
-            }
+            dsId = conversation.getDataSourceId();
         }
         final Long finalDataSourceId = dsId;
         AtomicBoolean active = activeConversations.computeIfAbsent(conversationId, k -> new AtomicBoolean(false));
@@ -171,44 +169,40 @@ public class ChatController {
             log.warn("[SSE] connection error: {}", e.getMessage());
         });
 
+        UserContextHolder.UserContext requestCtx = UserContextHolder.require();
         CompletableFuture.runAsync(() -> {
-            // 主请求线程的 UserContext 不自动传递到 async 线程，需手动捕获后重新 set，
-            // 否则下游任何 Ownership / UserContextHolder.getUserId() 调用都会拿到 null。
-            UserContextHolder.UserContext requestCtx = UserContextHolder.get();
-            if (requestCtx != null) {
-                UserContextHolder.set(requestCtx);
-            }
-            ConversationContextHolder.setConversationId(conversationId);
-            ConversationContextHolder.setDataSourceId(finalDataSourceId);
-            ConversationContextHolder.setTraceId(UUID.randomUUID().toString().substring(0, 8));
-            sessionManager.register(conversationId, finalDataSourceId, null);
-            try {
-                queryEngine.submitMessageStreaming(
-                    conversationId, message, finalDataSourceId, resolvedModel, scenario, null,
-                    aborted::get,
-                    event -> {
-                        if (aborted.get()) return;
-                        try {
-                            Map<String, Object> data = serializeEvent(event);
-                            String json = objectMapper.writeValueAsString(data);
-                            emitter.send(SseEmitter.event().data(json));
-                        } catch (Exception e) {
-                            aborted.set(true);
+            try (UserContextHolder.Scope ignored = UserContextHolder.open(requestCtx)) {
+                ConversationContextHolder.setConversationId(conversationId);
+                ConversationContextHolder.setDataSourceId(finalDataSourceId);
+                ConversationContextHolder.setTraceId(UUID.randomUUID().toString().substring(0, 8));
+                sessionManager.register(conversationId, finalDataSourceId, requestCtx.userId().toString());
+                try {
+                    queryEngine.submitMessageStreaming(
+                        conversationId, message, finalDataSourceId, resolvedModel, scenario, null,
+                        aborted::get,
+                        event -> {
+                            if (aborted.get()) return;
+                            try {
+                                Map<String, Object> data = serializeEvent(event);
+                                String json = objectMapper.writeValueAsString(data);
+                                emitter.send(SseEmitter.event().data(json));
+                            } catch (Exception e) {
+                                aborted.set(true);
+                            }
                         }
+                    );
+                    emitter.complete();
+                } catch (Exception e) {
+                    if (e.getCause() instanceof IOException || aborted.get()) {
+                        log.debug("[SSE] client disconnected during streaming");
+                    } else {
+                        log.error("[SSE] error: {}", e.getMessage());
                     }
-                );
-                emitter.complete();
-            } catch (Exception e) {
-                if (e.getCause() instanceof IOException || aborted.get()) {
-                    log.debug("[SSE] client disconnected during streaming");
-                } else {
-                    log.error("[SSE] error: {}", e.getMessage());
+                    emitter.completeWithError(e);
+                } finally {
+                    sessionManager.unregister(conversationId);
+                    ConversationContextHolder.clear();
                 }
-                emitter.completeWithError(e);
-            } finally {
-                sessionManager.unregister(conversationId);
-                ConversationContextHolder.clear();
-                UserContextHolder.clear();
             }
         }, asyncExecutor);
 
@@ -296,6 +290,7 @@ public class ChatController {
 
     @GetMapping("/chat/history/{conversationId}")
     public List<ChatMessage> getHistory(@PathVariable Long conversationId) {
+        resourceAccess.requireConversation(conversationId);
         return chatMessageMapper.selectList(
             new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ChatMessage>()
                 .eq(ChatMessage::getConversationId, conversationId)
@@ -309,6 +304,7 @@ public class ChatController {
         @RequestParam(defaultValue = "100") int limit,
         @RequestParam(defaultValue = "false") boolean tail
     ) {
+        resourceAccess.requireConversation(conversationId);
         List<Map<String, Object>> events;
         if (traceId != null && !traceId.isBlank()) {
             events = eventLogger.getEventsByTraceId(conversationId, traceId);
@@ -324,6 +320,7 @@ public class ChatController {
 
     @GetMapping("/admin/sessions")
     public Map<String, Object> getActiveSessions() {
+        resourceAccess.requireAdmin();
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("activeConversations", sessionManager.activeCount());
         result.put("sessions", sessionManager.getActiveSessions());
@@ -332,11 +329,13 @@ public class ChatController {
 
     @GetMapping("/admin/stats")
     public Map<String, Object> getStats() {
+        resourceAccess.requireAdmin();
         return statsService.getStats();
     }
 
     @GetMapping("/admin/tools")
     public Map<String, Object> getTools() {
+        resourceAccess.requireAdmin();
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("tools", toolRegistry.getToolInfoList());
         result.put("total", toolRegistry.getAllTools().size());
@@ -345,11 +344,13 @@ public class ChatController {
 
     @PostMapping("/admin/tools/health-check")
     public Map<String, Object> healthCheckTools() {
+        resourceAccess.requireAdmin();
         return toolRegistry.healthCheckAll();
     }
 
     @GetMapping("/admin/logs")
     public Map<String, Object> getLogFiles() {
+        resourceAccess.requireAdmin();
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("files", eventLogger.getLogFiles());
         return result;
@@ -357,11 +358,13 @@ public class ChatController {
 
     @PostMapping("/admin/logs/maintain")
     public Map<String, Object> maintainLogs() {
+        resourceAccess.requireAdmin();
         return eventLogger.performLogMaintenance();
     }
 
     @GetMapping("/admin/diagnostics")
     public Map<String, Object> getDiagnostics() {
+        resourceAccess.requireAdmin();
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("operations", DiagnosticsTimer.getOperationStats());
         result.put("promptCache", Map.of("entries", toolPromptLoader.getCacheStats()));
@@ -382,6 +385,7 @@ public class ChatController {
 
     @GetMapping("/admin/prompts")
     public Map<String, Object> getPromptDebug() {
+        resourceAccess.requireAdmin();
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("promptCacheEntries", toolPromptLoader.getCacheStats());
         result.put("schemaCache", schemaContextBuilder.getCacheStats());

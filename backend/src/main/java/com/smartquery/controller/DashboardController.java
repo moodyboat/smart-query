@@ -6,6 +6,7 @@ import com.smartquery.entity.Chart;
 import com.smartquery.entity.Dashboard;
 import com.smartquery.mapper.ChartMapper;
 import com.smartquery.mapper.DashboardMapper;
+import com.smartquery.service.ResourceAccessService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
@@ -19,10 +20,14 @@ public class DashboardController {
     private final DashboardMapper dashboardMapper;
     private final ChartMapper chartMapper;
     private final ObjectMapper objectMapper;
+    private final ResourceAccessService resourceAccess;
 
     @GetMapping("/{id}")
     public Result<Dashboard> get(@PathVariable Long id) {
-        return Result.ok(dashboardMapper.selectById(id));
+        Dashboard dashboard = dashboardMapper.selectById(id);
+        if (dashboard == null) return Result.ok(null);
+        resourceAccess.requireConversation(dashboard.getConversationId());
+        return Result.ok(dashboard);
     }
 
     @GetMapping("/{id}/charts")
@@ -31,6 +36,7 @@ public class DashboardController {
         if (dashboard == null) {
             return Result.error("仪表盘不存在: " + id);
         }
+        resourceAccess.requireConversation(dashboard.getConversationId());
 
         List<Chart> charts = new ArrayList<>();
         if (dashboard.getChartIds() != null) {
@@ -39,7 +45,9 @@ public class DashboardController {
                 for (Object oid : ids) {
                     Long chartId = ((Number) oid).longValue();
                     Chart c = chartMapper.selectById(chartId);
-                    if (c != null) charts.add(c);
+                    if (c != null && Objects.equals(c.getConversationId(), dashboard.getConversationId())) {
+                        charts.add(c);
+                    }
                 }
             } catch (Exception ignored) {}
         }
@@ -52,6 +60,7 @@ public class DashboardController {
 
     @GetMapping("/conversation/{conversationId}")
     public Result<List<Dashboard>> listByConversation(@PathVariable Long conversationId) {
+        resourceAccess.requireConversation(conversationId);
         return Result.ok(dashboardMapper.selectList(
             new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Dashboard>()
                 .eq(Dashboard::getConversationId, conversationId)));

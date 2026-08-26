@@ -6,6 +6,7 @@ import com.smartquery.tool.ToolResult;
 import com.smartquery.tool.ToolExecutionContext;
 import com.smartquery.tool.impl.ExecuteSqlTool;
 import com.smartquery.tool.impl.SchemaExploreTool;
+import com.smartquery.service.ResourceAccessService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
@@ -20,12 +21,14 @@ public class ToolTestController {
     private final SchemaExploreTool schemaExploreTool;
     private final ExecuteSqlTool executeSqlTool;
     private final ToolRegistry toolRegistry;
+    private final ResourceAccessService resourceAccess;
 
     @PostMapping("/schema-explore")
     public Result<ToolResult> schemaExplore(
         @RequestParam Long dataSourceId,
         @RequestBody Map<String, Object> input
     ) {
+        resourceAccess.requireAdmin();
         ToolExecutionContext ctx = new ToolExecutionContext(
             0L, dataSourceId, "test", "test", null, () -> false, null);
         ToolResult result = schemaExploreTool.execute(input, ctx);
@@ -37,6 +40,7 @@ public class ToolTestController {
         @RequestParam Long dataSourceId,
         @RequestBody Map<String, String> body
     ) {
+        resourceAccess.requireAdmin();
         Map<String, Object> input = new java.util.LinkedHashMap<>();
         input.put("sql", body.get("sql"));
         input.put("data_source_id", dataSourceId);
@@ -48,6 +52,7 @@ public class ToolTestController {
 
     @GetMapping("/definitions")
     public Result<List<Map<String, Object>>> getToolDefinitions() {
+        resourceAccess.requireAdmin();
         return Result.ok(toolRegistry.getToolDefinitions());
     }
 }

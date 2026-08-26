@@ -11,6 +11,11 @@ export const METRIC_NAMES = {
   train_f1: '训练F1', test_f1: '测试F1',
   train_precision: '训练精确率', test_precision: '测试精确率',
   train_recall: '训练召回率', test_recall: '测试召回率',
+  test_balanced_accuracy: '平衡准确率', test_precision_macro: '宏平均精确率',
+  test_recall_macro: '宏平均召回率', test_f1_macro: '宏平均F1',
+  risk_precision: '风险类精确率', risk_recall: '风险类召回率',
+  pr_auc: 'PR-AUC', roc_auc: 'ROC-AUC', ks: 'KS', lift_at_10pct: 'Top10% Lift',
+  brier_score: 'Brier Score', decision_threshold: '决策阈值',
   train_r2: '训练R²', test_r2: '测试R²',
   overfitting_gap: '过拟合差距', cv_mean: '交叉验证均值', cv_std: '交叉验证标准差'
 }
@@ -210,11 +215,6 @@ export function buildChatUrl(conversationId, dataSourceId, scenario = null) {
   if (scenario) {
     url += `&scenario=${scenario}`
   }
-  // EventSource 无法设置请求头，通过 ?token= 携带 JWT（后端 AuthInterceptor 支持）
-  const token = localStorage.getItem(AUTH_STORAGE_KEYS.TOKEN)
-  if (token) {
-    url += `&token=${encodeURIComponent(token)}`
-  }
   return url
 }
 
@@ -260,6 +260,26 @@ export async function forceDeleteMiningModel(id) {
 
 export async function trainMiningModel(id) {
   const { data } = await api.post(`/mining/model/${id}/train`)
+  return data.data
+}
+
+export async function fetchTrainingExecution(modelId, executionId) {
+  const { data } = await api.get(`/mining/model/${modelId}/executions/${executionId}`)
+  return data.data
+}
+
+export async function cancelTrainingExecution(modelId, executionId) {
+  const { data } = await api.post(`/mining/model/${modelId}/executions/${executionId}/cancel`)
+  return data.data
+}
+
+export async function fetchArtifactStatus(modelId) {
+  const { data } = await api.get(`/mining/model/${modelId}/artifact-status`)
+  return data.data
+}
+
+export async function migrateLegacyArtifact(modelId) {
+  const { data } = await api.post(`/mining/model/${modelId}/artifact-migration`)
   return data.data
 }
 
@@ -350,6 +370,26 @@ export async function deleteMiningPipeline(id) {
 
 export async function executeMiningPipeline(id) {
   const { data } = await api.post(`/mining/pipeline/${id}/execute`)
+  return data.data
+}
+
+export async function fetchModelGovernance(id) {
+  const { data } = await api.get(`/mining/model/${id}/governance`)
+  return data.data
+}
+
+export async function approveModelEvaluation(id) {
+  const { data } = await api.post(`/mining/model/${id}/approve`)
+  return data.data
+}
+
+export async function checkModelDrift(id, config = {}) {
+  const { data } = await api.post(`/mining/model/${id}/drift-check`, config)
+  return data.data
+}
+
+export async function apiStartPipelineStream(id) {
+  const { data } = await api.post(`/mining/pipeline/${id}/execute-stream`)
   return data.data
 }
 

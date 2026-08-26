@@ -66,6 +66,47 @@ public class DataSeeder implements CommandLineRunner {
         )
         """;
 
+    private static final String CREATE_SQ_TASK_EVENT_SQL = """
+        CREATE TABLE IF NOT EXISTS sq_task_event (
+            id            BIGINT       NOT NULL AUTO_INCREMENT,
+            topic         VARCHAR(160) NOT NULL,
+            owner_user_id VARCHAR(64)  NOT NULL,
+            event_name    VARCHAR(50)  NOT NULL,
+            payload       TEXT         NOT NULL,
+            terminal      TINYINT      NOT NULL DEFAULT 0,
+            created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id)
+        )
+        """;
+
+    private static final String[] ALTER_SQ_MINING_GOVERNANCE_SQLS = {
+        "ALTER TABLE sq_mining_model ADD COLUMN artifact_sha256 VARCHAR(64)",
+        "ALTER TABLE sq_mining_model ADD COLUMN artifact_schema_version INT",
+        "ALTER TABLE sq_model_execution ADD COLUMN progress_percent INT DEFAULT 0",
+        "ALTER TABLE sq_model_execution ADD COLUMN current_stage VARCHAR(50)",
+        "ALTER TABLE sq_model_execution ADD COLUMN progress_message VARCHAR(500)",
+        "ALTER TABLE sq_model_execution ADD COLUMN cancel_requested TINYINT DEFAULT 0",
+        "ALTER TABLE sq_model_execution ADD COLUMN artifact_path VARCHAR(1000)",
+        "ALTER TABLE sq_model_execution ADD COLUMN artifact_sha256 VARCHAR(64)",
+        "ALTER TABLE sq_model_execution ADD COLUMN artifact_schema_version INT",
+        "ALTER TABLE sq_model_execution ADD COLUMN started_at DATETIME",
+        "ALTER TABLE sq_model_execution ADD COLUMN finished_at DATETIME",
+        "ALTER TABLE sq_model_execution ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP",
+        "ALTER TABLE sq_mining_model ADD COLUMN positive_class VARCHAR(255)",
+        "ALTER TABLE sq_mining_model ADD COLUMN group_columns TEXT",
+        "ALTER TABLE sq_mining_model ADD COLUMN oos_table VARCHAR(255)",
+        "ALTER TABLE sq_mining_model ADD COLUMN oos_filter TEXT",
+        "ALTER TABLE sq_mining_model ADD COLUMN calibration_method VARCHAR(20) DEFAULT 'none'",
+        "ALTER TABLE sq_mining_model ADD COLUMN threshold_policy TEXT",
+        "ALTER TABLE sq_mining_model ADD COLUMN governance_policy TEXT",
+        "ALTER TABLE sq_mining_model ADD COLUMN evaluation_status VARCHAR(30) DEFAULT 'pending'",
+        "ALTER TABLE sq_mining_model ADD COLUMN approved_by_user_id VARCHAR(64)",
+        "ALTER TABLE sq_mining_model ADD COLUMN approved_at DATETIME",
+        "ALTER TABLE sq_mining_model ADD COLUMN monitoring_baseline TEXT",
+        "ALTER TABLE sq_mining_model ADD COLUMN last_drift_metrics TEXT",
+        "ALTER TABLE sq_mining_model ADD COLUMN last_drift_at DATETIME"
+    };
+
     /**
      * 给 sq_scenario 加 ui_config 列（若已存在则跳过；MySQL 8.0.29+ 支持 IF NOT EXISTS，
      * DM8 不支持 ADD COLUMN IF NOT EXISTS 但 ORA-compatible 模式可重复执行报错由 catch 兜底）。
@@ -80,12 +121,24 @@ public class DataSeeder implements CommandLineRunner {
     private static final String ALTER_SQ_MINING_MODEL_ADD_USER_ID_SQL =
         "ALTER TABLE sq_mining_model ADD COLUMN user_id VARCHAR(50)";
 
+    private static final String ALTER_SQ_MINING_PIPELINE_ADD_USER_ID_SQL =
+        "ALTER TABLE sq_mining_pipeline ADD COLUMN user_id VARCHAR(50)";
+
+    private static final String ALTER_SQ_MODEL_EXECUTION_ADD_TRIGGER_USER_SQL =
+        "ALTER TABLE sq_model_execution ADD COLUMN triggered_by_user_id VARCHAR(50)";
+
     /**
      * 给 sq_conversation 加 scenario 列，用于刷新页面后恢复场景上下文。
      * 列已存在或老库不支持时由 catch 吞错。
      */
     private static final String ALTER_SQ_CONVERSATION_ADD_SCENARIO_SQL =
         "ALTER TABLE sq_conversation ADD COLUMN scenario VARCHAR(64)";
+
+    /** 旧库中的报告和仪表盘表缺少 BaseEntity 所需的逻辑删除列。 */
+    private static final String[] ALTER_LOGICAL_DELETE_SQLS = {
+        "ALTER TABLE sq_report ADD COLUMN deleted TINYINT NOT NULL DEFAULT 0",
+        "ALTER TABLE sq_dashboard ADD COLUMN deleted TINYINT NOT NULL DEFAULT 0"
+    };
 
     /**
      * 场景化隔离：给 sq_scenario 加 4 列。
@@ -118,6 +171,31 @@ public class DataSeeder implements CommandLineRunner {
     public void run(String... args) {
         jdbcTemplate.execute(CREATE_SQ_USER_SQL);
         jdbcTemplate.execute(CREATE_SQ_ROLE_SCENARIO_SQL);
+        jdbcTemplate.execute(CREATE_SQ_TASK_EVENT_SQL);
+        try {
+            jdbcTemplate.execute("CREATE INDEX idx_task_event_replay ON sq_task_event(topic, owner_user_id, id)");
+        } catch (Exception ignored) { /* index already exists */ }
+        try {
+            jdbcTemplate.execute("CREATE INDEX idx_task_event_created ON sq_task_event(created_at)");
+        } catch (Exception ignored) { /* index already exists */ }
+
+        for (String sql : ALTER_SQ_MINING_GOVERNANCE_SQLS) {
+            try {
+                jdbcTemplate.execute(sql);
+            } catch (Exception e) {
+                log.debug("[SEED] 建模治理列已存在或加列失败（可忽略）: {}", e.getMessage());
+            }
+        }
+        try {
+            jdbcTemplate.execute("ALTER TABLE sq_model_execution MODIFY COLUMN status VARCHAR(30) NOT NULL DEFAULT 'pending'");
+        } catch (Exception e) {
+            log.debug("[SEED] sq_model_execution.status 已兼容或修改失败（可忽略）: {}", e.getMessage());
+        }
+        try {
+            jdbcTemplate.execute("ALTER TABLE sq_model_execution MODIFY COLUMN trigger_type VARCHAR(30) NOT NULL DEFAULT 'manual'");
+        } catch (Exception e) {
+            log.debug("[SEED] sq_model_execution.trigger_type 已兼容或修改失败（可忽略）: {}", e.getMessage());
+        }
 
         // 兼容老库：尝试加 ui_config 列；列已存在时报错被吞掉
         try {
@@ -133,6 +211,20 @@ public class DataSeeder implements CommandLineRunner {
             log.info("[SEED] sq_mining_model 加列 user_id 成功");
         } catch (Exception e) {
             log.debug("[SEED] sq_mining_model.user_id 已存在或加列失败（可忽略）: {}", e.getMessage());
+        }
+
+        try {
+            jdbcTemplate.execute(ALTER_SQ_MINING_PIPELINE_ADD_USER_ID_SQL);
+            log.info("[SEED] sq_mining_pipeline 加列 user_id 成功");
+        } catch (Exception e) {
+            log.debug("[SEED] sq_mining_pipeline.user_id 已存在或加列失败（可忽略）: {}", e.getMessage());
+        }
+
+        try {
+            jdbcTemplate.execute(ALTER_SQ_MODEL_EXECUTION_ADD_TRIGGER_USER_SQL);
+            log.info("[SEED] sq_model_execution 加列 triggered_by_user_id 成功");
+        } catch (Exception e) {
+            log.debug("[SEED] sq_model_execution.triggered_by_user_id 已存在或加列失败（可忽略）: {}", e.getMessage());
         }
 
         // 兼容老库：给 sq_scenario 加场景化隔离 4 列（数据源/schema/表白名单/prompt 覆盖）
@@ -151,6 +243,15 @@ public class DataSeeder implements CommandLineRunner {
             log.info("[SEED] sq_conversation 加列 scenario 成功");
         } catch (Exception e) {
             log.debug("[SEED] sq_conversation.scenario 已存在或加列失败（可忽略）: {}", e.getMessage());
+        }
+
+        for (String sql : ALTER_LOGICAL_DELETE_SQLS) {
+            try {
+                jdbcTemplate.execute(sql);
+                log.info("[SEED] 补充逻辑删除列成功: {}", sql);
+            } catch (Exception e) {
+                log.debug("[SEED] 逻辑删除列已存在或补充失败（可忽略）: {}", e.getMessage());
+            }
         }
 
         seedDefaultAdmin();

@@ -5,20 +5,18 @@ import com.smartquery.common.ModelStatus;
 import com.smartquery.common.NodeType;
 import com.smartquery.datasource.DataSourceManager;
 import com.smartquery.entity.*;
-import com.smartquery.util.DbUrlUtil;
 import com.smartquery.logging.ConversationEventLogger;
 import com.smartquery.logging.DiagnosticsTimer;
 import com.smartquery.mapper.*;
-import com.smartquery.python.PythonExecutor;
 import com.smartquery.python.PythonResult;
+import com.smartquery.python.PythonSandbox;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.*;
 
@@ -38,17 +36,21 @@ public class PipelineService {
     private final MiningModelMapper miningModelMapper;
     private final ModelExecutionMapper modelExecutionMapper;
     private final DataSourceMapper dataSourceMapper;
-    private final PythonExecutor pythonExecutor;
+    private final MiningRuntimeClient miningRuntimeClient;
     private final DataSourceManager dataSourceManager;
     private final AlgorithmService algorithmService;
     private final ObjectMapper objectMapper;
     private final ConversationEventLogger eventLogger;
+    private final ResourceAccessService resourceAccess;
 
     @Value("${smart-query.pipeline.execution-timeout-ms:600000}")
     private int executionTimeoutMs;
 
     @Value("${smart-query.mining.random-state:42}")
     private int randomState;
+
+    @Value("${smart-query.mining.overfitting-gap-threshold:0.15}")
+    private double overfittingGapThreshold;
 
     @Value("${smart-query.pipeline.preview-timeout-ms:120000}")
     private int previewTimeoutMs;
@@ -82,10 +84,7 @@ public class PipelineService {
 
     @SuppressWarnings("unchecked")
     public Map<String, Object> executePipeline(Long pipelineId) {
-        MiningPipeline pipeline = miningPipelineMapper.selectById(pipelineId);
-        if (pipeline == null || Integer.valueOf(1).equals(pipeline.getDeleted())) {
-            throw new IllegalArgumentException("流水线不存在: " + pipelineId);
-        }
+        MiningPipeline pipeline = resourceAccess.requirePipeline(pipelineId);
 
         List<Map<String, Object>> nodes;
         try {
@@ -128,13 +127,9 @@ public class PipelineService {
             throw new IllegalStateException("源表 '" + cfg.sourceTable + "' 不存在或无法访问: " + e.getMessage());
         }
 
-        String dbUrl = DbUrlUtil.buildSqlalchemyUrl(ds);
-        String algoBlock = buildAlgorithmBlock(cfg.algorithm);
-        String modelFilename = "pipeline_" + pipelineId + "_v" + cfg.algorithm + ".pkl";
-        String modelPath = modelWorkspace + "/" + modelFilename;
-
-        String script = buildPipelineScript(dbUrl, cfg, algoBlock, modelPath);
-        log.debug("[PIPELINE] Generated script for pipeline {} ({} chars):\n{}", pipelineId, script.length(), script);
+        String modelFilename = "pipeline_" + pipelineId + "_run_" + System.currentTimeMillis() + ".joblib";
+        String modelPath = Path.of(modelWorkspace, modelFilename).toString();
+        Map<String, Object> runtimeRequest = buildPipelineTrainingRequest(cfg, modelPath);
 
         // Atomic status check: only proceed if not already running
         int updated = miningPipelineMapper.update(null,
@@ -163,15 +158,23 @@ public class PipelineService {
         String execLog;
         Map<String, Object> result;
         try {
-            PythonResult pr = DiagnosticsTimer.timedSupply("pipeline.execute", () -> pythonExecutor.execute(script, pipeline.getDataSourceId(), executionTimeoutMs));
+            MiningRuntimeClient.RuntimeResult runtime = DiagnosticsTimer.timedSupply(
+                "pipeline.execute",
+                () -> miningRuntimeClient.execute("train", runtimeRequest,
+                    pipeline.getDataSourceId(), executionTimeoutMs)
+            );
+            PythonResult pr = runtime.process();
             execLog = pr.stdout();
-            if (pr.exitCode() != 0) {
-                String err = pr.stderr().isBlank() ? pr.stdout() : pr.stderr();
-                log.error("[PIPELINE] Python execution failed for pipeline {} (exit={}, time={}ms)\n--- STDERR ---\n{}\n--- STDOUT ---\n{}",
-                    pipelineId, pr.exitCode(), pr.executionTimeMs(), pr.stderr(), pr.stdout());
+            if (!runtime.successful()) {
+                String err = runtime.errorMessage();
+                log.error("[PIPELINE] Python runtime failed for pipeline {} (exit={}, time={}ms): {}",
+                    pipelineId, pr.exitCode(), pr.executionTimeMs(), truncateLog(err, errorTruncation));
                 throw new RuntimeException("Pipeline执行失败: " + truncateLog(err, errorTruncation));
             }
-            result = parseResultMarker(pr.stdout(), "[PIPELINE_RESULT]");
+            result = new LinkedHashMap<>(runtime.payload());
+            if (!(result.get("metrics") instanceof Map<?, ?>) || result.get("model_path") == null) {
+                throw new IllegalStateException("Python 流水线结果缺少 metrics 或 model_path");
+            }
             result.put("modelPath", modelPath);
             result.put("algorithm", cfg.algorithm);
             result.put("sourceTable", cfg.sourceTable);
@@ -200,12 +203,21 @@ public class PipelineService {
 
         ModelExecution execution = new ModelExecution();
         execution.setModelId(model.getId());
+        execution.setTriggeredByUserId(com.smartquery.common.UserContextHolder.require().userId().toString());
         execution.setTriggerType("manual");
         execution.setStatus(ModelStatus.EXEC_SUCCESS);
         execution.setHyperparameters(toJson(cfg.hyperparams));
         execution.setMetrics(toJson(result.get("metrics")));
         execution.setExecutionLog(truncateLog(execLog, executionLogTruncation));
         execution.setExecutionTimeMs((int)(System.currentTimeMillis() - pipelineStartMs));
+        execution.setProgressPercent(100);
+        execution.setCurrentStage("COMPLETED");
+        execution.setProgressMessage("流程训练完成");
+        execution.setArtifactPath(modelPath);
+        if (result.get("artifact_sha256") != null) execution.setArtifactSha256(String.valueOf(result.get("artifact_sha256")));
+        if (result.get("artifact_schema_version") instanceof Number version) execution.setArtifactSchemaVersion(version.intValue());
+        execution.setStartedAt(LocalDateTime.now().minusNanos((System.currentTimeMillis() - pipelineStartMs) * 1_000_000));
+        execution.setFinishedAt(LocalDateTime.now());
         modelExecutionMapper.insert(execution);
 
         result.put("modelId", model.getId());
@@ -238,10 +250,7 @@ public class PipelineService {
 
     @SuppressWarnings("unchecked")
     public Map<String, Object> executePipelineStreamed(Long pipelineId, java.util.function.BiConsumer<String, Map<String, Object>> eventConsumer) {
-        MiningPipeline pipeline = miningPipelineMapper.selectById(pipelineId);
-        if (pipeline == null || Integer.valueOf(1).equals(pipeline.getDeleted())) {
-            throw new IllegalArgumentException("流水线不存在: " + pipelineId);
-        }
+        MiningPipeline pipeline = resourceAccess.requirePipeline(pipelineId);
         List<Map<String, Object>> nodes;
         try {
             nodes = objectMapper.readValue(pipeline.getNodes(), List.class);
@@ -279,11 +288,9 @@ public class PipelineService {
             throw new IllegalStateException("源表 '" + cfg.sourceTable + "' 不存在或无法访问: " + e.getMessage());
         }
 
-        String dbUrl = DbUrlUtil.buildSqlalchemyUrl(ds);
-        String algoBlock = buildAlgorithmBlock(cfg.algorithm);
-        String modelFilename = "pipeline_" + pipelineId + "_v" + cfg.algorithm + ".pkl";
-        String modelPath = modelWorkspace + "/" + modelFilename;
-        String script = buildPipelineScript(dbUrl, cfg, algoBlock, modelPath);
+        String modelFilename = "pipeline_" + pipelineId + "_run_" + System.currentTimeMillis() + ".joblib";
+        String modelPath = Path.of(modelWorkspace, modelFilename).toString();
+        Map<String, Object> runtimeRequest = buildPipelineTrainingRequest(cfg, modelPath);
 
         int updated = miningPipelineMapper.update(null,
             new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<MiningPipeline>()
@@ -297,23 +304,22 @@ public class PipelineService {
 
         long pipelineStartMs = System.currentTimeMillis();
         try {
-            PythonResult pr = DiagnosticsTimer.timedSupply("pipeline.execute", () -> pythonExecutor.execute(script, pipeline.getDataSourceId(), executionTimeoutMs));
-
-            // Parse NODE_PROGRESS markers from stdout and send them
-            String stdout = pr.stdout();
-            for (String line : stdout.split("\n")) {
-                if (line.contains("[NODE_PROGRESS]")) {
-                    int idx = line.indexOf("[NODE_PROGRESS]");
-                    String jsonPart = line.substring(idx + "[NODE_PROGRESS]".length()).trim();
-                    try {
-                        Map<String, Object> progressData = objectMapper.readValue(jsonPart, Map.class);
-                        eventConsumer.accept("node_progress", progressData);
-                    } catch (Exception ignored) {}
-                }
+            for (Map<String, Object> node : nodes) {
+                eventConsumer.accept("node_progress", Map.of(
+                    "nodeId", String.valueOf(node.getOrDefault("id", "unknown")),
+                    "nodeType", String.valueOf(node.getOrDefault("type", "unknown")),
+                    "status", "running"
+                ));
             }
+            MiningRuntimeClient.RuntimeResult runtime = DiagnosticsTimer.timedSupply(
+                "pipeline.execute",
+                () -> miningRuntimeClient.execute("train", runtimeRequest,
+                    pipeline.getDataSourceId(), executionTimeoutMs)
+            );
+            PythonResult pr = runtime.process();
 
-            if (pr.exitCode() != 0) {
-                String err = pr.stderr().isBlank() ? pr.stdout() : pr.stderr();
+            if (!runtime.successful()) {
+                String err = runtime.errorMessage();
                 Map<String, Object> errorData = new LinkedHashMap<>();
                 errorData.put("error", truncateLog(err, errorTruncation));
                 eventConsumer.accept("pipeline_error", errorData);
@@ -337,7 +343,10 @@ public class PipelineService {
                 throw new RuntimeException("Pipeline执行失败: " + truncateLog(err, errorTruncation));
             }
 
-            Map<String, Object> result = parseResultMarker(pr.stdout(), "[PIPELINE_RESULT]");
+            Map<String, Object> result = new LinkedHashMap<>(runtime.payload());
+            if (!(result.get("metrics") instanceof Map<?, ?>) || result.get("model_path") == null) {
+                throw new IllegalStateException("Python 流水线结果缺少 metrics 或 model_path");
+            }
             result.put("modelPath", modelPath);
             result.put("algorithm", cfg.algorithm);
             result.put("sourceTable", cfg.sourceTable);
@@ -346,12 +355,20 @@ public class PipelineService {
 
             ModelExecution execution = new ModelExecution();
             execution.setModelId(model.getId());
+            execution.setTriggeredByUserId(com.smartquery.common.UserContextHolder.require().userId().toString());
             execution.setTriggerType("manual");
             execution.setStatus(ModelStatus.EXEC_SUCCESS);
             execution.setHyperparameters(toJson(cfg.hyperparams));
             execution.setMetrics(toJson(result.get("metrics")));
             execution.setExecutionLog(truncateLog(pr.stdout(), executionLogTruncation));
             execution.setExecutionTimeMs((int)(System.currentTimeMillis() - pipelineStartMs));
+            execution.setProgressPercent(100);
+            execution.setCurrentStage("COMPLETED");
+            execution.setProgressMessage("流程训练完成");
+            execution.setArtifactPath(modelPath);
+            if (result.get("artifact_sha256") != null) execution.setArtifactSha256(String.valueOf(result.get("artifact_sha256")));
+            if (result.get("artifact_schema_version") instanceof Number version) execution.setArtifactSchemaVersion(version.intValue());
+            execution.setFinishedAt(LocalDateTime.now());
             modelExecutionMapper.insert(execution);
 
             // Update pipeline status
@@ -366,6 +383,12 @@ public class PipelineService {
             long totalDur = System.currentTimeMillis() - pipelineStartMs;
             int nodeDur = nodes.isEmpty() ? 0 : (int)(totalDur / nodes.size());
             for (Map<String, Object> node : nodes) {
+                eventConsumer.accept("node_progress", Map.of(
+                    "nodeId", String.valueOf(node.getOrDefault("id", "unknown")),
+                    "nodeType", String.valueOf(node.getOrDefault("type", "unknown")),
+                    "status", "completed",
+                    "durationMs", nodeDur
+                ));
                 eventLogger.logEvent(pipeline.getConversationId(), null, "pipeline_node_end", Map.of(
                     "pipelineId", pipelineId,
                     "nodeId", String.valueOf(node.getOrDefault("id", "unknown")),
@@ -399,10 +422,7 @@ public class PipelineService {
 
     @SuppressWarnings("unchecked")
     public Map<String, Object> validatePipeline(Long pipelineId) {
-        MiningPipeline pipeline = miningPipelineMapper.selectById(pipelineId);
-        if (pipeline == null || Integer.valueOf(1).equals(pipeline.getDeleted())) {
-            return Map.of("valid", false, "errors", List.of("流水线不存在: " + pipelineId));
-        }
+        MiningPipeline pipeline = resourceAccess.requirePipeline(pipelineId);
 
         List<Map<String, Object>> nodes;
         try {
@@ -480,6 +500,9 @@ public class PipelineService {
         Map<String, Object> hyperparams,
         double testSize, int cvFold,
         String validationMode, String temporalColumn,
+        List<String> groupColumns, String oosTable, String oosFilter,
+        String positiveClass, String calibrationMethod,
+        Map<String, Object> thresholdPolicy, Map<String, Object> governancePolicy,
         String outputTable, boolean outputAutoCreate, String outputMode,
         List<Map<String, Object>> transforms,
         Map<String, Object> targetPreprocessing
@@ -499,12 +522,15 @@ public class PipelineService {
     private PipelineConfig extractConfig(List<Map<String, Object>> nodes) {
         String sourceTable = null, filter = null, targetColumn = null;
         String modelType = null, algorithm = null, validationMode = null, temporalColumn = null;
+        String oosTable = null, oosFilter = null, positiveClass = null, calibrationMethod = "none";
         String outputTable = null, outputMode = "append";
         boolean outputAutoCreate = false;
         double testSize = this.defaultTestSize;
         int cvFold = this.defaultCvFolds;
         Map<String, Object> preprocessing = new HashMap<>(), hyperparams = new HashMap<>();
         List<String> featureColumns = null;
+        List<String> groupColumns = new ArrayList<>();
+        Map<String, Object> thresholdPolicy = new LinkedHashMap<>(), governancePolicy = new LinkedHashMap<>();
         List<Map<String, Object>> transforms = new ArrayList<>();
         Map<String, Object> targetPreprocessing = null;
 
@@ -560,6 +586,16 @@ public class PipelineService {
                     if (config.get("cvFold") != null) cvFold = ((Number) config.get("cvFold")).intValue();
                     if (config.get("validationMode") != null) validationMode = strVal(config.get("validationMode"));
                     if (config.get("temporalColumn") != null) temporalColumn = strVal(config.get("temporalColumn"));
+                    if (config.get("groupColumns") instanceof List<?> groups)
+                        groupColumns = groups.stream().map(String::valueOf).toList();
+                    if (config.get("oosTable") != null) oosTable = strVal(config.get("oosTable"));
+                    if (config.get("oosFilter") != null) oosFilter = strVal(config.get("oosFilter"));
+                    if (config.get("positiveClass") != null) positiveClass = strVal(config.get("positiveClass"));
+                    if (config.get("calibrationMethod") != null) calibrationMethod = strVal(config.get("calibrationMethod"));
+                    if (config.get("thresholdPolicy") instanceof Map<?, ?> map)
+                        thresholdPolicy = (Map<String, Object>) map;
+                    if (config.get("governancePolicy") instanceof Map<?, ?> map)
+                        governancePolicy = (Map<String, Object>) map;
                 }
                 case NodeType.OUTPUT -> {
                     outputTable = strVal(config.get("table"));
@@ -571,6 +607,8 @@ public class PipelineService {
 
         return new PipelineConfig(sourceTable, filter, preprocessing, featureColumns, targetColumn,
             modelType, algorithm, hyperparams, testSize, cvFold, validationMode, temporalColumn,
+            groupColumns, oosTable, oosFilter, positiveClass, calibrationMethod,
+            thresholdPolicy, governancePolicy,
             outputTable, outputAutoCreate, outputMode, transforms, targetPreprocessing);
     }
 
@@ -579,8 +617,10 @@ public class PipelineService {
             throw new IllegalStateException("流水线缺少数据源节点或未配置表名");
         if (cfg.algorithm == null || cfg.algorithm.isBlank())
             throw new IllegalStateException("流水线缺少训练节点或未配置算法");
-        if (isUnsupervised(cfg.modelType) && (cfg.targetColumn == null || cfg.targetColumn.isBlank()))
+        if (!isUnsupervised(cfg.modelType) && (cfg.targetColumn == null || cfg.targetColumn.isBlank()))
             throw new IllegalStateException("分类/回归模型必须指定目标列，请在特征工程节点中配置");
+        if ("oos".equals(cfg.validationMode) && (cfg.oosTable == null || cfg.oosTable.isBlank()))
+            throw new IllegalStateException("OOS 验证必须在评估节点配置独立 oosTable");
     }
 
     @SuppressWarnings("unchecked")
@@ -614,9 +654,7 @@ public class PipelineService {
         return Map.of("valid", errors.isEmpty(), "errors", errors);
     }
 
-    // ===== Pipeline script generation =====
-
-    private String buildPipelineScript(String dbUrl, PipelineConfig cfg, String algoBlock, String modelPath) {
+    private Map<String, Object> buildPipelineTrainingRequest(PipelineConfig cfg, String modelPath) {
         com.smartquery.common.IdentifierValidator.validateTableName(cfg.sourceTable);
         if (cfg.outputTable != null && !cfg.outputTable.isBlank()) {
             com.smartquery.common.IdentifierValidator.validateTableName(cfg.outputTable);
@@ -625,408 +663,69 @@ public class PipelineService {
             com.smartquery.common.IdentifierValidator.validateColumnName(cfg.targetColumn);
         }
         if (cfg.featureColumns != null) {
-            for (String col : cfg.featureColumns) {
-                com.smartquery.common.IdentifierValidator.validateColumnName(col);
+            for (String column : cfg.featureColumns) {
+                com.smartquery.common.IdentifierValidator.validateColumnName(column);
             }
         }
         if (cfg.temporalColumn != null && !cfg.temporalColumn.isBlank()) {
             com.smartquery.common.IdentifierValidator.validateColumnName(cfg.temporalColumn);
         }
-        String resolvedFilter = cfg.filter;
-        if (resolvedFilter != null && !resolvedFilter.isBlank()) {
-            com.smartquery.common.IdentifierValidator.validateFilter(resolvedFilter);
-            resolvedFilter = resolveFilterVariables(resolvedFilter);
+        if (cfg.oosTable != null && !cfg.oosTable.isBlank()) {
+            com.smartquery.common.IdentifierValidator.validateTableName(cfg.oosTable);
         }
-        StringBuilder sb = new StringBuilder();
-        sb.append("import pandas as pd\nimport numpy as np\nimport json\nimport os\n");
-        sb.append("from sqlalchemy import create_engine, text\n\n");
-        sb.append("engine = create_engine('").append(dbUrl).append("')\n");
-        sb.append("_query = 'SELECT * FROM `").append(cfg.sourceTable).append("`'\n");
-        if (resolvedFilter != null && !resolvedFilter.isBlank()) {
-            sb.append("_filter = \"").append(resolvedFilter.replace("\\", "\\\\").replace("\"", "\\\"")).append("\"\n");
-            sb.append("_query = 'SELECT * FROM `").append(cfg.sourceTable).append("` WHERE ' + _filter\n");
+        if (cfg.oosFilter != null && !cfg.oosFilter.isBlank()) {
+            com.smartquery.common.IdentifierValidator.validateFilter(cfg.oosFilter);
         }
-        sb.append("df = pd.read_sql(_query, engine)\nprint(f'[INFO] Loaded {len(df)} rows from ").append(cfg.sourceTable).append("')\n\n");
-        sb.append("print('[NODE_PROGRESS] {\"nodeType\": \"data_source\", \"status\": \"completed\", \"rows\": len(df), \"columns\": len(df.columns)}')\n\n");
-        sb.append("# === NODE_START: data_source ===\n");
-        sb.append("# === NODE_END: data_source ===\n\n");
+        cfg.groupColumns.forEach(com.smartquery.common.IdentifierValidator::validateColumnName);
 
-        sb.append("# === NODE_START: preprocessing ===\n");
-        appendPreprocessing(sb, cfg);
-        sb.append("# === NODE_END: preprocessing ===\n\n");
-
-        sb.append("# === NODE_START: feature_engineering ===\n");
-        appendFeatureEngineering(sb, cfg);
-        sb.append("# === NODE_END: feature_engineering ===\n\n");
-
-        appendEncodingScaling(sb, cfg);
-
-        sb.append("# === NODE_START: training ===\n");
-        appendTrainEval(sb, cfg, algoBlock, modelPath);
-        sb.append("# === NODE_END: training ===\n\n");
-
-        sb.append("# === NODE_START: output ===\n");
-        appendOutput(sb, cfg);
-        sb.append("# === NODE_END: output ===\n\n");
-
-        sb.append("print('[PIPELINE_RESULT] ' + json.dumps(result))\n");
-        return sb.toString();
-    }
-
-    private void appendPreprocessing(StringBuilder sb, PipelineConfig cfg) {
-        String handleMissing = strVal(cfg.preprocessing.get("handleMissing"));
-        Object columnStrategies = cfg.preprocessing.get("columnStrategies");
-
-        // Column-level strategies override global strategy
-        if (columnStrategies instanceof Map colStrats && !colStrats.isEmpty()) {
-            sb.append("# Per-column missing value strategies\n");
-            for (var entry : ((Map<String, String>) colStrats).entrySet()) {
-                String col = entry.getKey();
-                String strategy = entry.getValue();
-                if ("inherit".equals(strategy) || "none".equals(strategy)) continue;
-                sb.append("if '").append(col).append("' in df.columns:\n");
-                switch (strategy) {
-                    case "drop" -> sb.append("    df = df.dropna(subset=['").append(col).append("'])\n");
-                    case "fill_mean" -> sb.append("    if df['").append(col).append("'].dtype in ['float64','int64','int32']: df['").append(col).append("'] = df['").append(col).append("'].fillna(df['").append(col).append("'].mean())\n");
-                    case "fill_median" -> sb.append("    if df['").append(col).append("'].dtype in ['float64','int64','int32']: df['").append(col).append("'] = df['").append(col).append("'].fillna(df['").append(col).append("'].median())\n");
-                    case "fill_mode" -> sb.append("    _m = df['").append(col).append("'].mode(); df['").append(col).append("'] = df['").append(col).append("'].fillna(_m.iloc[0] if len(_m) > 0 else None)\n");
-                }
-            }
-            // Apply global strategy to remaining columns not covered by columnStrategies
-            if (handleMissing != null && !"none".equals(handleMissing)) {
-                sb.append("# Global strategy for remaining columns\n");
-                appendGlobalMissingStrategy(sb, handleMissing, colStrats.keySet());
-            }
-            sb.append("print(f'[INFO] Column strategies applied: {df.isnull().sum().sum()} remaining nulls')\n\n");
-        } else if (handleMissing != null && !"none".equals(handleMissing)) {
-            switch (handleMissing) {
-                case "drop" -> sb.append("df = df.dropna()\nprint(f'[INFO] After dropna: {len(df)} rows')\n");
-                case "fill_mean" -> {
-                    sb.append("for c in df.select_dtypes(include=['number']).columns:\n    df[c] = df[c].fillna(df[c].mean())\n");
-                    sb.append("for c in df.select_dtypes(include=['object']).columns:\n    df[c] = df[c].fillna(df[c].mode().iloc[0] if len(df[c].mode()) > 0 else 'unknown')\n");
-                }
-                case "fill_median" -> {
-                    sb.append("for c in df.select_dtypes(include=['number']).columns:\n    df[c] = df[c].fillna(df[c].median())\n");
-                    sb.append("for c in df.select_dtypes(include=['object']).columns:\n    df[c] = df[c].fillna(df[c].mode().iloc[0] if len(df[c].mode()) > 0 else 'unknown')\n");
-                }
-            }
-            sb.append("\n");
+        String filter = resolveFilterVariables(cfg.filter);
+        if (filter != null && !filter.isBlank()) {
+            com.smartquery.common.IdentifierValidator.validateFilter(filter);
         }
-
-        String fillStrategy = strVal(cfg.preprocessing.get("fillMissingStrategy"));
-        if (fillStrategy != null) {
-            sb.append("# Fill missing (dedicated node)\n");
-            Object fillColsObj = cfg.preprocessing.get("fillMissingColumns");
-            String fillColsJson = fillColsObj instanceof List ? objectMapper.valueToTree(fillColsObj).toString() : "[]";
-            sb.append("_fill_cols = ").append(fillColsJson).append("\n_fill_df = df[_fill_cols] if _fill_cols else df\n");
-            sb.append("_fill_num = _fill_df.select_dtypes(include=['number']).columns.tolist()\n");
-            sb.append("_fill_cat = _fill_df.select_dtypes(include=['object']).columns.tolist()\n");
-            sb.append("_target_cols = _fill_cols if _fill_cols else (_fill_num + _fill_cat)\n\n");
-            sb.append("for c in _target_cols:\n    if c in _fill_num: df[c] = df[c].fillna(df[c].mean())\n");
-            sb.append("    elif c in _fill_cat: df[c] = df[c].fillna(df[c].mode().iloc[0] if len(df[c].mode()) > 0 else 'unknown')\n");
-            sb.append("print(f'[INFO] Fill missing done: {df.isnull().sum().sum()} remaining nulls')\n\n");
+        Algorithm algorithm = algorithmService.getByAlgorithmId(cfg.algorithm);
+        if (algorithm == null || algorithm.getPythonCodeTemplate() == null
+                || algorithm.getPythonCodeTemplate().isBlank()) {
+            throw new IllegalStateException("算法配置缺失: " + cfg.algorithm);
         }
-    }
+        PythonSandbox.validate(algorithm.getPythonCodeTemplate());
 
-    private void appendGlobalMissingStrategy(StringBuilder sb, String strategy, java.util.Set<String> excludeCols) {
-        String excludeList = objectMapper.valueToTree(excludeCols).toString();
-        switch (strategy) {
-            case "drop" -> sb.append("_exc = ").append(excludeList).append("\nfor c in [c for c in df.columns if c not in _exc and df[c].isnull().any()]: df = df.dropna(subset=[c])\n");
-            case "fill_mean" -> {
-                sb.append("_exc = ").append(excludeList).append("\nfor c in df.columns:\n    if c not in _exc and df[c].isnull().any():\n");
-                sb.append("        if df[c].dtype in ['float64','int64','int32']: df[c] = df[c].fillna(df[c].mean())\n");
-                sb.append("        else: df[c] = df[c].fillna(df[c].mode().iloc[0] if len(df[c].mode()) > 0 else 'unknown')\n");
-            }
-            case "fill_median" -> {
-                sb.append("_exc = ").append(excludeList).append("\nfor c in df.columns:\n    if c not in _exc and df[c].isnull().any():\n");
-                sb.append("        if df[c].dtype in ['float64','int64','int32']: df[c] = df[c].fillna(df[c].median())\n");
-                sb.append("        else: df[c] = df[c].fillna(df[c].mode().iloc[0] if len(df[c].mode()) > 0 else 'unknown')\n");
-            }
-        }
-        sb.append("print('[NODE_PROGRESS] {\"nodeType\": \"preprocessing\", \"status\": \"completed\", \"rows\": len(df)}')\n");
-    }
-
-    @SuppressWarnings("unchecked")
-    private void appendFeatureEngineering(StringBuilder sb, PipelineConfig cfg) {
-        String fcList = cfg.featureColumns != null ? objectMapper.valueToTree(cfg.featureColumns).toString() : "[]";
-        sb.append("feature_cols = ").append(fcList).append("\nif isinstance(feature_cols, str): feature_cols = [c.strip() for c in feature_cols.split(',') if c.strip()]\n");
-        sb.append("_missing = [c for c in feature_cols if c not in df.columns]\nif _missing: raise ValueError(f'特征列不存在于表中: {_missing}. 可用列: {list(df.columns)}')\n");
-        sb.append("if not feature_cols:\n    feature_cols = [c for c in df.columns if c != '").append(cfg.targetColumn != null ? cfg.targetColumn : "").append("' and c not in ('id','created_at','updated_at')]\n");
-        sb.append("target_col = '").append(cfg.targetColumn != null ? cfg.targetColumn : "").append("'\n");
-        sb.append("if target_col and target_col not in df.columns: raise ValueError(f'目标列 \"{target_col}\" 不存在于表中. 可用列: {list(df.columns)}')\n\n");
-
+        Map<String, Object> preprocessing = new LinkedHashMap<>(cfg.preprocessing);
         if (cfg.transforms != null && !cfg.transforms.isEmpty()) {
-            sb.append("# Feature transforms\n");
-            appendTransformsBlock(sb, cfg);
+            preprocessing.put("transforms", cfg.transforms);
         }
+        Map<String, Object> validation = new LinkedHashMap<>();
+        validation.put("mode", cfg.validationMode != null ? cfg.validationMode : "train_test");
+        validation.put("cvFolds", cfg.cvFold);
+        validation.put("testSize", cfg.testSize);
+        validation.put("temporalColumn", cfg.temporalColumn);
+        validation.put("groupColumns", cfg.groupColumns);
+        validation.put("oosTable", cfg.oosTable);
+        validation.put("oosFilter", cfg.oosFilter);
+        validation.put("randomState", randomState);
 
-        sb.append("X = df[feature_cols].copy()\ny = df[target_col].copy() if target_col in df.columns else None\n\n");
-
-        // Feature type auto-detection
-        sb.append("# Feature type detection\n");
-        sb.append("_feat_types = {}\n");
-        sb.append("for c in feature_cols:\n");
-        sb.append("    if c not in X.columns: continue\n");
-        sb.append("    _dtype = str(X[c].dtype)\n");
-        sb.append("    _nunique = X[c].nunique()\n");
-        sb.append("    if 'datetime' in _dtype or 'date' in _dtype: _feat_types[c] = 'datetime'\n");
-        sb.append("    elif _dtype in ['float64','int64','int32']:\n");
-        sb.append("        _feat_types[c] = 'numeric_continuous' if _nunique > 20 else 'numeric_discrete'\n");
-        sb.append("    elif _dtype == 'object' or _dtype == 'category':\n");
-        sb.append("        _feat_types[c] = 'categorical_low' if _nunique <= 10 else 'categorical_high'\n");
-        sb.append("    else: _feat_types[c] = 'other'\n\n");
-
-        // Target variable preprocessing
-        Map<String, Object> tp = cfg.targetPreprocessing;
-        boolean userSmote = tp != null && Boolean.TRUE.equals(tp.get("smote"));
-        boolean userLogTransform = tp != null && Boolean.TRUE.equals(tp.get("logTransform"));
-
-        sb.append("# Target variable preprocessing\n");
-        sb.append("if y is not None:\n");
-        sb.append("    if y.dtype == 'object': y = LabelEncoder().fit_transform(y.astype(str))\n");
-        if (userLogTransform) {
-            sb.append("    # User-configured log transform for regression target\n");
-            sb.append("    if len(y.unique()) > 20:\n");
-            sb.append("        y = np.log1p(y.clip(lower=0)); print('[INFO] Target log-transformed (user-configured)')\n");
-        } else {
-            sb.append("    # Auto-detect: log transform for skewed regression targets\n");
-            sb.append("    if str(y.dtype) != 'object' and len(y.unique()) > 20:\n");
-            sb.append("        _skew = float(y.skew()) if hasattr(y, 'skew') else 0\n");
-            sb.append("        if _skew > 1.5: y = np.log1p(y.clip(lower=0)); print(f'[INFO] Target log-transformed (skew={_skew:.1f})')\n");
-        }
-        if (userSmote) {
-            sb.append("    # User-configured SMOTE for imbalanced classification\n");
-            sb.append("    if len(y.unique()) <= 20:\n");
-            sb.append("        _vc = y.value_counts()\n");
-            sb.append("        _ratio = _vc.max() / max(_vc.min(), 1)\n");
-            sb.append("        if _ratio > 2:\n");
-            sb.append("            try:\n");
-            sb.append("                from imblearn.over_sampling import SMOTE\n");
-            sb.append("                _smote = SMOTE(random_state=").append(randomState).append(")\n");
-            sb.append("                X_df_smote, y = _smote.fit_resample(X, y)\n");
-            sb.append("                X = pd.DataFrame(X_df_smote, columns=X.columns)\n");
-            sb.append("                print(f'[INFO] SMOTE applied: {len(X)} rows after resampling (ratio was {_ratio:.1f})')\n");
-            sb.append("            except ImportError:\n");
-            sb.append("                print('[WARN] imbalanced-learn not installed, SMOTE skipped. Install: pip install imbalanced-learn')\n");
-        } else {
-            sb.append("    # Auto-detect: class balance check for classification\n");
-            sb.append("    if len(y.unique()) <= 20:\n");
-            sb.append("        _vc = y.value_counts()\n");
-            sb.append("        _ratio = _vc.max() / max(_vc.min(), 1)\n");
-            sb.append("        if _ratio > 5: print(f'[INFO] Imbalanced target (ratio={_ratio:.1f}), consider class_weight=balanced or SMOTE')\n");
-        }
-        sb.append("\n");
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("modelType", cfg.modelType != null ? cfg.modelType : "classification");
+        request.put("algorithmId", cfg.algorithm);
+        request.put("algorithmCode", algorithm.getPythonCodeTemplate());
+        request.put("sourceTable", cfg.sourceTable);
+        request.put("featureColumns", cfg.featureColumns);
+        request.put("targetColumn", cfg.targetColumn);
+        request.put("preprocessing", preprocessing);
+        request.put("targetPreprocessing", cfg.targetPreprocessing != null ? cfg.targetPreprocessing : Map.of());
+        request.put("hyperparameters", cfg.hyperparams);
+        request.put("validation", validation);
+        request.put("inputFilter", filter);
+        request.put("artifactPath", modelPath);
+        request.put("outputTable", cfg.outputTable);
+        request.put("outputMode", cfg.outputMode);
+        request.put("overfittingGapThreshold", overfittingGapThreshold);
+        request.put("positiveClass", cfg.positiveClass);
+        request.put("calibrationMethod", cfg.calibrationMethod);
+        request.put("thresholdPolicy", cfg.thresholdPolicy);
+        return request;
     }
 
-    @SuppressWarnings("unchecked")
-    private void appendTransformsBlock(StringBuilder sb, PipelineConfig cfg) {
-        for (Map<String, Object> tf : cfg.transforms) {
-            String tfType = strVal(tf.get("type"));
-            Object tfCols = tf.get("columns");
-            String tfColsJson = tfCols instanceof List ? objectMapper.valueToTree(tfCols).toString() : "[]";
-            switch (tfType) {
-                    case "log" -> {
-                        sb.append("# Log transform\n");
-                        sb.append("for c in ").append(tfColsJson).append(":\n");
-                        sb.append("    if c in df.columns and df[c].dtype in ['float64','int64']:\n");
-                        sb.append("        df[c + '_log'] = np.log1p(df[c].clip(lower=0)); feature_cols.append(c + '_log')\n");
-                    }
-                    case "binning" -> {
-                        int bins = tf.get("bins") instanceof Number ? ((Number) tf.get("bins")).intValue() : 5;
-                        String binStrategy = strVal(tf.getOrDefault("strategy", "equal_width"));
-                        sb.append("# Binning (").append(binStrategy).append(", bins=").append(bins).append(")\n");
-                        switch (binStrategy) {
-                            case "equal_freq" -> {
-                                sb.append("for c in ").append(tfColsJson).append(":\n");
-                                sb.append("    if c in df.select_dtypes(include=['number']).columns:\n");
-                                sb.append("        try: df[c + '_bin'] = pd.qcut(df[c], q=").append(bins).append(", labels=False, duplicates='drop'); feature_cols.append(c + '_bin')\n");
-                                sb.append("        except: pass\n");
-                            }
-                            case "custom" -> {
-                                Object edgesObj = tf.get("edges");
-                                String edgesJson = edgesObj instanceof List ? objectMapper.valueToTree(edgesObj).toString() : "[]";
-                                sb.append("_bin_edges = ").append(edgesJson).append("\n");
-                                sb.append("for c in ").append(tfColsJson).append(":\n");
-                                sb.append("    if c in df.select_dtypes(include=['number']).columns and len(_bin_edges) >= 2:\n");
-                                sb.append("        df[c + '_bin'] = pd.cut(df[c], bins=_bin_edges, labels=False); feature_cols.append(c + '_bin')\n");
-                            }
-                            case "optimal" -> {
-                                sb.append("from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor\n");
-                                sb.append("_opt_bins = ").append(bins).append("\n");
-                                sb.append("for c in ").append(tfColsJson).append(":\n");
-                                sb.append("    if c in df.select_dtypes(include=['number']).columns and target_col in df.columns:\n");
-                                sb.append("        try:\n");
-                                sb.append("            _y_tmp = df[target_col]\n");
-                                sb.append("            if _y_tmp.dtype == 'object': _y_tmp = LabelEncoder().fit_transform(_y_tmp.astype(str))\n");
-                                String modelTypeVal = cfg.modelType != null ? cfg.modelType : "classification";
-                                sb.append("            _dt = DecisionTreeClassifier(max_leaf_nodes=_opt_bins, random_state=").append(randomState).append(") if ").append(isUnsupervised(modelTypeVal) ? "False" : "'classification' in '" + modelTypeVal + "'").append(" else DecisionTreeRegressor(max_leaf_nodes=_opt_bins, random_state=").append(randomState).append(")\n");
-                                sb.append("            _dt.fit(df[[c]].fillna(0), _y_tmp)\n");
-                                sb.append("            _th = sorted(set([-np.inf] + list(_dt.tree_.threshold[_dt.tree_.children_left != -1]) + [np.inf]))\n");
-                                sb.append("            if len(_th) >= 2: df[c + '_bin'] = pd.cut(df[c], bins=_th, labels=False); feature_cols.append(c + '_bin')\n");
-                                sb.append("        except: pass\n");
-                            }
-                            default -> { // equal_width
-                                sb.append("for c in ").append(tfColsJson).append(":\n");
-                                sb.append("    if c in df.select_dtypes(include=['number']).columns: df[c + '_bin'] = pd.cut(df[c], bins=").append(bins).append(", labels=False); feature_cols.append(c + '_bin')\n");
-                            }
-                        }
-                    }
-                    case "polynomial" -> {
-                        int degree = tf.get("degree") instanceof Number ? ((Number) tf.get("degree")).intValue() : 2;
-                        sb.append("# Polynomial features (degree=").append(degree).append(")\n");
-                        sb.append("from sklearn.preprocessing import PolynomialFeatures as _PF\n");
-                        sb.append("_tf_valid = [c for c in ").append(tfColsJson).append(" if c in df.select_dtypes(include=['number']).columns]\n");
-                        sb.append("if _tf_valid and len(_tf_valid) <= 5:\n");
-                        sb.append("    _pf = _PF(degree=").append(degree).append(", include_bias=False)\n");
-                        sb.append("    _pf_arr = _pf.fit_transform(df[_tf_valid])\n");
-                        sb.append("    _pf_names = _pf.get_feature_names_out(_tf_valid)\n");
-                        sb.append("    for j, pn in enumerate(_pf_names):\n");
-                        sb.append("        if pn not in _tf_valid: df[pn] = _pf_arr[:, j]; feature_cols.append(pn)\n");
-                    }
-                    case "standardize" -> {
-                        sb.append("_tf_valid = [c for c in ").append(tfColsJson).append(" if c in df.select_dtypes(include=['number']).columns]\n");
-                        sb.append("if _tf_valid:\n    from sklearn.preprocessing import StandardScaler\n    df[_tf_valid] = StandardScaler().fit_transform(df[_tf_valid])\n");
-                    }
-                    case "interaction" -> {
-                        sb.append("_tf_valid = [c for c in ").append(tfColsJson).append(" if c in df.select_dtypes(include=['number']).columns]\n");
-                        sb.append("for i in range(len(_tf_valid)):\n    for j in range(i+1, len(_tf_valid)):\n        col_name = _tf_valid[i] + '_x_' + _tf_valid[j]; df[col_name] = df[_tf_valid[i]] * df[_tf_valid[j]]; feature_cols.append(col_name)\n");
-                    }
-                    case "date_extract" -> {
-                        String parts = strVal(tf.getOrDefault("parts", "year,month,day"));
-                        sb.append("_date_parts = '").append(parts).append("'.split(',')\n");
-                        sb.append("for c in ").append(tfColsJson).append(":\n");
-                        sb.append("    if c in df.columns:\n");
-                        sb.append("        try:\n");
-                        sb.append("            _ds = pd.to_datetime(df[c])\n");
-                        sb.append("            for p in _date_parts:\n");
-                        sb.append("                p = p.strip()\n");
-                        sb.append("                if p == 'year': df[c + '_year'] = _ds.dt.year; feature_cols.append(c + '_year')\n");
-                        sb.append("                elif p == 'month': df[c + '_month'] = _ds.dt.month; feature_cols.append(c + '_month')\n");
-                        sb.append("                elif p == 'day': df[c + '_day'] = _ds.dt.day; feature_cols.append(c + '_day')\n");
-                        sb.append("                elif p == 'weekday': df[c + '_weekday'] = _ds.dt.weekday; feature_cols.append(c + '_weekday')\n");
-                        sb.append("                elif p == 'quarter': df[c + '_quarter'] = _ds.dt.quarter; feature_cols.append(c + '_quarter')\n");
-                        sb.append("        except: pass\n");
-                    }
-                    case "target_encode" -> {
-                        sb.append("# Target encoding\n");
-                        sb.append("for c in ").append(tfColsJson).append(":\n");
-                        sb.append("    if c in df.select_dtypes(include=['object']).columns and target_col in df.columns:\n");
-                        sb.append("        _te_map = df.groupby(c)[target_col].mean().to_dict()\n");
-                        sb.append("        df[c + '_te'] = df[c].map(_te_map).fillna(df[target_col].mean()); feature_cols.append(c + '_te')\n");
-                    }
-                    case "frequency_encode" -> {
-                        sb.append("# Frequency encoding\n");
-                        sb.append("for c in ").append(tfColsJson).append(":\n");
-                        sb.append("    if c in df.columns:\n");
-                        sb.append("        _fe_map = df[c].value_counts(normalize=True).to_dict()\n");
-                        sb.append("        df[c + '_freq'] = df[c].map(_fe_map); feature_cols.append(c + '_freq')\n");
-                    }
-                }
-            }
-        sb.append("\n");
-    }
-
-    private void appendEncodingScaling(StringBuilder sb, PipelineConfig cfg) {
-        sb.append("_dt_cols = X.select_dtypes(include=['datetime', 'datetimetz']).columns.tolist()\nif _dt_cols:\n    for c in _dt_cols: X[c] = pd.to_numeric(X[c].astype('int64'), errors='coerce')\n");
-        String encoding = strVal(cfg.preprocessing.getOrDefault("encoding", "label"));
-        sb.append("_enc = '").append(encoding).append("'\n");
-        sb.append("_encoders = {}\n");
-        sb.append("cat_cols = X.select_dtypes(include=['object']).columns.tolist()\nif cat_cols:\n    if _enc == 'onehot': X = pd.get_dummies(X, columns=cat_cols)\n");
-        sb.append("    else:\n        from sklearn.preprocessing import LabelEncoder\n        for c in cat_cols:\n            _le = LabelEncoder()\n            X[c] = _le.fit_transform(X[c].astype(str))\n            _encoders[c] = _le\n");
-        sb.append("_y_le = None\nif y is not None and y.dtype == 'object':\n    from sklearn.preprocessing import LabelEncoder as _LE\n    _y_le = _LE()\n    y = pd.Series(_y_le.fit_transform(y.astype(str)), index=y.index)\n\n");
-
-        String scaling = strVal(cfg.preprocessing.getOrDefault("scaling", "none"));
-        sb.append("_sc = '").append(scaling).append("'\nnum_cols = X.select_dtypes(include=['number']).columns.tolist()\n");
-        sb.append("_scaler = None\n");
-        sb.append("if _sc == 'standard' and num_cols:\n    from sklearn.preprocessing import StandardScaler\n    _scaler = StandardScaler()\n    X[num_cols] = _scaler.fit_transform(X[num_cols])\n");
-        sb.append("elif _sc == 'minmax' and num_cols:\n    from sklearn.preprocessing import MinMaxScaler\n    _scaler = MinMaxScaler()\n    X[num_cols] = _scaler.fit_transform(X[num_cols])\n\n");
-        sb.append("print('[NODE_PROGRESS] {\"nodeType\": \"feature_engineering\", \"status\": \"completed\", \"features\": len(X.columns)}')\n");
-    }
-
-    private void appendTrainEval(StringBuilder sb, PipelineConfig cfg, String algoBlock, String modelPath) {
-        sb.append("from sklearn.model_selection import train_test_split, cross_val_score\n");
-        sb.append("_val_mode = '").append(cfg.validationMode != null ? cfg.validationMode : "train_test").append("'\n");
-        sb.append("_test_size = ").append(cfg.testSize).append("\n_cv_folds = ").append(cfg.cvFold).append("\n");
-        sb.append("_temporal_col = ").append(cfg.temporalColumn != null ? "'" + cfg.temporalColumn + "'" : "None").append("\n\n");
-
-        sb.append("if y is not None:\n");
-        sb.append("    if _val_mode == 'temporal' and _temporal_col and _temporal_col in df.columns:\n");
-        sb.append("        _sort_idx = df.sort_values(_temporal_col).index\n");
-        sb.append("        X = X.loc[_sort_idx].reset_index(drop=True)\n");
-        sb.append("        y = y.loc[_sort_idx].reset_index(drop=True)\n");
-        sb.append("        _split_idx = int(len(X) * (1 - _test_size))\n");
-        sb.append("        X_train_df, X_test_df = X.iloc[:_split_idx], X.iloc[_split_idx:]\n");
-        sb.append("        y_train, y_test = y.iloc[:_split_idx], y.iloc[_split_idx:]\n");
-        sb.append("    else:\n        X_train_df, X_test_df, y_train, y_test = train_test_split(X, y, test_size=_test_size, random_state=").append(randomState).append(")\n\n");
-        sb.append("    params = ").append(cfg.hyperparams.isEmpty() ? "{}" : objectMapper.valueToTree(cfg.hyperparams).toString()).append("\n");
-        sb.append("    _model_type = '").append(cfg.modelType != null ? cfg.modelType : "classification").append("'\n");
-        sb.append("    ").append(algoBlock.replace("\n", "\n    ")).append("\n    clf.fit(X_train_df, y_train)\n\n");
-        sb.append("    from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, mean_squared_error, r2_score\n");
-        sb.append("    y_pred = clf.predict(X_test_df)\n    metrics = {}\n");
-        sb.append("    try:\n        if _model_type == 'classification':\n");
-        sb.append("            metrics['test_accuracy'] = round(float(accuracy_score(y_test, y_pred)), 4)\n");
-        sb.append("            metrics['test_precision'] = round(float(precision_score(y_test, y_pred, average='weighted', zero_division=0)), 4)\n");
-        sb.append("            metrics['test_recall'] = round(float(recall_score(y_test, y_pred, average='weighted', zero_division=0)), 4)\n");
-        sb.append("            metrics['test_f1'] = round(float(f1_score(y_test, y_pred, average='weighted', zero_division=0)), 4)\n");
-        sb.append("        elif _model_type == 'regression':\n");
-        sb.append("            metrics['test_mse'] = round(float(mean_squared_error(y_test, y_pred)), 4)\n            metrics['test_r2'] = round(float(r2_score(y_test, y_pred)), 4)\n");
-        sb.append("    except Exception as e: print(f'[WARN] Metrics error: {e}')\n\n");
-        sb.append("    try:\n        _cv_scoring = 'f1_weighted' if _model_type == 'classification' else ('r2' if _model_type == 'regression' else None)\n");
-        sb.append("        if _cv_scoring: cv_scores = cross_val_score(clf.__class__(**params), X_train_df, y_train, cv=_cv_folds, scoring=_cv_scoring); metrics['cv_mean'] = round(float(cv_scores.mean()), 4); metrics['cv_std'] = round(float(cv_scores.std()), 4)\n");
-        sb.append("    except Exception as e: print(f'[WARN] CV error: {e}')\n\n");
-        sb.append("    importance = {}\n    try:\n        if hasattr(clf, 'feature_importances_'): importance = dict(zip(X.columns, [round(float(v), 4) for v in clf.feature_importances_]))\n");
-        sb.append("        elif hasattr(clf, 'coef_'): importance = dict(zip(X.columns, [round(float(v), 4) for v in (clf.coef_[0] if len(clf.coef_.shape) > 1 else clf.coef_)]))\n");
-        sb.append("    except: pass\n\n");
-        sb.append("    import joblib\n    _model_dir = r'").append(modelWorkspace).append("'\n    os.makedirs(_model_dir, exist_ok=True)\n");
-        sb.append("    _model_path = r'").append(modelPath).append("'\n    joblib.dump(clf, _model_path)\n");
-        sb.append("    _preproc_path = r'").append(modelPath.replace(".pkl", "_preprocessors.pkl")).append("'\n");
-        sb.append("    joblib.dump({'encoders': _encoders, 'scaler': _scaler, 'target_encoder': _y_le, 'feature_cols': list(X.columns), 'encoding': _enc, 'scaling': _sc}, _preproc_path)\n\n");
-        sb.append("    result = {'status': 'success', 'metrics': metrics, 'feature_importance': importance, 'train_size': len(X_train_df), 'test_size': len(X_test_df), 'feature_count': len(X.columns), 'model_type': _model_type, 'algorithm': '").append(cfg.algorithm).append("'}\n");
-        sb.append("    print('[NODE_PROGRESS] {\"nodeType\": \"training\", \"status\": \"completed\", \"model_type\": _model_type}')\n");
-        sb.append("    print('[NODE_PROGRESS] {\"nodeType\": \"evaluation\", \"status\": \"completed\"}')\n");
-        sb.append("else:\n");
-        sb.append("    params = ").append(cfg.hyperparams.isEmpty() ? "{}" : objectMapper.valueToTree(cfg.hyperparams).toString()).append("\n");
-        sb.append("    ").append(algoBlock.replace("\n", "\n    ")).append("\n    clf.fit(X)\n\n");
-        sb.append("    metrics = {}\n    try:\n        from sklearn.metrics import silhouette_score\n        if len(X) >= 2: metrics['silhouette'] = round(float(silhouette_score(X, clf.labels_ if hasattr(clf, 'labels_') else clf.predict(X))), 4)\n");
-        sb.append("    except Exception as e: print(f'[WARN] Clustering metrics error: {e}')\n");
-        sb.append("    if hasattr(clf, 'inertia_'): metrics['inertia'] = round(float(clf.inertia_), 4)\n");
-        sb.append("    if hasattr(clf, 'labels_'): metrics['n_clusters'] = len(set(clf.labels_))\n");
-        sb.append("    print(f'[INFO] Clustering done, metrics: {metrics}')\n");
-        sb.append("    import joblib\n    _model_dir = r'").append(modelWorkspace).append("'\n    os.makedirs(_model_dir, exist_ok=True)\n");
-        sb.append("    _model_path = r'").append(modelPath).append("'\n    joblib.dump(clf, _model_path)\n\n");
-        sb.append("    result = {'status': 'success', 'metrics': metrics, 'feature_count': len(X.columns), 'train_size': len(X), 'test_size': 0, 'model_type': 'clustering', 'algorithm': '").append(cfg.algorithm).append("'}\n");
-        sb.append("    print('[NODE_PROGRESS] {\"nodeType\": \"training\", \"status\": \"completed\", \"model_type\": \"clustering\"}')\n");
-    }
-
-    private void appendOutput(StringBuilder sb, PipelineConfig cfg) {
-        if (cfg.outputTable == null || cfg.outputTable.isBlank()) return;
-        sb.append("\n# Output predictions to database\n_out_table = '").append(cfg.outputTable.replace("'", "\\'")).append("'\n");
-        sb.append("_out_mode = '").append(cfg.outputMode != null ? cfg.outputMode : "append").append("'\n");
-        sb.append("X_all = df[feature_cols].copy()\nfor c, _enc_obj in _encoders.items():\n    if c in X_all.columns: X_all[c] = _enc_obj.transform(X_all[c].astype(str))\n");
-        sb.append("if _scaler is not None and num_cols: X_all[num_cols] = _scaler.transform(X_all[num_cols])\n");
-        sb.append("_all_pred = clf.predict(X_all)\n_out_df = df.copy()\n_out_df['prediction'] = _all_pred\n");
-        sb.append("if hasattr(clf, 'predict_proba'): _out_df['prediction_proba'] = [round(max(p), 6) for p in clf.predict_proba(X_all)]\n");
-        if (cfg.outputAutoCreate) {
-            sb.append("with engine.connect() as conn:\n");
-            sb.append("    _check = conn.execute(text('SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t'), {'t': _out_table})\n");
-            sb.append("    if _check.fetchone()[0] == 0:\n");
-            sb.append("        _out_df.head(0).to_sql(_out_table, engine, if_exists='fail', index=False)\n");
-            sb.append("        print(f'[INFO] Auto-created table {_out_table}')\n");
-            sb.append("    else:\n");
-            sb.append("        _existing = [r[0] for r in conn.execute(text(f'SHOW COLUMNS FROM `{_out_table}`'))]\n");
-            sb.append("        for _col in _out_df.columns:\n");
-            sb.append("            if _col not in _existing:\n");
-            sb.append("                _dt = 'VARCHAR(255)'\n");
-            sb.append("                if pd.api.types.is_numeric_dtype(_out_df[_col]): _dt = 'DOUBLE'\n");
-            sb.append("                conn.execute(text(f'ALTER TABLE `{_out_table}` ADD COLUMN `{_col}` {_dt}'))\n");
-            sb.append("                print(f'[INFO] Added column {_col} to {_out_table}')\n");
-            sb.append("        conn.commit()\n");
-        }
-        sb.append("try:\n    if _out_mode == 'replace':\n        with engine.connect() as conn: conn.execute(text(f'TRUNCATE TABLE `{_out_table}`')); conn.commit()\n");
-        sb.append("    _out_df.to_sql(_out_table, engine, if_exists='append', index=False)\n    result['output_rows'] = len(_out_df); result['output_table'] = _out_table\n");
-        sb.append("except Exception as e: print(f'[WARN] Output write failed: {e}')\n");
-        sb.append("print('[NODE_PROGRESS] {\"nodeType\": \"output\", \"status\": \"completed\"}')\n");
-    }
+    // ===== Legacy preview script generation (execution uses the fixed runtime) =====
 
     // ===== Pipeline → Model sync =====
 
@@ -1039,26 +738,50 @@ public class PipelineService {
 
         MiningModel model = existing != null ? existing : new MiningModel();
         model.setPipelineId(pipeline.getId());
+        model.setUserId(pipeline.getUserId());
         model.setName(pipeline.getName());
         model.setDataSourceId(pipeline.getDataSourceId());
         model.setConversationId(pipeline.getConversationId());
         model.setModelType(cfg.modelType != null ? cfg.modelType : "classification");
         model.setAlgorithm(cfg.algorithm);
         model.setSourceTable(cfg.sourceTable != null ? cfg.sourceTable : "");
-        model.setFeatureColumns(cfg.featureColumns != null ? toJson(cfg.featureColumns) : "[]");
+        model.setFeatureColumns(result.get("feature_columns") instanceof List<?>
+            ? toJson(result.get("feature_columns"))
+            : (cfg.featureColumns != null ? toJson(cfg.featureColumns) : "[]"));
         model.setTargetColumn(cfg.targetColumn);
-        model.setPreprocessing(toJson(cfg.preprocessing));
+        Map<String, Object> preprocessing = new LinkedHashMap<>(cfg.preprocessing);
+        if (cfg.transforms != null && !cfg.transforms.isEmpty()) {
+            preprocessing.put("transforms", cfg.transforms);
+        }
+        model.setPreprocessing(toJson(preprocessing));
         model.setHyperparameters(toJson(cfg.hyperparams));
         model.setMetrics(toJson(result.get("metrics")));
         model.setFeatureImportance(toJson(result.get("feature_importance")));
         model.setModelPath(modelPath);
+        if (result.get("artifact_sha256") != null) model.setArtifactSha256(String.valueOf(result.get("artifact_sha256")));
+        if (result.get("artifact_schema_version") instanceof Number version) model.setArtifactSchemaVersion(version.intValue());
         model.setStatus(ModelStatus.TRAINED);
         model.setScheduleEnabled(false);
+        model.setValidationMode(cfg.validationMode != null ? cfg.validationMode : "train_test");
+        model.setCvFolds(cfg.cvFold);
+        model.setTestSize(cfg.testSize);
+        model.setTemporalColumn(cfg.temporalColumn);
+        model.setGroupColumns(toJson(cfg.groupColumns));
+        model.setOosTable(cfg.oosTable);
+        model.setOosFilter(cfg.oosFilter);
+        model.setPositiveClass(cfg.positiveClass);
+        model.setCalibrationMethod(cfg.calibrationMethod);
+        model.setThresholdPolicy(toJson(cfg.thresholdPolicy));
+        model.setGovernancePolicy(toJson(cfg.governancePolicy));
+        model.setValidationMetrics(toJson(result.get("validation")));
+        model.setMonitoringBaseline(toJson(result.get("monitoring_baseline")));
+        model.setEvaluationStatus("pending");
 
         if (existing != null) {
+            model.setVersion(existing.getVersion() == null ? 1 : existing.getVersion() + 1);
             miningModelMapper.updateById(model);
         } else {
-            model.setVersion(null);
+            model.setVersion(1);
             model.setDeleted(0);
             miningModelMapper.insert(model);
         }
@@ -1067,457 +790,201 @@ public class PipelineService {
 
     @SuppressWarnings("unchecked")
     public Map<String, Object> previewStep(Long pipelineId, String nodeId) {
-        String script = getStepScript(pipelineId, nodeId);
-        MiningPipeline pipeline = miningPipelineMapper.selectById(pipelineId);
-        List<Map<String, Object>> nodes;
-        try {
-            nodes = objectMapper.readValue(pipeline.getNodes(), List.class);
-        } catch (Exception e) {
-            throw new RuntimeException("流水线节点解析失败: " + e.getMessage());
-        }
-        int targetIdx = -1;
-        for (int i = 0; i < nodes.size(); i++) {
-            if (String.valueOf(nodes.get(i).get("id")).equals(nodeId)) {
-                targetIdx = i;
-                break;
-            }
-        }
-        String nodeType = targetIdx >= 0 ? String.valueOf(nodes.get(targetIdx).get("type")) : "unknown";
-
-        log.info("[PIPELINE] Preview step pipeline={}, node={} type={}", pipelineId, nodeId, nodeType);
-
-        try {
-            PythonResult pr = pythonExecutor.execute(script, pipeline.getDataSourceId(), previewTimeoutMs);
-            if (pr.exitCode() != 0) {
-                String err = pr.stderr().isBlank() ? pr.stdout() : pr.stderr();
-                Map<String, Object> failResult = new LinkedHashMap<>();
-                failResult.put("nodeId", nodeId);
-                failResult.put("nodeType", nodeType);
-                failResult.put("status", "error");
-                failResult.put("error", truncateLog(err, previewErrorTruncation));
-                return failResult;
-            }
-            Map<String, Object> result = parseResultMarker(pr.stdout(), "[PREVIEW_RESULT]");
-            result.putIfAbsent("nodeId", nodeId);
-            result.putIfAbsent("nodeType", nodeType);
-            result.putIfAbsent("status", "success");
-            return result;
-        } catch (Exception e) {
-            Map<String, Object> failResult = new LinkedHashMap<>();
-            failResult.put("nodeId", nodeId);
-            failResult.put("nodeType", nodeType);
-            failResult.put("status", "error");
-            failResult.put("error", truncateLog(e.getMessage(), previewErrorTruncation));
-            return failResult;
-        }
+        MiningPipeline pipeline = resourceAccess.requirePipeline(pipelineId);
+        List<Map<String, Object>> nodes = parsePipelineNodes(pipeline);
+        String nodeType = nodes.stream()
+            .filter(node -> nodeId.equals(String.valueOf(node.get("id"))))
+            .map(node -> String.valueOf(node.get("type")))
+            .findFirst()
+            .orElseThrow(() -> new IllegalArgumentException("节点不存在: " + nodeId));
+        return executePreview(pipeline, extractConfig(nodes), nodeId, nodeType);
     }
 
     public String getStepScript(Long pipelineId, String nodeId) {
-        MiningPipeline pipeline = miningPipelineMapper.selectById(pipelineId);
-        if (pipeline == null || Integer.valueOf(1).equals(pipeline.getDeleted())) {
-            throw new IllegalArgumentException("流水线不存在: " + pipelineId);
-        }
-        List<Map<String, Object>> nodes;
+        MiningPipeline pipeline = resourceAccess.requirePipeline(pipelineId);
+        List<Map<String, Object>> nodes = parsePipelineNodes(pipeline);
+        String nodeType = nodes.stream()
+            .filter(node -> nodeId.equals(String.valueOf(node.get("id"))))
+            .map(node -> String.valueOf(node.get("type")))
+            .findFirst()
+            .orElseThrow(() -> new IllegalArgumentException("节点不存在: " + nodeId));
+        Map<String, Object> request = buildPipelinePreviewRequest(extractConfig(nodes), nodeType);
+        request.put("nodeId", nodeId);
+        request.computeIfPresent("algorithmCode", (key, value) ->
+            "<stored estimator template: " + request.get("algorithmId") + ">");
         try {
-            nodes = objectMapper.readValue(pipeline.getNodes(), List.class);
+            Map<String, Object> description = new LinkedHashMap<>();
+            description.put("runtime", "classpath:python/mining_runtime.py");
+            description.put("action", "preview");
+            description.put("transport", "JSON request/result files; stdout is logs only");
+            description.put("request", request);
+            return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(description);
         } catch (Exception e) {
-            throw new RuntimeException("流水线节点解析失败: " + e.getMessage());
+            throw new IllegalStateException("运行协议序列化失败: " + e.getMessage(), e);
         }
-        int targetIdx = -1;
-        for (int i = 0; i < nodes.size(); i++) {
-            if (String.valueOf(nodes.get(i).get("id")).equals(nodeId)) {
-                targetIdx = i;
-                break;
-            }
-        }
-        if (targetIdx < 0) throw new IllegalArgumentException("节点不存在: " + nodeId);
-
-        String nodeType = String.valueOf(nodes.get(targetIdx).get("type"));
-        PipelineConfig cfg = extractConfig(nodes.subList(0, targetIdx + 1));
-        DataSource ds = dataSourceMapper.selectById(pipeline.getDataSourceId());
-        if (ds == null) throw new IllegalStateException("数据源不存在");
-
-        return buildPreviewScript(DbUrlUtil.buildSqlalchemyUrl(ds), cfg, nodeType);
     }
 
     @SuppressWarnings("unchecked")
-    public Map<String, Object> previewTrialMissingStrategy(Long pipelineId, Map<String, String> trialStrategies) {
-        MiningPipeline pipeline = miningPipelineMapper.selectById(pipelineId);
-        if (pipeline == null || Integer.valueOf(1).equals(pipeline.getDeleted())) {
-            throw new IllegalArgumentException("流水线不存在: " + pipelineId);
-        }
-        List<Map<String, Object>> nodes;
-        try {
-            nodes = objectMapper.readValue(pipeline.getNodes(), List.class);
-        } catch (Exception e) {
-            throw new RuntimeException("流水线节点解析失败: " + e.getMessage());
-        }
-
-        // Find preprocessing node
-        int prepIdx = -1;
-        for (int i = 0; i < nodes.size(); i++) {
-            if (NodeType.PREPROCESSING.equals(nodes.get(i).get("type"))) {
-                prepIdx = i;
-                break;
+    public Map<String, Object> previewTrialMissingStrategy(Long pipelineId,
+                                                           Map<String, String> trialStrategies) {
+        MiningPipeline pipeline = resourceAccess.requirePipeline(pipelineId);
+        List<Map<String, Object>> nodes = parsePipelineNodes(pipeline);
+        List<Map<String, Object>> trialNodes = new ArrayList<>();
+        boolean found = false;
+        for (Map<String, Object> node : nodes) {
+            Map<String, Object> copy = new LinkedHashMap<>(node);
+            if (NodeType.PREPROCESSING.equals(node.get("type"))) {
+                Map<String, Object> config = new LinkedHashMap<>(
+                    (Map<String, Object>) node.getOrDefault("config", Map.of()));
+                config.put("columnStrategies", trialStrategies);
+                copy.put("config", config);
+                found = true;
             }
+            trialNodes.add(copy);
         }
-        if (prepIdx < 0) throw new IllegalArgumentException("流水线没有预处理节点");
-
-        // Clone nodes up to preprocessing and override columnStrategies
-        List<Map<String, Object>> trialNodes = new ArrayList<>(nodes.subList(0, prepIdx + 1));
-        Map<String, Object> prepNode = new LinkedHashMap<>(nodes.get(prepIdx));
-        Map<String, Object> prepConfig = new LinkedHashMap<>((Map<String, Object>) prepNode.getOrDefault("config", Map.of()));
-        prepConfig.put("columnStrategies", trialStrategies);
-        prepNode.put("config", prepConfig);
-        trialNodes.set(prepIdx, prepNode);
-
-        PipelineConfig cfg = extractConfig(trialNodes);
-        DataSource ds = dataSourceMapper.selectById(pipeline.getDataSourceId());
-        if (ds == null) throw new IllegalStateException("数据源不存在");
-
-        String script = buildPreviewScript(DbUrlUtil.buildSqlalchemyUrl(ds), cfg, NodeType.PREPROCESSING);
-
-        try {
-            PythonResult pr = pythonExecutor.execute(script, pipeline.getDataSourceId(), previewTimeoutMs);
-            if (pr.exitCode() != 0) {
-                String err = pr.stderr().isBlank() ? pr.stdout() : pr.stderr();
-                return Map.of("status", "error", "error", truncateLog(err, previewErrorTruncation));
-            }
-            Map<String, Object> result = parseResultMarker(pr.stdout(), "[PREVIEW_RESULT]");
-            result.putIfAbsent("status", "success");
-            result.put("columnStrategies", trialStrategies);
-            return result;
-        } catch (Exception e) {
-            return Map.of("status", "error", "error", truncateLog(e.getMessage(), previewErrorTruncation));
-        }
-    }
-
-    public Map<String, Object> getSegmentedScript(Long pipelineId) {
-        MiningPipeline pipeline = miningPipelineMapper.selectById(pipelineId);
-        if (pipeline == null || Integer.valueOf(1).equals(pipeline.getDeleted())) {
-            throw new IllegalArgumentException("流水线不存在: " + pipelineId);
-        }
-        List<Map<String, Object>> nodes;
-        try {
-            nodes = objectMapper.readValue(pipeline.getNodes(), List.class);
-        } catch (Exception e) {
-            throw new RuntimeException("流水线节点解析失败: " + e.getMessage());
-        }
-        PipelineConfig cfg = extractConfig(nodes);
-        validateConfig(cfg);
-        DataSource ds = dataSourceMapper.selectById(pipeline.getDataSourceId());
-        if (ds == null) throw new IllegalStateException("数据源不存在");
-
-        String dbUrl = DbUrlUtil.buildSqlalchemyUrl(ds);
-        String algoBlock = buildAlgorithmBlock(cfg.algorithm);
-        String modelPath = modelWorkspace + "/pipeline_" + pipelineId + ".pkl";
-        String fullScript = buildPipelineScript(dbUrl, cfg, algoBlock, modelPath);
-
-        // Sanitize credentials
-        fullScript = fullScript.replaceAll("mysql\\+pymysql://([^:]+):[^@]+@", "mysql+pymysql://$1:***@");
-
-        // Split by NODE_START/NODE_END markers
-        List<Map<String, Object>> segments = new ArrayList<>();
-        String startMarker = "# === NODE_START: ";
-        String endMarker = "# === NODE_END: ";
-
-        String[] lines = fullScript.split("\n");
-        String currentType = null;
-        StringBuilder currentCode = new StringBuilder();
-        Map<String, String> titleMap = Map.of(
-            NodeType.DATA_SOURCE, "数据接入", NodeType.PREPROCESSING, "数据预处理",
-            NodeType.FILL_MISSING, "填充缺失值", NodeType.FEATURE_ENGINEERING, "特征工程",
-            NodeType.TRAINING, "模型训练与评估", NodeType.OUTPUT, "输出写入"
-        );
-
-        for (String line : lines) {
-            if (line.startsWith(startMarker)) {
-                currentType = line.substring(startMarker.length()).replace(" ===", "").trim();
-                currentCode = new StringBuilder();
-            } else if (line.startsWith(endMarker) && currentType != null) {
-                String code = currentCode.toString().trim();
-                if (!code.isEmpty()) {
-                    Map<String, Object> seg = new LinkedHashMap<>();
-                    seg.put("nodeType", currentType);
-                    seg.put("title", titleMap.getOrDefault(currentType, currentType));
-                    seg.put("code", code);
-                    segments.add(seg);
-                }
-                currentType = null;
-            } else if (currentType != null) {
-                currentCode.append(line).append("\n");
-            }
-        }
-
-        // Add preamble (lines before first NODE_START) as a segment
-        // Actually, collect lines not in any segment
-        StringBuilder preamble = new StringBuilder();
-        boolean inNode = false;
-        currentType = null;
-        for (String line : lines) {
-            if (line.startsWith(startMarker)) {
-                inNode = true;
-                currentType = line.substring(startMarker.length()).replace(" ===", "").trim();
-            } else if (line.startsWith(endMarker)) {
-                inNode = false;
-                currentType = null;
-            } else if (!inNode && currentType == null) {
-                preamble.append(line).append("\n");
-            }
-        }
-
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("segments", segments);
-        result.put("fullScript", fullScript);
-        if (!preamble.toString().trim().isEmpty()) {
-            Map<String, Object> preSeg = new LinkedHashMap<>();
-            preSeg.put("nodeType", "preamble");
-            preSeg.put("title", "导入与环境");
-            preSeg.put("code", preamble.toString().trim());
-            segments.add(0, preSeg);
-        }
+        if (!found) throw new IllegalArgumentException("流水线没有预处理节点");
+        Map<String, Object> result = executePreview(
+            pipeline, extractConfig(trialNodes), "trial", NodeType.PREPROCESSING);
+        result.put("columnStrategies", trialStrategies);
         return result;
     }
 
-    private String buildPreviewScript(String dbUrl, PipelineConfig cfg, String nodeType) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("import pandas as pd\nimport numpy as np\nimport json\n");
-        sb.append("from sqlalchemy import create_engine, text\n\n");
-        sb.append("engine = create_engine('").append(dbUrl).append("')\n");
+    public Map<String, Object> getSegmentedScript(Long pipelineId) {
+        MiningPipeline pipeline = resourceAccess.requirePipeline(pipelineId);
+        List<Map<String, Object>> nodes = parsePipelineNodes(pipeline);
+        PipelineConfig cfg = extractConfig(nodes);
+        Map<String, String> titleMap = Map.of(
+            NodeType.DATA_SOURCE, "数据接入",
+            NodeType.PREPROCESSING, "数据预处理",
+            NodeType.FILL_MISSING, "填充缺失值",
+            NodeType.FEATURE_ENGINEERING, "特征工程",
+            NodeType.TRAINING, "模型训练与评估",
+            NodeType.EVALUATION, "模型评估",
+            NodeType.OUTPUT, "输出写入"
+        );
+        List<Map<String, Object>> segments = new ArrayList<>();
+        for (Map<String, Object> node : nodes) {
+            String nodeType = String.valueOf(node.get("type"));
+            Map<String, Object> request = buildPipelinePreviewRequest(cfg, nodeType);
+            request.put("nodeId", String.valueOf(node.getOrDefault("id", "unknown")));
+            request.computeIfPresent("algorithmCode", (key, value) ->
+                "<stored estimator template: " + request.get("algorithmId") + ">");
+            Map<String, Object> segment = new LinkedHashMap<>();
+            segment.put("nodeType", nodeType);
+            segment.put("title", titleMap.getOrDefault(nodeType, nodeType));
+            segment.put("code", prettyJson(request));
+            segments.add(segment);
+        }
+        Map<String, Object> fullRequest = buildPipelineTrainingRequest(
+            cfg, Path.of(modelWorkspace, "pipeline_" + pipelineId + "_<execution>.joblib").toString());
+        fullRequest.computeIfPresent("algorithmCode", (key, value) ->
+            "<stored estimator template: " + fullRequest.get("algorithmId") + ">");
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("segments", segments);
+        result.put("fullScript", prettyJson(Map.of(
+            "runtime", "classpath:python/mining_runtime.py",
+            "action", "train",
+            "request", fullRequest
+        )));
+        return result;
+    }
 
-        // Always load data
-        if (cfg.sourceTable != null && !cfg.sourceTable.isBlank()) {
-            sb.append("_query = 'SELECT * FROM `").append(cfg.sourceTable).append("`'\n");
-            if (cfg.filter != null && !cfg.filter.isBlank()) {
-                String escapedFilter = cfg.filter.replace("\\", "\\\\").replace("\"", "\\\"");
-                sb.append("_filter = \"").append(escapedFilter).append("\"\n");
-                sb.append("_query = 'SELECT * FROM `").append(cfg.sourceTable).append("` WHERE ' + _filter\n");
+    private Map<String, Object> executePreview(MiningPipeline pipeline, PipelineConfig cfg,
+                                               String nodeId, String nodeType) {
+        log.info("[PIPELINE] Preview via fixed runtime pipeline={}, node={} type={}",
+            pipeline.getId(), nodeId, nodeType);
+        try {
+            MiningRuntimeClient.RuntimeResult runtime = miningRuntimeClient.execute(
+                "preview", buildPipelinePreviewRequest(cfg, nodeType),
+                pipeline.getDataSourceId(), previewTimeoutMs);
+            if (!runtime.successful()) {
+                return previewFailure(nodeId, nodeType, runtime.errorMessage());
             }
-            sb.append("df = pd.read_sql(_query, engine)\n");
-            sb.append("print(f'[INFO] Loaded {len(df)} rows from ").append(cfg.sourceTable).append("')\n\n");
-        } else {
-            sb.append("result = {'status': 'error', 'error': '数据源未配置'}\nprint('[PREVIEW_RESULT] ' + json.dumps(result))\n");
-            return sb.toString();
+            Map<String, Object> result = new LinkedHashMap<>(runtime.payload());
+            result.put("nodeId", nodeId);
+            result.put("nodeType", nodeType);
+            return result;
+        } catch (Exception e) {
+            return previewFailure(nodeId, nodeType, e.getMessage());
         }
-
-        // Only apply preprocessing for non-data_source nodes
-        if (!NodeType.DATA_SOURCE.equals(nodeType)) {
-            // Capture nulls BEFORE preprocessing for before/after comparison
-            if (NodeType.PREPROCESSING.equals(nodeType) || NodeType.FILL_MISSING.equals(nodeType)) {
-                sb.append("_before_nulls = {c: int(df[c].isnull().sum()) for c in df.columns}\n");
-                sb.append("_before_rows = len(df)\n");
-            }
-            appendPreprocessing(sb, cfg);
-        }
-
-        switch (nodeType) {
-            case NodeType.DATA_SOURCE -> appendDataSourcePreview(sb, cfg);
-            case NodeType.PREPROCESSING -> appendPreprocessingPreview(sb, cfg, NodeType.PREPROCESSING);
-            case NodeType.FILL_MISSING -> appendPreprocessingPreview(sb, cfg, NodeType.FILL_MISSING);
-            case NodeType.FEATURE_ENGINEERING -> appendFeaturePreview(sb, cfg);
-            case NodeType.TRAINING, NodeType.EVALUATION -> appendTrainingPreview(sb, cfg);
-            case NodeType.OUTPUT -> appendOutputPreview(sb, cfg);
-            default -> appendDataSourcePreview(sb, cfg);
-        }
-
-        return sb.toString();
     }
 
-    private void appendDataSourcePreview(StringBuilder sb, PipelineConfig cfg) {
-        sb.append("result = {\n");
-        sb.append("  'status': 'success', 'nodeType': 'data_source',\n");
-        sb.append("  'tableName': '").append(cfg.sourceTable).append("',\n");
-        sb.append("  'rowCount': len(df), 'columnCount': len(df.columns),\n");
-        sb.append("  'columns': [{'name': c, 'dtype': str(df[c].dtype), 'nulls': int(df[c].isnull().sum()), 'sample': str(df[c].iloc[0]) if len(df) > 0 else None} for c in df.columns],\n");
-        sb.append("  'sampleRows': json.loads(df.head(").append(sampleRows).append(").to_json(orient='records', date_format='iso')),\n");
-        sb.append("  'nullSummary': {c: int(df[c].isnull().sum()) for c in df.columns if df[c].isnull().sum() > 0},\n");
-        sb.append("  'numericStats': {c: {'mean': round(float(df[c].mean()), 2), 'min': round(float(df[c].min()), 2), 'max': round(float(df[c].max()), 2)} for c in df.select_dtypes(include=['number']).columns}\n");
-        sb.append("}\nprint('[PREVIEW_RESULT] ' + json.dumps(result, default=str))\n");
-    }
-
-    private void appendPreprocessingPreview(StringBuilder sb, PipelineConfig cfg, String nodeType) {
-        sb.append("result = {\n");
-        sb.append("  'status': 'success', 'nodeType': '").append(nodeType).append("',\n");
-        sb.append("  'rowCount': len(df), 'columnCount': len(df.columns),\n");
-        sb.append("  'beforeRows': _before_rows,\n");
-        sb.append("  'beforeNulls': _before_nulls,\n");
-        sb.append("  'remainingNulls': {c: int(df[c].isnull().sum()) for c in df.columns if df[c].isnull().sum() > 0},\n");
-        sb.append("  'nullComparison': [{'name': c, 'before': _before_nulls.get(c, 0), 'after': int(df[c].isnull().sum())} for c in df.columns if _before_nulls.get(c, 0) > 0 or df[c].isnull().sum() > 0],\n");
-        sb.append("  'sampleRows': json.loads(df.head(").append(sampleRows).append(").to_json(orient='records', date_format='iso')),\n");
-        sb.append("  'columns': [{'name': c, 'dtype': str(df[c].dtype), 'nulls': int(df[c].isnull().sum()), 'nullPct': round(float(df[c].isnull().mean() * 100), 1)} for c in df.columns],\n");
-        Object colStrats = cfg.preprocessing.get("columnStrategies");
-        if (colStrats instanceof Map && !((Map<?, ?>) colStrats).isEmpty()) {
-            sb.append("  'columnStrategies': ").append(objectMapper.valueToTree(colStrats).toString()).append(",\n");
+    private Map<String, Object> buildPipelinePreviewRequest(PipelineConfig cfg, String nodeType) {
+        if (cfg.sourceTable == null || cfg.sourceTable.isBlank()) {
+            throw new IllegalStateException("流水线缺少数据源表");
         }
-        sb.append("}\nprint('[PREVIEW_RESULT] ' + json.dumps(result, default=str))\n");
-    }
+        com.smartquery.common.IdentifierValidator.validateTableName(cfg.sourceTable);
+        String filter = resolveFilterVariables(cfg.filter);
+        if (filter != null && !filter.isBlank()) {
+            com.smartquery.common.IdentifierValidator.validateFilter(filter);
+        }
 
-    @SuppressWarnings("unchecked")
-    private void appendFeaturePreview(StringBuilder sb, PipelineConfig cfg) {
-        String fcList = cfg.featureColumns != null ? objectMapper.valueToTree(cfg.featureColumns).toString() : "[]";
-        sb.append("feature_cols = ").append(fcList).append("\n");
-        sb.append("if isinstance(feature_cols, str): feature_cols = [c.strip() for c in feature_cols.split(',') if c.strip()]\n");
-        sb.append("target_col = '").append(cfg.targetColumn != null ? cfg.targetColumn : "").append("'\n");
-        sb.append("if not feature_cols:\n    feature_cols = [c for c in df.columns if c != target_col and c not in ('id','created_at','updated_at')]\n\n");
-
-        // Apply transforms — reuse main transform logic
+        Map<String, Object> preprocessing = new LinkedHashMap<>(cfg.preprocessing);
         if (cfg.transforms != null && !cfg.transforms.isEmpty()) {
-            sb.append("# Feature transforms\n");
-            appendTransformsBlock(sb, cfg);
+            preprocessing.put("transforms", cfg.transforms);
         }
+        Map<String, Object> validation = new LinkedHashMap<>();
+        validation.put("mode", cfg.validationMode != null ? cfg.validationMode : "train_test");
+        validation.put("cvFolds", cfg.cvFold);
+        validation.put("testSize", cfg.testSize);
+        validation.put("temporalColumn", cfg.temporalColumn);
+        validation.put("randomState", randomState);
 
-        sb.append("X = df[feature_cols].copy()\n");
-        sb.append("y = df[target_col].copy() if target_col in df.columns else None\n\n");
-        sb.append("# Encode categorical columns for stats\n");
-        sb.append("from sklearn.preprocessing import LabelEncoder\n");
-        sb.append("cat_cols = X.select_dtypes(include=['object']).columns.tolist()\n");
-        sb.append("for c in cat_cols: X[c] = LabelEncoder().fit_transform(X[c].astype(str))\n");
-        sb.append("if y is not None and y.dtype == 'object': y = LabelEncoder().fit_transform(y.astype(str))\n\n");
-
-        sb.append("# Correlation with target\n");
-        sb.append("_correlations = {}\n");
-        sb.append("if y is not None:\n");
-        sb.append("    for c in X.columns:\n");
-        sb.append("        try: _correlations[c] = round(float(X[c].corr(y)), 3)\n");
-        sb.append("        except: pass\n\n");
-
-        sb.append("from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor\n");
-        sb.append("result = {\n");
-        sb.append("  'status': 'success', 'nodeType': 'feature_engineering',\n");
-        sb.append("  'featureCount': len(feature_cols), 'targetColumn': target_col,\n");
-        sb.append("  'featureColumns': feature_cols,\n");
-        sb.append("  'sampleShape': [len(X), len(X.columns)],\n");
-        sb.append("  'correlations': _correlations,\n");
-        sb.append("  'sampleRows': json.loads(X.head(").append(sampleRows).append(").to_json(orient='records')),\n");
-        if (cfg.targetColumn != null) {
-            sb.append("  'targetDistribution': df['").append(cfg.targetColumn).append("'].value_counts().to_dict() if target_col in df.columns else {},\n");
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("nodeType", nodeType);
+        request.put("sampleRows", Math.max(sampleRows, 100));
+        request.put("sourceTable", cfg.sourceTable);
+        request.put("inputFilter", filter);
+        request.put("featureColumns", cfg.featureColumns != null ? cfg.featureColumns : List.of());
+        request.put("targetColumn", cfg.targetColumn);
+        request.put("modelType", cfg.modelType != null ? cfg.modelType : "classification");
+        request.put("preprocessing", preprocessing);
+        request.put("targetPreprocessing", cfg.targetPreprocessing != null ? cfg.targetPreprocessing : Map.of());
+        request.put("hyperparameters", cfg.hyperparams);
+        request.put("validation", validation);
+        request.put("outputTable", cfg.outputTable);
+        request.put("overfittingGapThreshold", overfittingGapThreshold);
+        if (cfg.algorithm != null && !cfg.algorithm.isBlank()) {
+            Algorithm algorithm = algorithmService.getByAlgorithmId(cfg.algorithm);
+            if (algorithm == null || algorithm.getPythonCodeTemplate() == null) {
+                throw new IllegalStateException("算法配置缺失: " + cfg.algorithm);
+            }
+            PythonSandbox.validate(algorithm.getPythonCodeTemplate());
+            request.put("algorithmId", cfg.algorithm);
+            request.put("algorithmCode", algorithm.getPythonCodeTemplate());
         }
-        sb.append("  'numericSummary': {c: {'mean': round(float(X[c].mean()), 2), 'std': round(float(X[c].std()), 2)} for c in X.select_dtypes(include=['number']).columns[:10]},\n");
-        sb.append("  'featureStats': [\n");
-        sb.append("    {'name': c, 'dtype': str(df[c].dtype),\n");
-        sb.append("     'nulls': int(df[c].isnull().sum()), 'nullPct': round(float(df[c].isnull().mean() * 100), 1),\n");
-        sb.append("     'unique': int(df[c].nunique()),\n");
-        sb.append("     **({'mean': round(float(df[c].mean()), 2), 'std': round(float(df[c].std()), 2),\n");
-        sb.append("         'min': round(float(df[c].min()), 2), 'max': round(float(df[c].max()), 2)}\n");
-        sb.append("        if df[c].dtype in ['float64','int64','int32'] else\n");
-        sb.append("        {'topValues': {str(k): int(v) for k, v in df[c].value_counts().head(3).items()}})}\n");
-        sb.append("    for c in feature_cols\n  ],\n");
-
-        // Histogram bins for numeric features
-        sb.append("  'histograms': {col: {'bins': [round(float(b), 2) for b in edges], 'counts': [int(cnt) for cnt in cts]}\n");
-        sb.append("    for col, (cts, edges) in [(col, np.histogram(X[col].dropna(), bins=10)) for col in X.select_dtypes(include=['number']).columns[:15]]},\n");
-
-        // Correlation matrix (top N features) — .corr().to_dict() already returns nested dict
-        sb.append("  'correlationMatrix': X.select_dtypes(include=['number']).iloc[:, :15].corr().round(3).to_dict(),\n");
-
-        // Quick feature importance via DecisionTree
-        sb.append("  'quickImportance': (lambda clf2: dict(sorted(zip(X.columns, clf2.feature_importances_), key=lambda x: -x[1])[:15]))\n");
-        sb.append("    (DecisionTreeClassifier(max_depth=3, random_state=42).fit(X, y) if y is not None and len(y.unique()) <= 20 else\n");
-        sb.append("     DecisionTreeRegressor(max_depth=3, random_state=42).fit(X, y) if y is not None else {}),\n");
-
-        sb.append("}\nprint('[PREVIEW_RESULT] ' + json.dumps(result, default=str))\n");
+        return request;
     }
 
-    private void appendTrainingPreview(StringBuilder sb, PipelineConfig cfg) {
-        // Full pipeline up to training + evaluation
-        appendFeatureEngineering(sb, cfg);
-        appendEncodingScaling(sb, cfg);
-
-        String algoBlock = buildAlgorithmBlock(cfg.algorithm);
-        sb.append("from sklearn.model_selection import train_test_split\n");
-        sb.append("from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, mean_squared_error, r2_score\n\n");
-
-        sb.append("if y is not None:\n");
-        sb.append("    _model_type = '").append(cfg.modelType != null ? cfg.modelType : "classification").append("'\n");
-        sb.append("    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=").append(cfg.testSize).append(", random_state=").append(randomState).append(")\n");
-        sb.append("    params = ").append(cfg.hyperparams.isEmpty() ? "{}" : objectMapper.valueToTree(cfg.hyperparams).toString()).append("\n");
-        sb.append("    ").append(algoBlock.replace("\n", "\n    ")).append("\n    clf.fit(X_train, y_train)\n\n");
-
-        sb.append("    y_pred = clf.predict(X_test)\n");
-        sb.append("    metrics = {}\n");
-        sb.append("    if _model_type == 'classification':\n");
-        sb.append("        metrics['test_accuracy'] = round(float(accuracy_score(y_test, y_pred)), 4)\n");
-        sb.append("        metrics['test_precision'] = round(float(precision_score(y_test, y_pred, average='weighted', zero_division=0)), 4)\n");
-        sb.append("        metrics['test_recall'] = round(float(recall_score(y_test, y_pred, average='weighted', zero_division=0)), 4)\n");
-        sb.append("        metrics['test_f1'] = round(float(f1_score(y_test, y_pred, average='weighted', zero_division=0)), 4)\n");
-        sb.append("    else:\n");
-        sb.append("        metrics['test_mse'] = round(float(mean_squared_error(y_test, y_pred)), 4)\n");
-        sb.append("        metrics['test_r2'] = round(float(r2_score(y_test, y_pred)), 4)\n\n");
-
-        sb.append("    importance = {}\n");
-        sb.append("    if hasattr(clf, 'feature_importances_'): importance = dict(zip(X.columns, [round(float(v), 4) for v in clf.feature_importances_]))\n");
-        sb.append("    elif hasattr(clf, 'coef_'): importance = dict(zip(X.columns, [round(float(v), 4) for v in (clf.coef_[0] if len(clf.coef_.shape) > 1 else clf.coef_)]))\n\n");
-
-        sb.append("    result = {'status': 'success', 'nodeType': 'training',\n");
-        sb.append("      'metrics': metrics, 'featureImportance': importance,\n");
-        sb.append("      'trainSize': len(X_train), 'testSize': len(X_test),\n");
-        sb.append("      'featureCount': len(X.columns), 'algorithm': '").append(cfg.algorithm != null ? cfg.algorithm : "").append("',\n");
-        sb.append("      'modelType': _model_type}\n");
-        sb.append("else:\n");
-        sb.append("    result = {'status': 'error', 'error': '未配置目标列'}\n");
-        sb.append("print('[PREVIEW_RESULT] ' + json.dumps(result, default=str))\n");
+    private List<Map<String, Object>> parsePipelineNodes(MiningPipeline pipeline) {
+        try {
+            List<Map<String, Object>> nodes = objectMapper.readValue(pipeline.getNodes(), List.class);
+            if (nodes == null || nodes.isEmpty()) throw new IllegalStateException("流水线没有节点");
+            return nodes;
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException("流水线节点解析失败: " + e.getMessage(), e);
+        }
     }
 
-    private void appendOutputPreview(StringBuilder sb, PipelineConfig cfg) {
-        appendFeatureEngineering(sb, cfg);
-        appendEncodingScaling(sb, cfg);
-
-        String modelType = cfg.modelType != null ? cfg.modelType : "classification";
-        sb.append("_model_type = '").append(modelType).append("'\n");
-        String algoBlock = buildAlgorithmBlock(cfg.algorithm);
-        sb.append("params = ").append(cfg.hyperparams.isEmpty() ? "{}" : objectMapper.valueToTree(cfg.hyperparams).toString()).append("\n");
-        sb.append(algoBlock).append("\nclf.fit(X, y)\n\n");
-        sb.append("_all_pred = clf.predict(X)\n_out_df = df.copy()\n_out_df['prediction'] = _all_pred\n");
-        sb.append("if hasattr(clf, 'predict_proba'): _out_df['prediction_proba'] = [round(max(p), 6) for p in clf.predict_proba(X)]\n\n");
-
-        sb.append("result = {\n");
-        sb.append("  'status': 'success', 'nodeType': 'output',\n");
-        sb.append("  'outputTable': '").append(cfg.outputTable != null ? cfg.outputTable : "").append("',\n");
-        sb.append("  'totalRows': len(_out_df),\n");
-        sb.append("  'sampleRows': json.loads(_out_df.head(").append(sampleRows).append(").to_json(orient='records', date_format='iso')),\n");
-        sb.append("  'columns': list(_out_df.columns),\n");
-        sb.append("  'predictionDistribution': _out_df['prediction'].value_counts().to_dict()\n");
-        sb.append("}\nprint('[PREVIEW_RESULT] ' + json.dumps(result, default=str))\n");
+    private Map<String, Object> previewFailure(String nodeId, String nodeType, String error) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("nodeId", nodeId);
+        result.put("nodeType", nodeType);
+        result.put("status", "error");
+        result.put("error", truncateLog(error, previewErrorTruncation));
+        return result;
     }
 
+    private String prettyJson(Object value) {
+        try {
+            return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(value);
+        } catch (Exception e) {
+            throw new IllegalStateException("JSON 序列化失败: " + e.getMessage(), e);
+        }
+    }
     // ===== Utilities =====
-
-    private String buildAlgorithmBlock(String algorithmId) {
-        if (algorithmId == null || !algorithmId.matches("^[a-zA-Z0-9_]+$")) {
-            throw new IllegalArgumentException("Invalid algorithm ID: " + algorithmId);
-        }
-        Algorithm algo = algorithmService.getByAlgorithmId(algorithmId);
-        if (algo != null && algo.getPythonCodeTemplate() != null && !algo.getPythonCodeTemplate().isBlank()) {
-            String template = algo.getPythonCodeTemplate();
-            if (template.contains("**params") && !template.contains("inspect.signature")) {
-                template = "import inspect\n" + injectParamFilter(template);
-            }
-            return template;
-        }
-        throw new IllegalStateException("算法配置缺失: " + algorithmId);
-    }
-
-    private String injectParamFilter(String template) {
-        String[] lines = template.split("\n");
-        StringBuilder sb = new StringBuilder();
-        boolean injected = false;
-        for (String line : lines) {
-            if (!injected && line.contains("clf = ") && line.contains("**params")) {
-                String classRef = line.substring(line.indexOf('=') + 1).trim();
-                classRef = classRef.substring(0, classRef.indexOf('(')).trim();
-                sb.append("_sig = inspect.signature(").append(classRef).append(".__init__)\n");
-                sb.append("_valid = set(_sig.parameters.keys()) - {\"self\", \"kwargs\"}\n");
-                sb.append("params = {k: v for k, v in params.items() if k in _valid}\n");
-                injected = true;
-            }
-            sb.append(line).append("\n");
-        }
-        return sb.toString().trim();
-    }
-
-    private Map<String, Object> parseResultMarker(String stdout, String marker) {
-        return MiningLogUtils.parseResultMarker(stdout, marker, "PIPELINE", objectMapper);
-    }
 
     private String strVal(Object val) { return val != null ? String.valueOf(val) : null; }
 

@@ -2,23 +2,15 @@ package com.smartquery.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartquery.common.ModelStatus;
-import com.smartquery.datasource.DataSourceManager;
-import com.smartquery.entity.DataSource;
-import com.smartquery.util.DbUrlUtil;
 import com.smartquery.entity.MiningModel;
 import com.smartquery.entity.PredictionResult;
 import com.smartquery.logging.ConversationEventLogger;
-import com.smartquery.mapper.DataSourceMapper;
 import com.smartquery.mapper.MiningModelMapper;
 import com.smartquery.mapper.PredictionResultMapper;
-import com.smartquery.python.PythonExecutor;
-import com.smartquery.python.PythonResult;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.*;
 
@@ -37,10 +29,8 @@ public class MiningPredictionService {
     private int predictErrorTruncation;
 
     private final MiningModelMapper miningModelMapper;
-    private final DataSourceMapper dataSourceMapper;
     private final PredictionResultMapper predictionResultMapper;
-    private final PythonExecutor pythonExecutor;
-    private final DataSourceManager dataSourceManager;
+    private final MiningRuntimeClient miningRuntimeClient;
     private final ObjectMapper objectMapper;
     private final ConversationEventLogger eventLogger;
 
@@ -56,21 +46,30 @@ public class MiningPredictionService {
 
         logPredictionEvent(model, "mining_prediction_start", Map.of("inputRows", inputRows.size(), "mode", "single"));
 
-        String pythonCode = buildPredictionScript(model, inputRows, saveTable);
-        PythonResult result = pythonExecutor.execute(pythonCode, model.getDataSourceId(), predictTimeoutMs);
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("mode", "rows");
+        request.put("modelPath", model.getModelPath());
+        request.put("inputRows", inputRows);
+        request.put("resultTable", saveTable);
+        MiningRuntimeClient.RuntimeResult runtime = miningRuntimeClient.execute(
+            "predict", request, model.getDataSourceId(), predictTimeoutMs);
 
-        if (result.exitCode() != 0) {
-            logPredictionEvent(model, "mining_prediction_complete", Map.of("status", "failed", "error", truncateLog(result.stderr(), 300)));
-            throw new RuntimeException("预测执行失败: " + (result.stderr().isBlank() ? result.stdout() : result.stderr()));
+        if (!runtime.successful()) {
+            String error = runtime.errorMessage();
+            logPredictionEvent(model, "mining_prediction_complete", Map.of("status", "failed", "error", truncateLog(error, 300)));
+            throw new RuntimeException("预测执行失败: " + truncateLog(error, predictErrorTruncation));
         }
 
-        Map<String, Object> parsed = parseResultMarker(result.stdout(), "[PREDICT_RESULT]");
+        Map<String, Object> parsed = runtime.payload();
+        if (!(parsed.get("predictions") instanceof List<?>)) {
+            throw new IllegalStateException("Python 预测结果缺少 predictions");
+        }
         String batchId = "single_" + System.currentTimeMillis();
         savePredictionResults(model, inputRows, parsed, batchId);
 
         logPredictionEvent(model, "mining_prediction_complete", Map.of(
             "status", "success", "predictions", parsed.getOrDefault("predictions", List.of()).hashCode(),
-            "durationMs", result.executionTimeMs()
+            "durationMs", runtime.process().executionTimeMs()
         ));
         return parsed;
     }
@@ -108,16 +107,17 @@ public class MiningPredictionService {
 
         logPredictionEvent(model, "mining_prediction_start", Map.of("inputTable", inputTable, "mode", "batch", "batchId", batchId));
 
-        String pythonCode = buildBatchPredictionScript(model, inputTable, resultTable);
-        PythonResult result = pythonExecutor.execute(pythonCode, model.getDataSourceId(), batchPredictTimeoutMs);
+        MiningRuntimeClient.RuntimeResult runtime = executeBatchPrediction(
+            model, inputTable, resultTable, model.getPredictInputFilter());
 
-        if (result.exitCode() != 0) {
-            String err = result.stderr().isBlank() ? result.stdout() : result.stderr();
+        if (!runtime.successful()) {
+            String err = runtime.errorMessage();
             logPredictionEvent(model, "mining_prediction_complete", Map.of("status", "failed", "batchId", batchId, "error", truncateLog(err, 300)));
             throw new RuntimeException("批量预测失败: " + truncateLog(err, predictErrorTruncation));
         }
 
-        Map<String, Object> parsed = parseResultMarker(result.stdout(), "[BATCH_PREDICT_RESULT]");
+        Map<String, Object> parsed = runtime.payload();
+        validateBatchPayload(parsed);
 
         int savedRows = parsed.containsKey("saved_rows") ? ((Number) parsed.get("saved_rows")).intValue() : 0;
         PredictionResult summary = new PredictionResult();
@@ -134,7 +134,7 @@ public class MiningPredictionService {
 
         logPredictionEvent(model, "mining_prediction_complete", Map.of(
             "status", "success", "batchId", batchId, "savedRows", savedRows,
-            "resultTable", resultTable, "durationMs", result.executionTimeMs()
+            "resultTable", resultTable, "durationMs", runtime.process().executionTimeMs()
         ));
         return parsed;
     }
@@ -170,16 +170,16 @@ public class MiningPredictionService {
 
         logPredictionEvent(model, "mining_prediction_start", Map.of("inputTable", inputTable, "mode", "batch_override", "batchId", batchId));
 
-        String pythonCode = buildBatchPredictionScript(model, inputTable, resultTable, filter);
-        PythonResult result = pythonExecutor.execute(pythonCode, model.getDataSourceId(), batchPredictTimeoutMs);
+        MiningRuntimeClient.RuntimeResult runtime = executeBatchPrediction(model, inputTable, resultTable, filter);
 
-        if (result.exitCode() != 0) {
-            String err = result.stderr().isBlank() ? result.stdout() : result.stderr();
+        if (!runtime.successful()) {
+            String err = runtime.errorMessage();
             logPredictionEvent(model, "mining_prediction_complete", Map.of("status", "failed", "batchId", batchId, "error", truncateLog(err, 300)));
             throw new RuntimeException("批量预测失败: " + truncateLog(err, predictErrorTruncation));
         }
 
-        Map<String, Object> parsed = parseResultMarker(result.stdout(), "[BATCH_PREDICT_RESULT]");
+        Map<String, Object> parsed = runtime.payload();
+        validateBatchPayload(parsed);
         int savedRows = parsed.containsKey("saved_rows") ? ((Number) parsed.get("saved_rows")).intValue() : 0;
 
         PredictionResult summary = new PredictionResult();
@@ -210,6 +210,10 @@ public class MiningPredictionService {
         if (model == null) throw new IllegalArgumentException("模型不存在");
         if (model.getModelPath() == null || model.getModelPath().isBlank()) {
             throw new IllegalStateException("模型尚未训练或模型文件丢失");
+        }
+        if (!Integer.valueOf(MiningRuntimeClient.ARTIFACT_SCHEMA_VERSION)
+                .equals(model.getArtifactSchemaVersion())) {
+            throw new IllegalStateException("该模型使用旧版制品，未包含完整 sklearn Pipeline；请重新训练后再预测");
         }
         if (!ModelStatus.PUBLISHED.equals(model.getStatus()) && !ModelStatus.TRAINED.equals(model.getStatus())) {
             throw new IllegalStateException("模型状态为 " + model.getStatus() + "，无法预测");
@@ -262,149 +266,25 @@ public class MiningPredictionService {
         return resolved;
     }
 
-    @SuppressWarnings("unchecked")
-    private String buildPredictionScript(MiningModel model, List<Map<String, Object>> inputRows, String saveTable) {
-        DataSource ds = dataSourceMapper.selectById(model.getDataSourceId());
-        String dbUrl = ds != null ? DbUrlUtil.buildSqlalchemyUrl(ds) : "";
+    private MiningRuntimeClient.RuntimeResult executeBatchPrediction(
+            MiningModel model, String inputTable, String resultTable, String filter) {
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("mode", "batch");
+        request.put("modelPath", model.getModelPath());
+        request.put("inputTable", inputTable);
+        request.put("inputFilter", resolveFilterVariables(filter));
+        request.put("resultTable", resultTable);
+        return miningRuntimeClient.execute(
+            "predict", request, model.getDataSourceId(), batchPredictTimeoutMs);
+    }
 
-        StringBuilder sb = new StringBuilder();
-        sb.append("import pandas as pd\nimport numpy as np\nimport json\nimport joblib\nimport os\n\n");
-        sb.append("model_path = '").append(model.getModelPath()).append("'\n");
-        sb.append("if not os.path.exists(model_path):\n");
-        sb.append("    print('[PREDICT_RESULT] ' + json.dumps({'error': '模型文件不存在: ' + model_path}))\n    exit(1)\n");
-        sb.append("clf = joblib.load(model_path)\n\n");
-        sb.append("input_data = ").append(objectMapper.valueToTree(inputRows).toString()).append("\n");
-        sb.append("df = pd.DataFrame(input_data)\nprint(f'[INFO] Predicting {len(df)} rows')\n\n");
-
-        sb.append("_preproc_path = os.path.join(os.path.dirname(model_path), 'model_").append(model.getId()).append("_preprocessors.pkl')\n");
-        sb.append("_preproc = joblib.load(_preproc_path) if os.path.exists(_preproc_path) else None\n");
-        sb.append("preprocessing = ").append(safeJsonEmbed(model.getPreprocessing())).append("\n");
-        appendPreprocessingBlock(sb, "df");
-
-        sb.append("predictions = clf.predict(df)\nresult = {'predictions': predictions.tolist()}\n\n");
-        sb.append("if hasattr(clf, 'predict_proba'):\n    try:\n");
-        sb.append("        proba = clf.predict_proba(df)\n        result['probabilities'] = proba.tolist()\n    except: pass\n\n");
-
-        if (saveTable != null && !saveTable.isBlank() && !dbUrl.isEmpty()) {
-            sb.append("from sqlalchemy import create_engine\n");
-            sb.append("engine = create_engine('").append(dbUrl).append("')\n");
-            sb.append("save_df = pd.DataFrame(input_data)\nsave_df['prediction'] = predictions\n");
-            sb.append("if 'probabilities' in result:\n    import numpy as np\n    save_df['prediction_proba'] = [max(p) for p in result['probabilities']]\n");
-            sb.append("save_df.to_sql('").append(saveTable).append("', engine, if_exists='append', index=False)\n");
-            sb.append("result['saved_to'] = '").append(saveTable).append("'\nresult['saved_rows'] = len(save_df)\n\n");
+    private void validateBatchPayload(Map<String, Object> payload) {
+        if (!(payload.get("saved_rows") instanceof Number) || payload.get("saved_to") == null) {
+            throw new IllegalStateException("Python 批量预测结果缺少 saved_rows 或 saved_to");
         }
-        sb.append("print('[PREDICT_RESULT] ' + json.dumps(result))\n");
-        return sb.toString();
     }
 
     @SuppressWarnings("unchecked")
-    private String buildBatchPredictionScript(MiningModel model, String inputTable, String resultTable) {
-        return buildBatchPredictionScript(model, inputTable, resultTable, model.getPredictInputFilter());
-    }
-
-    private String buildBatchPredictionScript(MiningModel model, String inputTable, String resultTable, String filterOverride) {
-        DataSource ds = dataSourceMapper.selectById(model.getDataSourceId());
-        String dbUrl = ds != null ? DbUrlUtil.buildSqlalchemyUrl(ds) : "";
-
-        StringBuilder sb = new StringBuilder();
-        sb.append("import pandas as pd\nimport numpy as np\nimport json\nimport joblib\nimport os\n");
-        sb.append("from sqlalchemy import create_engine, text\n\n");
-        sb.append("model_path = '").append(model.getModelPath()).append("'\n");
-        sb.append("if not os.path.exists(model_path):\n");
-        sb.append("    print('[BATCH_PREDICT_RESULT] ' + json.dumps({'error': '模型文件不存在'}))\n    exit(1)\n");
-        sb.append("clf = joblib.load(model_path)\n\nengine = create_engine('").append(dbUrl).append("')\n");
-
-        String filter = resolveFilterVariables(filterOverride);
-        if (filter != null && !filter.isBlank()) {
-            sb.append("_filter = \"").append(filter.replace("\\", "\\\\").replace("\"", "\\\"")).append("\"\n");
-            sb.append("_query = 'SELECT * FROM `").append(inputTable).append("` WHERE ' + _filter\n");
-            sb.append("print(f'[INFO] Query: SELECT * FROM ").append(inputTable).append(" WHERE {_filter}')\n");
-            sb.append("df = pd.read_sql(_query, engine)\n");
-        } else {
-            sb.append("df = pd.read_sql('SELECT * FROM `").append(inputTable).append("`', engine)\n");
-        }
-        sb.append("print(f'[INFO] Loaded {len(df)} rows from ").append(inputTable).append("')\n\n");
-
-        String tableName = (resultTable != null && !resultTable.isBlank())
-            ? resultTable : "predict_" + model.getAlgorithm() + "_" + inputTable;
-        sb.append("if len(df) == 0:\n");
-        sb.append("    print('[BATCH_PREDICT_RESULT] ' + json.dumps({'saved_to': '").append(tableName).append("', 'saved_rows': 0, 'warning': '筛选后无数据'}))\n    exit(0)\n\n");
-
-        sb.append("feature_cols = ").append(model.getFeatureColumns()).append("\n");
-        sb.append("if isinstance(feature_cols, str):\n    feature_cols = [c.strip() for c in feature_cols.split(',') if c.strip()]\n");
-        sb.append("missing = [c for c in feature_cols if c not in df.columns]\n");
-        sb.append("if missing:\n    print(f'[ERROR] Input table missing columns: {missing}')\n    exit(1)\n");
-        sb.append("X = df[feature_cols].copy()\n\n");
-
-        sb.append("_preproc_path = os.path.join(os.path.dirname(model_path), 'model_").append(model.getId()).append("_preprocessors.pkl')\n");
-        sb.append("_preproc = joblib.load(_preproc_path) if os.path.exists(_preproc_path) else None\n");
-        sb.append("preprocessing = ").append(safeJsonEmbed(model.getPreprocessing())).append("\n");
-        appendPreprocessingBlock(sb, "X");
-
-        sb.append("predictions = clf.predict(X)\nresult_df = df.copy()\nresult_df['prediction'] = predictions\n\n");
-        sb.append("if hasattr(clf, 'predict_proba'):\n    try:\n");
-        sb.append("        proba = clf.predict_proba(X)\n        result_df['prediction_proba'] = [max(p) for p in proba]\n    except: pass\n\n");
-        sb.append("result_df['predicted_at'] = pd.Timestamp.now()\n");
-        sb.append("for c in result_df.columns:\n");
-        sb.append("    if result_df[c].dtype == 'object': result_df[c] = result_df[c].astype(str)\n");
-        sb.append("    elif str(result_df[c].dtype).startswith('datetime'): result_df[c] = result_df[c].astype(str)\n");
-        // Auto-create output table if it doesn't exist
-        sb.append("_check_sql = \"SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :tname\"\n");
-        sb.append("with engine.connect() as _conn:\n");
-        sb.append("    _exists = _conn.execute(text(_check_sql), {'tname': '").append(tableName).append("'}).fetchone()[0]\n");
-        sb.append("    if _exists == 0:\n");
-        sb.append("        result_df.head(0).to_sql('").append(tableName).append("', engine, if_exists='fail', index=False)\n");
-        sb.append("        print(f'[INFO] Auto-created table ").append(tableName).append("')\n");
-        sb.append("    _conn.commit()\n");
-        sb.append("result_df.to_sql('").append(tableName).append("', engine, if_exists='append', index=False)\n");
-        sb.append("print(f'[INFO] Saved {len(result_df)} rows to ").append(tableName).append("')\n\n");
-        sb.append("result = {\n    'saved_to': '").append(tableName).append("',\n    'saved_rows': len(result_df),\n    'columns': list(result_df.columns)\n}\n");
-        sb.append("print('[BATCH_PREDICT_RESULT] ' + json.dumps(result))\n");
-        return sb.toString();
-    }
-
-    private void appendPreprocessingBlock(StringBuilder sb, String varName) {
-        sb.append("_dt_cols = ").append(varName).append(".select_dtypes(include=['datetime', 'datetimetz']).columns.tolist()\n");
-        sb.append("if _dt_cols:\n    for c in _dt_cols:\n        ").append(varName).append("[c] = pd.to_numeric(").append(varName).append("[c].astype('int64'), errors='coerce')\n");
-        sb.append("_enc = preprocessing.get('encoding', 'label')\n");
-        sb.append("cat_cols = ").append(varName).append(".select_dtypes(include=['object']).columns.tolist()\n");
-        sb.append("if cat_cols:\n");
-        sb.append("    if _enc == 'onehot' and _preproc and '_onehot_columns' in _preproc.get('encoders', {}):\n");
-        sb.append("        ").append(varName).append(" = pd.get_dummies(").append(varName).append(", columns=cat_cols)\n");
-        sb.append("        _train_cols = _preproc['encoders']['_onehot_columns']\n");
-        sb.append("        for c in _train_cols:\n            if c not in ").append(varName).append(".columns: ").append(varName).append("[c] = 0\n");
-        sb.append("        ").append(varName).append(" = ").append(varName).append("[_train_cols]\n");
-        sb.append("    elif _preproc and 'encoders' in _preproc:\n");
-        sb.append("        for c in cat_cols:\n");
-        sb.append("            if c in _preproc['encoders']:\n");
-        sb.append("                _le = _preproc['encoders'][c]\n");
-        sb.append("                ").append(varName).append("[c] = ").append(varName).append("[c].astype(str).map(lambda v: _le.transform([v])[0] if v in _le.classes_ else -1)\n");
-        sb.append("            else:\n                from sklearn.preprocessing import LabelEncoder\n                ").append(varName).append("[c] = LabelEncoder().fit_transform(").append(varName).append("[c].astype(str))\n");
-        sb.append("    else:\n        from sklearn.preprocessing import LabelEncoder\n        le = LabelEncoder()\n        for c in cat_cols:\n            ").append(varName).append("[c] = le.fit_transform(").append(varName).append("[c].astype(str))\n\n");
-        sb.append("_sc = preprocessing.get('scaling', 'none')\n");
-        sb.append("if _preproc and _preproc.get('scaler') is not None:\n");
-        sb.append("    num_cols = ").append(varName).append(".select_dtypes(include=['number']).columns.tolist()\n");
-        sb.append("    if num_cols: ").append(varName).append("[num_cols] = _preproc['scaler'].transform(").append(varName).append("[num_cols])\n");
-        sb.append("elif _sc == 'standard':\n    from sklearn.preprocessing import StandardScaler\n");
-        sb.append("    num_cols = ").append(varName).append(".select_dtypes(include=['number']).columns.tolist()\n    if num_cols: ").append(varName).append("[num_cols] = StandardScaler().fit_transform(").append(varName).append("[num_cols])\n");
-        sb.append("elif _sc == 'minmax':\n    from sklearn.preprocessing import MinMaxScaler\n");
-        sb.append("    num_cols = ").append(varName).append(".select_dtypes(include=['number']).columns.tolist()\n    if num_cols: ").append(varName).append("[num_cols] = MinMaxScaler().fit_transform(").append(varName).append("[num_cols])\n\n");
-    }
-
-    private Map<String, Object> parseResultMarker(String stdout, String marker) {
-        return MiningLogUtils.parseResultMarker(stdout, marker, "PREDICT", objectMapper);
-    }
-
-    private String safeJsonEmbed(String json) {
-        if (json == null || json.isBlank() || "null".equals(json)) return "{}";
-        try {
-            return objectMapper.readTree(json).toString();
-        } catch (Exception e) {
-            log.warn("[PREDICT] Invalid JSON rejected for Python embedding: {}", e.getMessage());
-            return "{}";
-        }
-    }
-
     private String toJson(Object obj) {
         return MiningLogUtils.toJson(obj, objectMapper);
     }

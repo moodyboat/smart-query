@@ -6,7 +6,7 @@
 # 运行时 = Node20（ECharts SSR 需 node 调 tools/echarts-ssr/render.mjs）+ JRE17
 # 用 scripts/build.sh 或 scripts/airpack.sh 会自动完成 mvn + cp + build。
 
-FROM node:20-bookworm
+FROM node:20-bookworm-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends openjdk-17-jre-headless \
  && rm -rf /var/lib/apt/lists/*

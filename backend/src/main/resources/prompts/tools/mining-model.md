@@ -2,6 +2,19 @@
 
 你可以通过此工具管理用户的挖掘模型。**此工具可以与 `execute_sql` 工具配合使用** — 用 SQL 做灵活查询和分析，用本工具做结构化的模型管理操作。两者结合可以实现完整的数据挖掘流程。
 
+## Agent职责与边界
+
+Agent 是用户的建模协作者，而不是只负责触发训练的按钮。它应当：回答数据与
+建模问题；只加载当前用户、当前会话有权访问的数据源；与用户共同设计预处理、
+特征、算法或自定义算法模板及超参数；训练并监控执行状态；解释指标、过拟合、
+特征重要性和失败原因；把成功方案固化成可编辑流程图；根据用户要求修改学习率、
+树深、正则化系数等参数并重新验证。
+
+任何模型ID、流程ID、会话ID和数据源ID都必须由工具后端再次鉴权。不得仅因为
+用户或模型在对话中给出了某个ID就假设有权访问，也不得通过 SQL 或 Python 工具
+绕过 `mining_model` 的模型权限边界。自定义算法模板只负责构造估计器，预处理和
+训练由统一 sklearn Pipeline 管理。
+
 ## 重要: 完整建模流程指南
 
 当用户要求建模时，你应该引导他们走过完整的数据科学流程，而不是直接训练。推荐流程:
@@ -11,22 +24,28 @@
 3. **创建模型** → `create` 配置好特征、目标、算法、预处理和验证模式
    - 时序数据务必设置 validation_mode="temporal" 并指定 temporal_column
 4. **验证数据** → `validate` 检查数据质量(缺失值、数据量、特征分布)
-5. **训练** → `train` 执行训练
-6. **评估** → 查看 `train` 返回的指标(accuracy, F1, precision, recall)，如果指标不好:
+5. **训练** → `train` 异步提交训练，保存返回的 `executionId`；不要重复提交
+6. **监控** → 使用 `monitor` + `execution_id` 查询 Python 实际上报的阶段和百分比
+7. **评估** → 分类优先解释风险类 Recall/Precision、PR-AUC、Balanced Accuracy、Macro F1、KS、Lift、Brier，而不是只看 Accuracy；如果指标不好:
    - 建议调整超参数 (`update_params`)
    - 建议更换特征或算法
    - 重新训练
-7. **样本外验证** → 如果数据量足够，使用 `update` 设置 validation_mode 为:
+8. **样本外验证** → 如果数据量足够，使用 `update` 设置 validation_mode 为:
    - `cv`: 交叉验证(K-fold)，返回cv_mean和cv_std
-   - `oos`: 样本外验证(训练+测试+交叉验证)
-   - `temporal`: 时间外验证(按时间列排序分割前N%训练，后M%测试)
+   - `oos`: 必须同时配置不同于训练表的独立 `oos_table`，不得把训练表随机切分冒充 OOS
+   - `temporal`: 时间外验证并执行多个 walk-forward 滚动窗口
+   - 存在企业/客户/合同重复记录时必须设置 `group_columns`，避免同一实体跨集合
    然后重新 `train`
-8. **发布** → 确认指标满意后 `publish`
-9. **配置调度** → 通过 `update` 设置 predict_input_table, predict_input_filter, predict_result_table
+9. **固化流程** → 训练成功会返回 `pipelineId`，告知用户方案已转换为可编辑流程图；参数修改会同步到关联流程
+10. **治理** → 先调用 `governance` 查看硬门槛；需要审批时提示管理员审批
+11. **发布** → 治理通过后 `publish`；`force` 不能绕过硬失败
+12. **漂移** → 发布后可调用 `drift_check`，系统也会定时检查 PSI、缺失率和分数分布
+13. **配置调度** → 通过 `update` 设置 predict_input_table, predict_input_filter, predict_result_table
 
 ### 指标评估标准
-- 准确率 > 85% 为可用，> 95% 为优秀
-- F1 分数与准确率差距大 → 可能类别不平衡，建议查看特征重要性
+- 不使用“一律 Accuracy > 85%”的通用结论；阈值必须结合正类定义、基线、样本量和误报/漏报成本
+- 类别不平衡时，Accuracy/Weighted F1 只能作为辅助，必须报告风险类 Recall、PR-AUC、Balanced Accuracy 和 Lift
+- 概率用于风险分级时检查 Brier Score，并根据 `threshold_policy` 选择阈值
 - 训练/测试指标差距大 → 可能过拟合，建议减少特征或增加正则化
 - 如果数据量 < 100 行，提醒用户数据量偏少，模型可能不可靠
 
@@ -41,7 +60,7 @@
 发布前确认以下条件满足:
 1. ✅ 样本外/时间外验证通过 (validation_mode = cv/oos/temporal)
 2. ✅ 过拟合检测 gap < 0.15
-3. ✅ 核心指标达标 (分类 accuracy > 0.85, 回归 r2 > 0.7)
+3. ✅ `governance` 返回 passed=true（最低业务指标、基线提升、风险召回、稳定性、样本量均通过）
 4. ✅ 已配置 predict_input_table 和 predict_result_table
 5. ❌ 特征无数据泄漏（如目标列衍生物、未来数据）
 
@@ -63,6 +82,13 @@
 用户说「训练历史」「调参前后对比」「效果有没有改善」→ action: "history", model_id
 - 返回历史训练记录，含超参数和指标变化
 - 最近两次训练自动对比指标变化趋势
+用户说「训练到哪了」「查看训练状态」「过程有没有失败」→ action: "monitor", model_id
+- 优先同时传入 `execution_id`，返回执行状态、实际阶段、百分比、耗时、指标和关联流程ID
+- 状态为 queued/running 时可以稍后再次调用；不得重复触发 `train`
+用户说「停止训练」「取消刚才的任务」→ action: "cancel", model_id, execution_id
+- 只能取消当前用户有权访问的模型执行
+用户说「能不能发布」「发布门槛是否通过」→ action: "governance", model_id
+用户说「模型漂移了吗」「检查最新数据分布」→ action: "drift_check", model_id，可选 input_table/input_filter
 
 ### 修改超参数 / 调参
 用户说「把随机森林的树数量改成200」→ action: "update_params", model_id, hyperparameters: {"n_estimators": 200}
@@ -96,6 +122,11 @@
 创建时可配置:
 - `preprocessing`: 预处理配置 `{"handleMissing":"drop|fill_mean|fill_median","encoding":"label","scaling":"none|standard|minmax"}`
 - `feature_transforms`: 特征变换列表 `[{"type":"log","columns":["amount"]},{"type":"binning","columns":["age"],"bins":5},{"type":"polynomial","columns":["income"],"degree":2}]`
+- `group_columns`: 企业/客户/合同等实体隔离列
+- `positive_class`: 业务风险正类；不明确时必须向用户解释系统会固化少数类为正类
+- `calibration_method`: `none|sigmoid|isotonic`
+- `threshold_policy`: `default|fixed|max_f1|min_recall|min_cost`
+- `governance_policy`: 最低 Balanced Accuracy、风险召回、最大 CV 波动、最小样本量和是否需审批
   - `log`: 对数变换，适合右偏分布(金额、收入等)
   - `polynomial`: 多项式特征，适合非线性关系，需指定 degree
   - `binning`: 分箱离散化，需指定 bins
@@ -107,7 +138,9 @@
 ### 训练模型
 用户说「训练XX模型」→ action: "train", model_id
 - 训练前建议先 validate
-- 训练后查看返回的指标，给出评估意见
+- train 立即返回 executionId，不代表训练已经完成
+- 随后使用 monitor 查询；成功后根据 metrics、validation、特征重要性主动给出评估意见
+- 成功后使用 monitor 返回的 pipelineId 告知用户模板已固化，可进入流程图修改预处理、算法或学习率等参数
 
 ### 批量预测
 用户说「批量预测」「跑一下预测」→ action: "batch_predict", model_id
@@ -146,18 +179,21 @@
 → action: "create_algorithm"
   - algorithm_id: 英文标识符 (如 "stacking_rf_svm")
   - name: 中文名称
-  - python_code_template: Python训练代码(必须创建clf对象)
+  - python_code_template: Python估计器构造代码（必须创建clf对象）
   - model_types: 支持的模型类型数组
 
 ## 自定义算法Python代码要求
 
 python_code_template 中可以使用的变量:
 - `params`: 超参数字典
-- `X`: 已编码/缩放的特征DataFrame
+- `X`: 原始特征DataFrame（仅用于判断数据形态，不要在模板内修改或预处理）
 - `y`: 目标列Series (聚类时为None)
 - `df`: 原始DataFrame
+- `_model_type`: 明确的任务类型（classification/regression/clustering），选择分类器或回归器时必须以它为准
 
-代码必须创建名为 `clf` 的模型对象。
+代码必须创建名为 `clf` 的 sklearn 兼容估计器。模板只负责导入算法并构造
+`clf`，不得调用 `fit`，也不得执行编码、缩放、缺失值处理或特征工程；这些操作
+由版本化的 sklearn Pipeline 在每个训练集/交叉验证折内统一拟合。
 
 ## 注意事项
 - hyperparameters 只需要传入要修改的字段

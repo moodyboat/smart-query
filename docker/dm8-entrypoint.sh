@@ -16,6 +16,9 @@
 #     dm8:latest
 set -e
 
+DM_SYSDBA_PASSWORD="${DM_SYSDBA_PASSWORD:-Dameng123}"
+export LD_LIBRARY_PATH="/opt/dmdbms/bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
 if [ ! -d "/opt/dmdbms/data/DAMENG" ]; then
     echo "Initializing DM8 database (CASE_SENSITIVE=0, COMPATIBLE_MODE=4)..."
     /opt/dmdbms/bin/dminit \
@@ -23,8 +26,8 @@ if [ ! -d "/opt/dmdbms/data/DAMENG" ]; then
         DB_NAME=DAMENG \
         INSTANCE_NAME=DMSERVER \
         PORT_NUM=5236 \
-        SYSDBA_PWD=Dameng123 \
-        SYSAUDITOR_PWD=Dameng123 \
+        SYSDBA_PWD="$DM_SYSDBA_PASSWORD" \
+        SYSAUDITOR_PWD="$DM_SYSDBA_PASSWORD" \
         CHARSET=1 \
         PAGE_SIZE=16 \
         EXTENT_SIZE=16 \
@@ -40,8 +43,8 @@ echo "Starting DM8 server..."
 /opt/dmdbms/bin/dmserver /opt/dmdbms/data/DAMENG/dm.ini -noconsole &
 SERVER_PID=$!
 for i in $(seq 1 30); do
-    if /opt/dmdbms/bin/disql SYSDBA/Dameng123@localhost:5236 -e "SELECT 1;" >/dev/null 2>&1; then
-        echo "DM8 ready on port 5236 (SYSDBA/Dameng123)"
+    if /opt/dmdbms/bin/disql "SYSDBA/$DM_SYSDBA_PASSWORD@localhost:5236" -e "SELECT 1;" >/dev/null 2>&1; then
+        echo "DM8 ready on port 5236"
         break
     fi
     sleep 2

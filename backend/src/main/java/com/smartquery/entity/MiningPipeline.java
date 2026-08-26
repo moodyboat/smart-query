@@ -16,6 +16,8 @@ public class MiningPipeline {
     private String description;
     private Long dataSourceId;
     private Long conversationId;
+    /** Owning user; null historical rows are denied to non-admin users. */
+    private String userId;
     private String status;
     private String nodes;
     private String edges;

@@ -39,6 +39,8 @@ public class MiningModel {
     private String featureImportance;
     private String trainingLog;
     private String modelPath;
+    private String artifactSha256;
+    private Integer artifactSchemaVersion;
 
     private String status;
 
@@ -60,6 +62,22 @@ public class MiningModel {
     private Double testSize;
     private String temporalColumn;
     private String validationMetrics;
+
+    /** Evaluation and governance configuration. JSON fields are intentionally
+     * stored with the model so an agent-created flow remains reproducible. */
+    private String positiveClass;
+    private String groupColumns;
+    private String oosTable;
+    private String oosFilter;
+    private String calibrationMethod;
+    private String thresholdPolicy;
+    private String governancePolicy;
+    private String evaluationStatus;
+    private String approvedByUserId;
+    private LocalDateTime approvedAt;
+    private String monitoringBaseline;
+    private String lastDriftMetrics;
+    private LocalDateTime lastDriftAt;
 
     private LocalDateTime lastSyncedAt;
 

@@ -1,7 +1,6 @@
 package com.smartquery.controller;
 
 import com.smartquery.common.BusinessException;
-import com.smartquery.common.Ownership;
 import com.smartquery.common.Result;
 import com.smartquery.entity.ChatMessage;
 import com.smartquery.entity.Conversation;
@@ -14,6 +13,7 @@ import com.smartquery.mapper.DashboardMapper;
 import com.smartquery.entity.Chart;
 import com.smartquery.entity.Report;
 import com.smartquery.entity.Dashboard;
+import com.smartquery.service.ResourceAccessService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
@@ -32,41 +32,30 @@ public class ConversationController {
     private final ReportMapper reportMapper;
     private final DashboardMapper dashboardMapper;
     private final ConversationEventLogger eventLogger;
-    private final Ownership ownership;
+    private final ResourceAccessService resourceAccess;
 
     @PostMapping
     public Result<Conversation> create(@RequestBody Conversation conversation) {
         // 强制以当前登录用户身份创建，防止伪造 userId 越权
         conversation.setId(null);
-        conversation.setUserId(ownership.currentUserIdString());
+        conversation.setUserId(resourceAccess.currentUserId());
         conversationMapper.insert(conversation);
         return Result.ok(conversation);
     }
 
     @GetMapping
     public Result<List<Conversation>> list() {
-        if (ownership.isAdmin()) {
-            return Result.ok(conversationMapper.selectList(null));
-        }
-        String uid = ownership.currentUserIdString();
-        if (uid == null) return Result.ok(List.of());
-        return Result.ok(conversationMapper.selectList(
-            new LambdaQueryWrapper<Conversation>().eq(Conversation::getUserId, uid)));
+        return Result.ok(resourceAccess.listConversations());
     }
 
     @GetMapping("/{id}")
     public Result<Conversation> get(@PathVariable Long id) {
-        if (!ownership.conversation(id)) {
-            throw new BusinessException(403, "无权访问该会话");
-        }
-        return Result.ok(conversationMapper.selectById(id));
+        return Result.ok(resourceAccess.requireConversation(id));
     }
 
     @DeleteMapping("/{id}")
     public Result<Void> delete(@PathVariable Long id) {
-        if (!ownership.conversation(id)) {
-            throw new BusinessException(403, "无权访问该会话");
-        }
+        resourceAccess.requireConversation(id);
         // Cascade delete related entities
         chatMessageMapper.delete(
             new LambdaQueryWrapper<ChatMessage>().eq(ChatMessage::getConversationId, id));
@@ -97,9 +86,7 @@ public class ConversationController {
 
             // 校验整个批次归属：发现任何越权 id 立即拒绝，避免部分成功导致状态混乱
             for (Long id : ids) {
-                if (!ownership.conversation(id)) {
-                    throw new BusinessException(403, "无权删除会话: " + id);
-                }
+                resourceAccess.requireConversation(id);
             }
 
             java.util.Set<Long> failedIds = new java.util.HashSet<>();
@@ -147,11 +134,7 @@ public class ConversationController {
         String title = body.get("title");
         if (title == null || title.isBlank()) return Result.error("标题不能为空");
         if (title.length() > 100) title = title.substring(0, 100);
-        if (!ownership.conversation(id)) {
-            throw new BusinessException(403, "无权访问该会话");
-        }
-        Conversation conv = conversationMapper.selectById(id);
-        if (conv == null) return Result.error("对话不存在");
+        Conversation conv = resourceAccess.requireConversation(id);
         conv.setTitle(title);
         conversationMapper.updateById(conv);
         return Result.ok(null);
@@ -159,9 +142,7 @@ public class ConversationController {
 
     @GetMapping("/{id}/messages")
     public Result<List<ChatMessage>> getMessages(@PathVariable Long id) {
-        if (!ownership.conversation(id)) {
-            throw new BusinessException(403, "无权访问该会话");
-        }
+        resourceAccess.requireConversation(id);
         List<ChatMessage> messages = chatMessageMapper.selectList(
             new LambdaQueryWrapper<ChatMessage>()
                 .eq(ChatMessage::getConversationId, id)

@@ -6,6 +6,7 @@ import com.smartquery.entity.LlmConfigEntity;
 import com.smartquery.mapper.LlmConfigMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Service;
 
 import java.net.URI;
@@ -33,6 +34,7 @@ public class OpenAiCompatibleService implements LlmService {
 
     private final LlmConfigMapper llmConfigMapper;
     private final ObjectMapper objectMapper;
+    private final Environment environment;
 
     @org.springframework.beans.factory.annotation.Value("${smart-query.llm.http-timeout-seconds:180}")
     private int httpTimeoutSeconds;
@@ -82,22 +84,25 @@ public class OpenAiCompatibleService implements LlmService {
                                                   List<Map<String, Object>> tools, Consumer<String> textTokenConsumer) {
         LlmConfigEntity config = resolveConfig(model);
 
+        // 配置错误重试不会自行恢复，也不能在后续重试中携带空密钥发出请求。
+        if (config.getApiKey() == null || config.getApiKey().isBlank()) {
+            String errorMsg = String.format("LLM API key 未配置，请检查配置文件或环境变量 (model=%s)", model);
+            log.error("[LLM] {}", errorMsg);
+            throw new LlmClientException(errorMsg);
+        }
+
         for (int attempt = 0; attempt <= maxRetries; attempt++) {
             try {
-                // 验证 API key 配置（只在第一次尝试时检查，避免重复日志）
-                if (attempt == 0 && (config.getApiKey() == null || config.getApiKey().isBlank())) {
-                    String errorMsg = String.format("LLM API key 未配置，请检查配置文件或环境变量 (model=%s)", model);
-                    log.error("[LLM] {}", errorMsg);
-                    throw new RuntimeException(errorMsg);
-                }
-
                 // 验证 messages 格式，避免非法格式导致 API 调用失败
                 if (!validateMessages(messages)) {
                     throw new RuntimeException("LLM messages 格式非法（role/content 缺失或超长），拒绝调用");
                 }
 
                 Map<String, Object> body = new LinkedHashMap<>();
-                body.put("model", config.getApiKey() != null && !config.getApiKey().isEmpty() ? model : config.getModelCode());
+                String providerModel = config.getModelName() == null || config.getModelName().isBlank()
+                    ? config.getModelCode()
+                    : config.getModelName();
+                body.put("model", providerModel);
                 body.put("messages", messages);
                 body.put("max_tokens", config.getMaxTokens());
                 body.put("temperature", config.getTemperature());
@@ -276,7 +281,35 @@ public class OpenAiCompatibleService implements LlmService {
         if (config != null) {
             return config;
         }
+        LlmConfigEntity configured = getYamlConfig(model);
+        if (configured != null) {
+            return configured;
+        }
         return getDefaultConfig(model);
+    }
+
+    /**
+     * 从 smart-query.llm.models.<model> 读取声明式配置。
+     * DB 配置优先，YAML/环境变量次之，最后才使用统一兜底配置。
+     */
+    private LlmConfigEntity getYamlConfig(String model) {
+        String prefix = "smart-query.llm.models." + model + ".";
+        String apiUrl = environment.getProperty(prefix + "api-url");
+        if (apiUrl == null || apiUrl.isBlank()) {
+            return null;
+        }
+
+        LlmConfigEntity config = new LlmConfigEntity();
+        config.setModelCode(model);
+        config.setModelName(environment.getProperty(prefix + "model-name", model));
+        config.setApiUrl(apiUrl);
+        config.setApiKey(environment.getProperty(prefix + "api-key", ""));
+        config.setMaxTokens(environment.getProperty(prefix + "max-tokens", Integer.class, defaultMaxTokens));
+        config.setTemperature(environment.getProperty(
+            prefix + "temperature", java.math.BigDecimal.class, java.math.BigDecimal.valueOf(0.1)));
+        log.debug("[LLM] resolved declared config for model={}, providerModel={}, apiUrl={}, hasApiKey={}",
+            model, config.getModelName(), apiUrl, !config.getApiKey().isBlank());
+        return config;
     }
 
     @org.springframework.beans.factory.annotation.Value("${smart-query.llm.default-api-url:https://open.bigmodel.cn/api/coding/paas/v4/chat/completions}")
@@ -293,6 +326,7 @@ public class OpenAiCompatibleService implements LlmService {
     private LlmConfigEntity getDefaultConfig(String model) {
         LlmConfigEntity config = new LlmConfigEntity();
         config.setModelCode(model);
+        config.setModelName(model);
 
         String apiUrl = defaultApiUrl;
         String apiKey = System.getenv().getOrDefault("LLM_API_KEY", System.getenv("GLM_API_KEY"));

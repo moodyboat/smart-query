@@ -1,0 +1,14 @@
+# Docker Desktop 本机部署覆盖：后端直接连接 Compose 内的 DM8。
+services:
+  backend:
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:dm://dm8:5236
+      SPRING_DATASOURCE_USERNAME: ${DM_USERNAME:-SYSDBA}
+      SPRING_DATASOURCE_PASSWORD: ${DM_PASSWORD:-Dameng123}
+      SPRING_DATASOURCE_DRIVER: dm.jdbc.driver.DmDriver
+      SPRING_DATASOURCE_INIT_SQL: SET SCHEMA SMART_QUERY
+    depends_on:
+      dm8:
+        condition: service_healthy
+      redis:
+        condition: service_healthy

@@ -1,5 +1,6 @@
 package com.smartquery.tool;
 
+import com.smartquery.common.UserContextHolder;
 import com.smartquery.engine.ReActEvent;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -16,8 +17,23 @@ public record ToolExecutionContext(
     String model,
     Set<String> allowedTables,
     java.util.function.BooleanSupplier abortChecker,
-    Consumer<ReActEvent> eventConsumer
+    Consumer<ReActEvent> eventConsumer,
+    UserContextHolder.UserContext actor
 ) {
+    /** Backward-compatible constructor that captures the request actor explicitly. */
+    public ToolExecutionContext(
+        Long conversationId,
+        Long dataSourceId,
+        String traceId,
+        String model,
+        Set<String> allowedTables,
+        java.util.function.BooleanSupplier abortChecker,
+        Consumer<ReActEvent> eventConsumer
+    ) {
+        this(conversationId, dataSourceId, traceId, model, allowedTables,
+            abortChecker, eventConsumer, UserContextHolder.get());
+    }
+
     public boolean isAborted() {
         return abortChecker.getAsBoolean();
     }

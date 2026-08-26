@@ -4,6 +4,8 @@ backend/logs/
 *.class
 *.jar
 *.war
+__pycache__/
+*.py[cod]
 
 # 国产数据库厂商 JDBC 驱动（信创/私有化）：pom 以 system scope 引用，必须入库
 !backend/lib/*.jar
@@ -48,6 +50,8 @@ Thumbs.db
 *.log
 *.tmp
 .claude/
+/dist/
+/.m2/
 
 # Runtime
 logs/

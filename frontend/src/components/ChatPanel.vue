@@ -285,7 +285,10 @@ async function sendMessage() {
     const url = buildChatUrl(convId, dsId, convStore.getCurrentScenario())
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(userStore.token ? { Authorization: `Bearer ${userStore.token}` } : {})
+      },
       body: JSON.stringify({ message: text }),
       signal: controller.signal
     })

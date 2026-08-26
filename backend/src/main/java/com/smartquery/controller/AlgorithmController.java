@@ -5,6 +5,7 @@ import com.smartquery.common.BusinessException;
 import com.smartquery.common.Result;
 import com.smartquery.entity.Algorithm;
 import com.smartquery.service.AlgorithmService;
+import com.smartquery.service.ResourceAccessService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -20,6 +21,7 @@ public class AlgorithmController {
 
     private final AlgorithmService algorithmService;
     private final ObjectMapper objectMapper;
+    private final ResourceAccessService resourceAccess;
 
     private static final Map<String, String> TYPE_LABELS = Map.of(
         "classification", "分类", "regression", "回归", "clustering", "聚类", "anomaly_detection", "异常检测");
@@ -50,16 +52,19 @@ public class AlgorithmController {
 
     @PostMapping("/algorithms")
     public Result<Algorithm> createAlgorithm(@RequestBody Algorithm algorithm) {
+        resourceAccess.requireAdmin();
         return Result.ok(algorithmService.createCustomAlgorithm(algorithm));
     }
 
     @PutMapping("/algorithms/{id}")
     public Result<Algorithm> updateAlgorithm(@PathVariable Long id, @RequestBody Algorithm updates) {
+        resourceAccess.requireAdmin();
         return Result.ok(algorithmService.updateAlgorithm(id, updates));
     }
 
     @DeleteMapping("/algorithms/{id}")
     public Result<Void> deleteAlgorithm(@PathVariable Long id) {
+        resourceAccess.requireAdmin();
         algorithmService.deleteAlgorithm(id);
         return Result.ok();
     }

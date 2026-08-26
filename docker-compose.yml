@@ -3,32 +3,34 @@
 #   docker compose --profile tools build python     # 先构建 python 执行镜像（后端 docker run 调用）
 #   docker compose build                            # 构建后端 + 前端
 #   docker compose up                               # 启动（前端 http://localhost:5173  后端 :9000）
-# 配置：复制 .env.example → .env 覆盖 GLM_API_KEY / DM_PASSWORD / MYSQL_PASSWORD 等
+# 配置：复制 .env.example → .env 覆盖 DEEPSEEK_API_KEY / DM_PASSWORD 等
 #
 # 数据库角色分工（重要）：
-#   - 系统库：达梦 DM8（host.docker.internal:5236，宿主或独立部署；后端默认连此）
+#   - 系统库：达梦 DM8（Compose 服务 dm8:5236；也可通过环境变量连接外部实例）
 #     schema=SMART_QUERY 由 DataSeeder 兜底建表 + smart_query_seed.sql 导入种子
-#   - 业务库示例：mysql 容器（仅作示例数据演示，smart_query_sample 库）
-#     客户真实业务库通过 UI 添加动态数据源，可为 MySQL/PostgreSQL/DM/GBase 任意
+#   - 达梦 DM8：同时承载 SMART_QUERY 系统 Schema 与 SMART_QUERY_SAMPLE 演示业务 Schema
 
 services:
-  # 业务库示例容器：仅给"业务库示例数据"演示用，不是系统库
-  # 系统库（smart_query）走 DM8，见 backend 服务的 SPRING_DATASOURCE_URL
-  mysql:
-    image: mysql:8.0
+  # 系统库 + 演示业务库：首次创建实例时强制大小写不敏感和 MySQL 兼容模式。
+  dm8:
+    image: dm8_single:dm8_20241022_rev244896_x86_rh6_64
+    container_name: dm8
+    privileged: true
+    restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:-900110}
+      DM_SYSDBA_PASSWORD: ${DM_PASSWORD:-Dameng123}
       TZ: Asia/Shanghai
-    ports: ["${MYSQL_HOST_PORT:-3307}:3306"]
+    entrypoint: ["/bin/bash", "/entrypoint.sh"]
+    ports: ["${DM_HOST_PORT:-5236}:5236"]
     volumes:
-      - mysql_data:/var/lib/mysql
-      - ./docker/db-init.sh:/docker-entrypoint-initdb.d/01-init.sh:ro
-      - ./backend/db-export:/seeds:ro
+      - dm8_data:/opt/dmdbms/data
+      - ./docker/dm8-entrypoint.sh:/entrypoint.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD"]
-      interval: 5s
-      timeout: 5s
-      retries: 30
+      test: ["CMD-SHELL", "LD_LIBRARY_PATH=/opt/dmdbms/bin /opt/dmdbms/bin/disql SYSDBA/$$DM_SYSDBA_PASSWORD@localhost:5236 -e 'SELECT 1;' >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 8s
+      retries: 60
+      start_period: 30s
 
   redis:
     image: redis:7-alpine
@@ -45,20 +47,18 @@ services:
       dockerfile: Dockerfile
     ports: ["${BACKEND_HOST_PORT:-9001}:9000"]
     environment:
-      # 系统库（达梦 DM8，独立容器或外部部署）：默认连 host.docker.internal:5236
+      # 系统库（达梦 DM8）：默认连接 Compose 内的 dm8 服务，也可由环境变量覆盖
       # DM8 已开 COMPATIBLE_MODE=4 + CASE_SENSITIVE=0，schema=SMART_QUERY
-      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL:-jdbc:dm://${DM_HOST:-host.docker.internal}:${DM_PORT:-5236}}
+      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL:-jdbc:dm://${DM_HOST:-dm8}:${DM_PORT:-5236}}
       SPRING_DATASOURCE_USERNAME: ${DM_USERNAME:-SYSDBA}
       SPRING_DATASOURCE_PASSWORD: ${DM_PASSWORD:-Dameng123}
       SPRING_DATASOURCE_DRIVER: dm.jdbc.driver.DmDriver
       SPRING_DATASOURCE_INIT_SQL: ${DM_SCHEMA:-SET SCHEMA SMART_QUERY}
-      # 业务库（动态数据源示例）：保留 mysql 容器做演示
-      MYSQL_HOST: mysql
-      MYSQL_PORT: "3306"
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-900110}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       GLM_API_KEY: ${GLM_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      SMART_QUERY_LLM_DEFAULT_MODEL: ${SMART_QUERY_LLM_DEFAULT_MODEL:-deepseek}
       JWT_SECRET: ${JWT_SECRET:-smart-query-default-jwt-secret-key-change-me-in-production-min-32-bytes}
       JWT_EXPIRATION_MINUTES: ${JWT_EXPIRATION_MINUTES:-1440}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
@@ -77,6 +77,7 @@ services:
       - sq_artifacts:/tmp/smartquery-artifacts       # 后端 ↔ python 容器共享产物/脚本
       - sq_workspace:/tmp/smartquery-workspace
     depends_on:
+      dm8: { condition: service_healthy }
       redis: { condition: service_healthy }
 
   frontend:
@@ -95,14 +96,14 @@ services:
     command: ["python3", "-c", "print('smart-query-python image ready')"]
 
 volumes:
-  mysql_data: {}
+  dm8_data: {}
   # 显式 name：去掉 compose 项目前缀，使后端 `docker run -v <卷名>` 能精确挂到这两个共享卷
   sq_artifacts:
     name: sq_artifacts
   sq_workspace:
     name: sq_workspace
 
-# 显式网络名：后端 `docker run --network smartquery-net` 调起的 python 容器加入此网络，才能解析服务名（如 mysql）
+# 显式网络名：后端 `docker run --network smartquery-net` 调起的 python 容器加入此网络，才能解析 dm8 等服务名
 networks:
   default:
     name: smartquery-net

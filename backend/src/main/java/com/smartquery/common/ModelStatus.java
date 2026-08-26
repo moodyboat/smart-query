@@ -11,8 +11,10 @@ public final class ModelStatus {
     public static final String OFFLINE = "offline";
 
     // Execution status
+    public static final String EXEC_QUEUED = "queued";
     public static final String EXEC_RUNNING = "running";
     public static final String EXEC_SUCCESS = "success";
+    public static final String EXEC_CANCELED = "canceled";
 
     // Pipeline status
     public static final String PIPELINE_READY = "ready";

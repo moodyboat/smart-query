@@ -1,4 +1,6 @@
 import { ref, readonly } from 'vue'
+import { apiStartPipelineStream } from '../api/index.js'
+import { createAuthenticatedEventStream } from '../api/sse.js'
 
 export function usePipelineStream() {
   const nodeProgress = ref({})
@@ -7,17 +9,24 @@ export function usePipelineStream() {
   const isStreaming = ref(false)
   let eventSource = null
 
-  function startStream(pipelineId) {
+  async function startStream(pipelineId) {
     stopStream()
     nodeProgress.value = {}
     pipelineResult.value = null
     streamError.value = null
     isStreaming.value = true
 
-    const url = `/api/v1/mining/pipeline/${pipelineId}/execute-stream`
-    eventSource = new EventSource(url)
+    try {
+      const submission = await apiStartPipelineStream(pipelineId)
+      const url = `/api/v1/mining/pipeline/${pipelineId}/execute-stream?runId=${encodeURIComponent(submission.runId)}`
+      eventSource = createAuthenticatedEventStream(url)
+    } catch (error) {
+      streamError.value = error.message || '提交执行失败'
+      isStreaming.value = false
+      return
+    }
 
-    eventSource.onmessage = (event) => {
+    const handleEvent = (event) => {
       try {
         const data = JSON.parse(event.data)
         if (data.type === 'node_progress') {
@@ -39,16 +48,17 @@ export function usePipelineStream() {
         }
       } catch (ignored) {}
     }
+    eventSource.addEventListener('node_progress', handleEvent)
+    eventSource.addEventListener('pipeline_complete', handleEvent)
+    eventSource.addEventListener('pipeline_error', handleEvent)
 
-    eventSource.onerror = () => {
+    eventSource.onerror = (error) => {
       if (isStreaming.value) {
-        streamError.value = '连接断开'
+        streamError.value = error.willReconnect
+          ? `连接中断，正在续传（第 ${error.retryCount} 次）`
+          : '连接无法恢复，请查询流程状态'
       }
-      isStreaming.value = false
-      if (eventSource) {
-        eventSource.close()
-        eventSource = null
-      }
+      if (!error.willReconnect) isStreaming.value = false
     }
   }
 

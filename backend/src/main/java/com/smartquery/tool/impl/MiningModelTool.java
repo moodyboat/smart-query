@@ -6,9 +6,10 @@ import com.smartquery.entity.MiningModel;
 import com.smartquery.entity.ModelExecution;
 import com.smartquery.entity.DataSource;
 import com.smartquery.mapper.MiningModelMapper;
-import com.smartquery.mapper.ModelExecutionMapper;
 import com.smartquery.service.AlgorithmService;
 import com.smartquery.service.MiningService;
+import com.smartquery.service.MiningRuntimeClient;
+import com.smartquery.service.ResourceAccessService;
 import com.smartquery.tool.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -25,8 +26,8 @@ import java.util.concurrent.CompletableFuture;
 public class MiningModelTool implements LlmTool {
 
     private final MiningModelMapper miningModelMapper;
-    private final ModelExecutionMapper modelExecutionMapper;
     private final MiningService miningService;
+    private final ResourceAccessService resourceAccess;
     private final AlgorithmService algorithmService;
     private final ObjectMapper objectMapper;
 
@@ -42,20 +43,27 @@ public class MiningModelTool implements LlmTool {
     @Value("${smart-query.mining.history-limit:20}")
     private int historyLimit;
 
+    private static final Set<String> MODEL_SCOPED_ACTIONS = Set.of(
+        "get", "update", "update_params", "train", "retrain", "tune",
+        "sync_pipeline", "publish", "offline", "predict", "batch_predict",
+        "validate", "history", "monitor", "cancel", "governance", "drift_check"
+    );
+
     @Override
     public String getName() { return "mining_model"; }
 
     @Override
     public String getDescription() {
-        return "管理数据挖掘模型: 查看已有模型列表、修改模型参数(如树的数量、深度)、创建新模型、触发训练、发布/下线模型(可配置定时调度和预测表)。用户可能会用自然语言说「把随机森林的树数量改成200」「训练客户流失预测模型」「发布并每天定时预测」等。";
+        return "数据建模助手: 在当前用户和会话的数据源权限内探索数据，协助设计预处理、特征、算法和超参数，完成训练、评估分析、过程监控、模板固化与流程图同步，并支持修改学习率等参数后重新训练。";
     }
 
     @Override
     public Map<String, Object> getJsonSchema() {
         Map<String, Object> props = new LinkedHashMap<>();
         props.put("action", Map.of("type", "string", "description",
-            "操作类型: list=查看模型列表, get=查看模型详情, create=创建新模型, update=更新模型配置, update_params=修改超参数, train=训练, retrain=更新配置并重新训练(支持修改特征/参数后一步重训并对比指标), tune=参数网格搜索(自动探索参数组合并对比), sync_pipeline=同步模型与关联流程, validate=验证模型(训练前检查数据质量), publish=发布, offline=下线, predict=预测, batch_predict=批量预测(从输入表), explore_data=探索数据表结构和统计, list_algorithms=列出可用算法, create_algorithm=创建自定义算法, compare=并行训练多个算法并对比, history=查看训练历史"));
+            "操作类型: list/get/create/update/update_params/train/retrain/tune/monitor/cancel/sync_pipeline/validate/governance/drift_check/publish/offline/predict/batch_predict/explore_data/list_algorithms/create_algorithm/compare/history"));
         props.put("model_id", Map.of("type", "integer", "description", "模型ID (list操作不需要)"));
+        props.put("execution_id", Map.of("type", "integer", "description", "训练执行ID (monitor/cancel时可使用，train会返回)"));
         props.put("name", Map.of("type", "string", "description", "模型名称"));
         props.put("algorithm", Map.of("type", "string", "description", "算法标识 (可通过 list_algorithms 查看所有可用算法，包括自定义算法)"));
         props.put("algorithms", Map.of("type", "array", "description", "对比训练时使用的算法列表 (compare时使用), 如 ['random_forest','xgboost']"));
@@ -73,15 +81,22 @@ public class MiningModelTool implements LlmTool {
         props.put("schedule_enabled", Map.of("type", "boolean", "description", "发布时是否启用定时调度 (publish时使用)"));
         props.put("schedule_cron", Map.of("type", "string", "description", "标准5字段cron表达式 (publish时使用), 如 */30 * * * *=每30分钟, 0 6 * * *=每天6:00, 0 8 * * 1=每周一8:00"));
         props.put("schedule_mode", Map.of("type", "string", "description", "调度模式 (publish时使用): train=定期重训, predict=定期预测"));
-        props.put("validation_mode", Map.of("type", "string", "description", "验证模式: train_test=普通训练测试分割, cv=交叉验证, oos=样本外验证(训练+测试+CV), temporal=时间外验证(按时间列分割)"));
+        props.put("validation_mode", Map.of("type", "string", "description", "验证模式: cv=交叉验证, oos=独立外部样本表, temporal=滚动时间外验证；普通train_test不能发布"));
         props.put("cv_folds", Map.of("type", "integer", "description", "交叉验证折数(默认5)"));
         props.put("test_size", Map.of("type", "number", "description", "测试集比例(默认0.2)"));
         props.put("temporal_column", Map.of("type", "string", "description", "时间列名(用于时序验证,如created_at,date等)"));
+        props.put("group_columns", Map.of("type", "array", "description", "实体隔离列，如企业ID/客户ID/合同ID；同一实体不会跨训练测试集"));
+        props.put("oos_table", Map.of("type", "string", "description", "独立且锁定的OOS数据表，validation_mode=oos时必填"));
+        props.put("oos_filter", Map.of("type", "string", "description", "OOS数据快照筛选条件"));
+        props.put("positive_class", Map.of("type", "string", "description", "二分类中业务风险正类标签；未配置时使用少数类并在结果中固化"));
+        props.put("calibration_method", Map.of("type", "string", "description", "概率校准: none/sigmoid/isotonic"));
+        props.put("threshold_policy", Map.of("type", "object", "description", "阈值策略: default/fixed/max_f1/min_recall/min_cost，可配置targetRecall、误报漏报成本"));
+        props.put("governance_policy", Map.of("type", "object", "description", "发布门槛，如minBalancedAccuracy/minRiskRecall/maxCvStd/minTestRows/requireApproval"));
         props.put("preprocessing", Map.of("type", "object", "description", "预处理配置 (create/update时使用): {\"handleMissing\":\"drop|fill_mean|fill_median\",\"encoding\":\"label|onehot\",\"scaling\":\"none|standard|minmax\"}"));
         props.put("feature_transforms", Map.of("type", "array", "description", "特征变换列表 (create/retrain时使用), 每个元素: {\"type\":\"...\",\"columns\":[\"col1\"]}。类型: log(对数), binning(分箱), polynomial(多项式), interaction(交互), date_extract(日期提取), target_encode(目标编码), frequency_encode(频率编码)"));
         props.put("table_name", Map.of("type", "string", "description", "数据表名 (explore_data时使用)"));
         props.put("algorithm_id", Map.of("type", "string", "description", "自定义算法英文标识 (create_algorithm时必填)"));
-        props.put("python_code_template", Map.of("type", "string", "description", "自定义算法Python训练代码 (create_algorithm时必填), 代码中可用变量: params(超参), X(特征), y(目标), df(原始数据). 必须创建名为clf的模型对象"));
+        props.put("python_code_template", Map.of("type", "string", "description", "自定义算法估计器模板 (create_algorithm时必填)。可用 params、X、y、df、_model_type；只能构造并赋值 sklearn 兼容的 clf，不要在模板中执行 fit 或预处理"));
         props.put("model_types", Map.of("type", "array", "description", "自定义算法支持的模型类型 (create_algorithm时使用), 如['classification','regression']"));
         props.put("params_schema", Map.of("type", "array", "description", "自定义算法参数定义 (create_algorithm时使用), 每个参数包含key,label,type,defaultValue等"));
         props.put("param_grid", Map.of("type", "object", "description", "参数网格 (tune时使用), 键为参数名, 值为候选值数组, 如 {\"n_estimators\": [50, 100, 200], \"max_depth\": [5, 10]}"));
@@ -94,6 +109,21 @@ public class MiningModelTool implements LlmTool {
         String action = (String) input.get("action");
 
         try {
+            // Tool calls have exactly the same authorization boundary as REST
+            // calls. Never rely on the LLM to choose only visible model IDs.
+            com.smartquery.common.UserContextHolder.require();
+            if (context.conversationId() != null && context.conversationId() > 0) {
+                var conversation = resourceAccess.requireConversation(context.conversationId());
+                if (conversation.getDataSourceId() != null && context.dataSourceId() != null
+                        && !conversation.getDataSourceId().equals(context.dataSourceId())) {
+                    throw new com.smartquery.common.BusinessException(403,
+                        "建模数据源与当前会话绑定的数据源不一致");
+                }
+            }
+            if (action != null && MODEL_SCOPED_ACTIONS.contains(action)) {
+                Long modelId = toLong(input.get("model_id"));
+                if (modelId != null) resourceAccess.requireModel(modelId);
+            }
             ToolResult result = switch (action) {
                 case "list" -> handleList(input, start);
                 case "get" -> handleGet(input, start);
@@ -112,6 +142,10 @@ public class MiningModelTool implements LlmTool {
                 case "explore_data" -> handleExploreData(input, context, start);
                 case "list_algorithms" -> handleListAlgorithms(start);
                 case "history" -> handleHistory(input, start);
+                case "monitor" -> handleMonitor(input, start);
+                case "cancel" -> handleCancel(input, start);
+                case "governance" -> handleGovernance(input, start);
+                case "drift_check" -> handleDriftCheck(input, start);
                 case "create_algorithm" -> handleCreateAlgorithm(input, start);
                 case "compare" -> handleCompare(input, context, start);
                 default -> ToolResult.error(getName(), "未知操作: " + action, System.currentTimeMillis() - start);
@@ -141,10 +175,7 @@ public class MiningModelTool implements LlmTool {
     }
 
     private ToolResult handleList(Map<String, Object> input, long start) {
-        var wrapper = new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<MiningModel>()
-                .eq(MiningModel::getDeleted, 0)
-                .orderByDesc(MiningModel::getCreatedAt);
-        List<MiningModel> models = miningModelMapper.selectList(wrapper);
+        List<MiningModel> models = resourceAccess.listModels(null, null);
 
         StringBuilder sb = new StringBuilder("当前共有 ").append(models.size()).append(" 个挖掘模型:\n\n");
         for (MiningModel m : models) {
@@ -168,8 +199,7 @@ public class MiningModelTool implements LlmTool {
     private ToolResult handleGet(Map<String, Object> input, long start) {
         Long id = toLong(input.get("model_id"));
         if (id == null) return ToolResult.error(getName(), "需要 model_id", System.currentTimeMillis() - start);
-        MiningModel model = miningModelMapper.selectById(id);
-        if (model == null) return ToolResult.error(getName(), "模型不存在: " + id, System.currentTimeMillis() - start);
+        MiningModel model = resourceAccess.requireModel(id);
 
         StringBuilder sb = new StringBuilder();
         sb.append("模型: ").append(model.getName()).append("\n");
@@ -182,6 +212,13 @@ public class MiningModelTool implements LlmTool {
         sb.append("特征列: ").append(model.getFeatureColumns()).append("\n");
         sb.append("超参数: ").append(model.getHyperparameters()).append("\n");
         sb.append("版本: v").append(model.getVersion()).append("\n");
+        if (model.getPipelineId() != null) sb.append("关联流程ID: ").append(model.getPipelineId()).append("\n");
+        if (!Integer.valueOf(MiningRuntimeClient.ARTIFACT_SCHEMA_VERSION)
+                .equals(model.getArtifactSchemaVersion())) {
+            sb.append("制品状态: 旧版或未生成完整 Pipeline，需要重新训练后才能预测/发布\n");
+        } else {
+            sb.append("制品版本: ").append(model.getArtifactSchemaVersion()).append("\n");
+        }
         if (model.getMetrics() != null) sb.append("评估指标: ").append(model.getMetrics()).append("\n");
         if (model.getFeatureImportance() != null) sb.append("特征重要性: ").append(model.getFeatureImportance()).append("\n");
         if (model.getPreprocessing() != null && !model.getPreprocessing().isBlank() && !model.getPreprocessing().equals("{}"))
@@ -239,6 +276,7 @@ public class MiningModelTool implements LlmTool {
         if (input.get("cv_folds") != null) model.setCvFolds(((Number) input.get("cv_folds")).intValue());
         if (input.get("test_size") != null) model.setTestSize(((Number) input.get("test_size")).doubleValue());
         if (input.get("temporal_column") != null) model.setTemporalColumn((String) input.get("temporal_column"));
+        applyEvaluationConfig(model, input);
 
         MiningModel created = miningService.createModel(model);
         return ToolResult.ok(getName(), "已创建模型「" + created.getName() + "」(ID: " + created.getId() + ")。可以在管理页面查看或训练。",
@@ -259,6 +297,7 @@ public class MiningModelTool implements LlmTool {
         if (input.get("cv_folds") != null) updates.setCvFolds(((Number) input.get("cv_folds")).intValue());
         if (input.get("test_size") != null) updates.setTestSize(((Number) input.get("test_size")).doubleValue());
         if (input.get("temporal_column") != null) updates.setTemporalColumn((String) input.get("temporal_column"));
+        applyEvaluationConfig(updates, input);
 
         Object preprocessing = input.get("preprocessing");
         if (preprocessing != null) {
@@ -309,25 +348,20 @@ public class MiningModelTool implements LlmTool {
         if (input.get("cv_folds") != null) { overrides.setCvFolds(((Number) input.get("cv_folds")).intValue()); hasOverrides = true; }
         if (input.get("test_size") != null) { overrides.setTestSize(((Number) input.get("test_size")).doubleValue()); hasOverrides = true; }
         if (input.get("temporal_column") != null) { overrides.setTemporalColumn((String) input.get("temporal_column")); hasOverrides = true; }
+        hasOverrides = applyEvaluationConfig(overrides, input) || hasOverrides;
         if (hasOverrides) miningService.updateModel(id, overrides);
 
-        MiningModel result = miningService.trainModel(id, "chat");
-        StringBuilder msg = new StringBuilder();
-        if (result.getStatus().equals(com.smartquery.common.ModelStatus.TRAINED)) {
-            msg.append("模型「").append(result.getName()).append("」训练完成！\n");
-            msg.append("指标: ").append(result.getMetrics()).append("\n");
-            if (result.getValidationMetrics() != null && !result.getValidationMetrics().isBlank()) {
-                msg.append("验证结果: ").append(result.getValidationMetrics()).append("\n");
-            }
-            if (result.getFeatureImportance() != null && !result.getFeatureImportance().isBlank()) {
-                msg.append("特征重要性: ").append(result.getFeatureImportance());
-            }
-        } else if (result.getStatus().equals(com.smartquery.common.ModelStatus.TRAINING)) {
-            msg.append("模型「").append(result.getName()).append("」正在训练中...");
-        } else {
-            msg.append("模型「").append(result.getName()).append("」训练失败。");
-        }
-        return ToolResult.ok(getName(), msg.toString(), System.currentTimeMillis() - start);
+        MiningService.TrainingSubmission submission = miningService.submitTraining(id, "chat");
+        StringBuilder msg = new StringBuilder("训练任务已提交，执行ID: ")
+            .append(submission.executionId())
+            .append("。可使用 monitor 查询实际训练阶段、百分比和结果；请勿重复提交 train。");
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("modelId", submission.modelId());
+        data.put("executionId", submission.executionId());
+        data.put("status", submission.status());
+        data.put("stage", submission.stage());
+        data.put("progressPercent", submission.progressPercent());
+        return ToolResult.ok(getName(), msg.toString(), System.currentTimeMillis() - start, List.of(data));
     }
 
     private ToolResult handlePublish(Map<String, Object> input, long start) {
@@ -613,14 +647,8 @@ public class MiningModelTool implements LlmTool {
         Long modelId = toLong(input.get("model_id"));
         if (modelId == null) return ToolResult.error(getName(), "需要 model_id", System.currentTimeMillis() - start);
 
-        MiningModel model = miningModelMapper.selectById(modelId);
-        if (model == null) return ToolResult.error(getName(), "模型不存在: " + modelId, System.currentTimeMillis() - start);
-
-        var wrapper = new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ModelExecution>()
-                .eq(ModelExecution::getModelId, modelId)
-                .orderByDesc(ModelExecution::getCreatedAt)
-                .last("LIMIT " + historyLimit);
-        List<ModelExecution> executions = modelExecutionMapper.selectList(wrapper);
+        MiningModel model = resourceAccess.requireModel(modelId);
+        List<ModelExecution> executions = resourceAccess.listModelExecutions(modelId, historyLimit);
 
         if (executions.isEmpty()) {
             return ToolResult.ok(getName(), "模型「" + model.getName() + "」暂无训练记录", System.currentTimeMillis() - start);
@@ -664,7 +692,86 @@ public class MiningModelTool implements LlmTool {
         return ToolResult.ok(getName(), sb.toString(), System.currentTimeMillis() - start);
     }
 
+    /**
+     * Lightweight polling endpoint for the agent. Training remains owned by the
+     * service; this action only exposes authorized model/execution state and does
+     * not create a second execution or bypass the model controller boundary.
+     */
+    private ToolResult handleMonitor(Map<String, Object> input, long start) {
+        Long modelId = toLong(input.get("model_id"));
+        if (modelId == null) {
+            return ToolResult.error(getName(), "需要 model_id", System.currentTimeMillis() - start);
+        }
+
+        MiningModel model = resourceAccess.requireModel(modelId);
+        Long executionId = toLong(input.get("execution_id"));
+        ModelExecution latest;
+        if (executionId != null) {
+            latest = resourceAccess.requireModelExecution(modelId, executionId);
+        } else {
+            List<ModelExecution> executions = resourceAccess.listModelExecutions(modelId, 1);
+            latest = executions.isEmpty() ? null : executions.get(0);
+        }
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("modelId", model.getId());
+        data.put("modelName", model.getName());
+        data.put("modelStatus", model.getStatus());
+        data.put("version", model.getVersion());
+        if (model.getPipelineId() != null) data.put("pipelineId", model.getPipelineId());
+        if (model.getLastRunAt() != null) data.put("lastRunAt", model.getLastRunAt().toString());
+        if (latest != null) {
+            data.put("executionId", latest.getId());
+            data.put("executionStatus", latest.getStatus());
+            data.put("stage", latest.getCurrentStage());
+            data.put("progressPercent", latest.getProgressPercent() == null ? 0 : latest.getProgressPercent());
+            if (latest.getProgressMessage() != null) data.put("progressMessage", latest.getProgressMessage());
+            if (latest.getTriggerType() != null) data.put("triggerType", latest.getTriggerType());
+            if (latest.getExecutionTimeMs() != null) data.put("executionTimeMs", latest.getExecutionTimeMs());
+            if (latest.getMetrics() != null) data.put("metrics", latest.getMetrics());
+            if (latest.getStartedAt() != null) data.put("startedAt", latest.getStartedAt().toString());
+            if (latest.getFinishedAt() != null) data.put("finishedAt", latest.getFinishedAt().toString());
+            if (latest.getArtifactPath() != null) data.put("artifactPath", latest.getArtifactPath());
+            if (latest.getArtifactSchemaVersion() != null) data.put("artifactSchemaVersion", latest.getArtifactSchemaVersion());
+            if (latest.getExecutionLog() != null && !latest.getExecutionLog().isBlank()) {
+                String log = latest.getExecutionLog();
+                data.put("logTail", log.length() > 2000 ? log.substring(log.length() - 2000) : log);
+            }
+        }
+
+        StringBuilder message = new StringBuilder("模型「").append(model.getName())
+            .append("」当前状态: ").append(model.getStatus());
+        if (latest != null) {
+            message.append("；最近执行 #").append(latest.getId())
+                .append(" 状态: ").append(latest.getStatus())
+                .append("，阶段: ").append(latest.getCurrentStage())
+                .append("，进度: ").append(latest.getProgressPercent() == null ? 0 : latest.getProgressPercent())
+                .append("%");
+        }
+        if (model.getPipelineId() != null) {
+            message.append("；可编辑流程ID: ").append(model.getPipelineId());
+        }
+        return ToolResult.ok(getName(), message.toString(),
+            System.currentTimeMillis() - start, List.of(data));
+    }
+
+    private ToolResult handleCancel(Map<String, Object> input, long start) {
+        Long modelId = toLong(input.get("model_id"));
+        Long executionId = toLong(input.get("execution_id"));
+        if (modelId == null || executionId == null) {
+            return ToolResult.error(getName(), "cancel 需要 model_id 和 execution_id",
+                System.currentTimeMillis() - start);
+        }
+        ModelExecution execution = miningService.cancelTraining(modelId, executionId);
+        return ToolResult.ok(getName(), "训练执行 #" + executionId + " 当前状态: " + execution.getStatus(),
+            System.currentTimeMillis() - start, List.of(Map.of(
+                "modelId", modelId,
+                "executionId", executionId,
+                "status", execution.getStatus())));
+    }
+
     private ToolResult handleCreateAlgorithm(Map<String, Object> input, long start) {
+        resourceAccess.requireAdmin();
         String algorithmId = getString(input, "algorithm_id", null);
         String name = getString(input, "name", null);
         String description = getString(input, "description", "");
@@ -871,11 +978,7 @@ public class MiningModelTool implements LlmTool {
         Long id = toLong(input.get("model_id"));
         if (id == null) return ToolResult.error(getName(), "需要 model_id", System.currentTimeMillis() - start);
 
-        MiningModel before = miningModelMapper.selectById(id);
-        if (before == null) return ToolResult.error(getName(), "模型不存在: " + id, System.currentTimeMillis() - start);
-        String beforeMetrics = before.getMetrics();
-        int beforeVersion = before.getVersion();
-
+        MiningModel before = resourceAccess.requireModel(id);
         // Auto-offline published model before retraining
         if (com.smartquery.common.ModelStatus.PUBLISHED.equals(before.getStatus())) {
             miningService.offlineModel(id);
@@ -904,6 +1007,7 @@ public class MiningModelTool implements LlmTool {
         if (input.get("cv_folds") != null) { updates.setCvFolds(((Number) input.get("cv_folds")).intValue()); hasUpdates = true; }
         if (input.get("test_size") != null) { updates.setTestSize(((Number) input.get("test_size")).doubleValue()); hasUpdates = true; }
         if (input.get("temporal_column") != null) { updates.setTemporalColumn((String) input.get("temporal_column")); hasUpdates = true; }
+        hasUpdates = applyEvaluationConfig(updates, input) || hasUpdates;
         if (input.get("preprocessing") != null) {
             try { updates.setPreprocessing(objectMapper.writeValueAsString(input.get("preprocessing"))); hasUpdates = true; }
             catch (Exception e) { log.warn("[MINING-TOOL] JSON serialization failed: {}", e.getMessage()); }
@@ -923,32 +1027,14 @@ public class MiningModelTool implements LlmTool {
 
         if (hasUpdates) miningService.updateModel(id, updates);
 
-        MiningModel result = miningService.trainModel(id, "chat");
-
-        StringBuilder msg = new StringBuilder();
-        msg.append("模型「").append(result.getName()).append("」重新训练完成 (v").append(beforeVersion).append(" → v").append(result.getVersion()).append(")\n\n");
-
-        if (beforeMetrics != null && result.getMetrics() != null) {
-            msg.append("**指标对比:**\n");
-            try {
-                Map<String, Object> bm = objectMapper.readValue(beforeMetrics, Map.class);
-                Map<String, Object> am = objectMapper.readValue(result.getMetrics(), Map.class);
-                msg.append("| 指标 | 旧值 | 新值 | 变化 |\n|---|---|---|---|\n");
-                for (String key : am.keySet()) {
-                    if (bm.containsKey(key)) {
-                        double bv = ((Number) bm.get(key)).doubleValue();
-                        double av = ((Number) am.get(key)).doubleValue();
-                        String arrow = av > bv + 0.001 ? "↑" : av < bv - 0.001 ? "↓" : "→";
-                        msg.append("| ").append(key).append(" | ").append(String.format("%.4f", bv))
-                           .append(" | ").append(String.format("%.4f", av)).append(" | ").append(arrow).append(" |\n");
-                    }
-                }
-            } catch (Exception e) { log.warn("[MINING-TOOL] JSON serialization failed: {}", e.getMessage()); }
-        }
-        msg.append("\n当前指标: ").append(result.getMetrics());
-
-        return ToolResult.ok(getName(), msg.toString(), System.currentTimeMillis() - start,
-            List.of(Map.of("modelId", result.getId(), "version", result.getVersion(), "metrics", result.getMetrics() != null ? result.getMetrics() : "")));
+        MiningService.TrainingSubmission submission = miningService.submitTraining(id, "chat");
+        return ToolResult.ok(getName(),
+            "模型配置和关联流程已同步，重新训练任务已提交。执行ID: "
+                + submission.executionId() + "；完成后使用 monitor/history 对比新旧指标。",
+            System.currentTimeMillis() - start,
+            List.of(Map.of("modelId", submission.modelId(),
+                "executionId", submission.executionId(),
+                "status", submission.status())));
     }
 
     @SuppressWarnings("unchecked")
@@ -959,8 +1045,7 @@ public class MiningModelTool implements LlmTool {
         Object gridObj = input.get("param_grid");
         if (gridObj == null) return ToolResult.error(getName(), "tune 必须提供 param_grid, 如 {\"n_estimators\": [50, 100, 200]}", System.currentTimeMillis() - start);
 
-        MiningModel baseModel = miningModelMapper.selectById(id);
-        if (baseModel == null) return ToolResult.error(getName(), "模型不存在: " + id, System.currentTimeMillis() - start);
+        MiningModel baseModel = resourceAccess.requireModel(id);
 
         Map<String, List<Object>> paramGrid;
         try {
@@ -1097,18 +1182,63 @@ public class MiningModelTool implements LlmTool {
         Long id = toLong(input.get("model_id"));
         if (id == null) return ToolResult.error(getName(), "需要 model_id", System.currentTimeMillis() - start);
 
-        MiningModel model = miningModelMapper.selectById(id);
-        if (model == null) return ToolResult.error(getName(), "模型不存在: " + id, System.currentTimeMillis() - start);
+        MiningModel model = resourceAccess.requireModel(id);
         if (model.getPipelineId() == null) return ToolResult.error(getName(), "模型没有关联的流程", System.currentTimeMillis() - start);
+        resourceAccess.requirePipeline(model.getPipelineId());
 
         miningService.syncModelToPipeline(model.getPipelineId(), model);
         miningService.syncPipelineToModel(model.getPipelineId());
 
-        MiningModel refreshed = miningModelMapper.selectById(id);
+        MiningModel refreshed = resourceAccess.requireModel(id);
         return ToolResult.ok(getName(), "模型与流程已同步",
             System.currentTimeMillis() - start,
             List.of(Map.of("modelId", refreshed.getId(), "pipelineId", refreshed.getPipelineId(),
                 "lastSyncedAt", refreshed.getLastSyncedAt() != null ? refreshed.getLastSyncedAt().toString() : "")));
+    }
+
+    private ToolResult handleGovernance(Map<String, Object> input, long start) {
+        Long id = toLong(input.get("model_id"));
+        if (id == null) return ToolResult.error(getName(), "需要 model_id", System.currentTimeMillis() - start);
+        MiningService.GovernanceReport report = miningService.governanceReport(id);
+        Map<String, Object> data = objectMapper.convertValue(report, Map.class);
+        String message = report.passed()
+            ? "模型已通过发布治理检查"
+            : "模型未通过发布治理检查: " + String.join("；", report.hardFailures());
+        return ToolResult.ok(getName(), message, System.currentTimeMillis() - start, List.of(data));
+    }
+
+    private ToolResult handleDriftCheck(Map<String, Object> input, long start) {
+        Long id = toLong(input.get("model_id"));
+        if (id == null) return ToolResult.error(getName(), "需要 model_id", System.currentTimeMillis() - start);
+        Map<String, Object> result = miningService.checkDrift(id,
+            getString(input, "input_table", null), getString(input, "input_filter", null));
+        return ToolResult.ok(getName(), "漂移检查完成，状态: " + result.get("drift_status"),
+            System.currentTimeMillis() - start, List.of(result));
+    }
+
+    private boolean applyEvaluationConfig(MiningModel model, Map<String, Object> input) {
+        boolean changed = false;
+        try {
+            if (input.get("group_columns") != null) {
+                model.setGroupColumns(objectMapper.writeValueAsString(input.get("group_columns")));
+                changed = true;
+            }
+            if (input.get("threshold_policy") != null) {
+                model.setThresholdPolicy(objectMapper.writeValueAsString(input.get("threshold_policy")));
+                changed = true;
+            }
+            if (input.get("governance_policy") != null) {
+                model.setGovernancePolicy(objectMapper.writeValueAsString(input.get("governance_policy")));
+                changed = true;
+            }
+        } catch (Exception e) {
+            throw new IllegalArgumentException("评估治理配置不是合法 JSON: " + e.getMessage(), e);
+        }
+        if (input.get("oos_table") != null) { model.setOosTable((String) input.get("oos_table")); changed = true; }
+        if (input.get("oos_filter") != null) { model.setOosFilter((String) input.get("oos_filter")); changed = true; }
+        if (input.get("positive_class") != null) { model.setPositiveClass(String.valueOf(input.get("positive_class"))); changed = true; }
+        if (input.get("calibration_method") != null) { model.setCalibrationMethod((String) input.get("calibration_method")); changed = true; }
+        return changed;
     }
 
     private Map<String, Object> parseJsonMap(String json) {

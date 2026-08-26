@@ -5,19 +5,17 @@ import com.smartquery.common.ModelStatus;
 import com.smartquery.common.UserContextHolder;
 import com.smartquery.datasource.DataSourceManager;
 import com.smartquery.entity.*;
-import com.smartquery.util.DbUrlUtil;
 import com.smartquery.logging.ConversationEventLogger;
 import com.smartquery.logging.DiagnosticsTimer;
 import com.smartquery.mapper.*;
-import com.smartquery.python.PythonExecutor;
 import com.smartquery.python.PythonResult;
+import com.smartquery.python.PythonSandbox;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.Executor;
@@ -68,13 +66,15 @@ public class MiningService {
     private final ModelExecutionMapper modelExecutionMapper;
     private final DataSourceMapper dataSourceMapper;
     private final PredictionResultMapper predictionResultMapper;
-    private final PythonExecutor pythonExecutor;
+    private final MiningRuntimeClient miningRuntimeClient;
     private final DataSourceManager dataSourceManager;
     private final AlgorithmService algorithmService;
     private final ObjectMapper objectMapper;
     private final MiningPredictionService predictionService;
     private final PipelineService pipelineService;
     private final ConversationEventLogger eventLogger;
+    private final ResourceAccessService resourceAccess;
+    private final TaskEventService taskEventService;
     private final Executor miningExecutor;
 
     public MiningService(
@@ -83,13 +83,15 @@ public class MiningService {
             ModelExecutionMapper modelExecutionMapper,
             DataSourceMapper dataSourceMapper,
             PredictionResultMapper predictionResultMapper,
-            PythonExecutor pythonExecutor,
+            MiningRuntimeClient miningRuntimeClient,
             DataSourceManager dataSourceManager,
             AlgorithmService algorithmService,
             ObjectMapper objectMapper,
             MiningPredictionService predictionService,
             PipelineService pipelineService,
             ConversationEventLogger eventLogger,
+            ResourceAccessService resourceAccess,
+            TaskEventService taskEventService,
             @Qualifier("miningExecutor") Executor miningExecutor
     ) {
         this.miningModelMapper = miningModelMapper;
@@ -97,13 +99,15 @@ public class MiningService {
         this.modelExecutionMapper = modelExecutionMapper;
         this.dataSourceMapper = dataSourceMapper;
         this.predictionResultMapper = predictionResultMapper;
-        this.pythonExecutor = pythonExecutor;
+        this.miningRuntimeClient = miningRuntimeClient;
         this.dataSourceManager = dataSourceManager;
         this.algorithmService = algorithmService;
         this.objectMapper = objectMapper;
         this.predictionService = predictionService;
         this.pipelineService = pipelineService;
         this.eventLogger = eventLogger;
+        this.resourceAccess = resourceAccess;
+        this.taskEventService = taskEventService;
         this.miningExecutor = miningExecutor;
     }
 
@@ -115,21 +119,26 @@ public class MiningService {
     // ======================== Model Lifecycle ========================
 
     public MiningModel createModel(MiningModel model) {
+        UserContextHolder.UserContext actor = UserContextHolder.require();
         if (model.getName() == null || model.getName().isBlank()) throw new IllegalArgumentException("模型名称不能为空");
         if (model.getDataSourceId() == null) throw new IllegalArgumentException("数据源不能为空");
+        if (model.getConversationId() != null) {
+            Conversation conversation = resourceAccess.requireConversation(model.getConversationId());
+            if (conversation.getDataSourceId() != null
+                    && !conversation.getDataSourceId().equals(model.getDataSourceId())) {
+                throw new com.smartquery.common.BusinessException(403, "模型数据源与会话绑定的数据源不一致");
+            }
+        }
         if (model.getSourceTable() != null && !model.getSourceTable().isBlank()) {
             com.smartquery.common.IdentifierValidator.validateTableName(model.getSourceTable());
         }
         if (model.getTargetColumn() != null && !model.getTargetColumn().isBlank()) {
             com.smartquery.common.IdentifierValidator.validateColumnName(model.getTargetColumn());
         }
-        // 注入归属：手动创建走当前登录用户；Pipeline 自动触发（无 user context）时留空，admin 可见
-        if (model.getUserId() == null) {
-            UserContextHolder.UserContext ctx = UserContextHolder.get();
-            if (ctx != null && ctx.userId() != null) {
-                model.setUserId(ctx.userId().toString());
-            }
-        }
+        // Request/tool callers may not choose an owner. Internal system calls
+        // without an actor may preserve an owner explicitly inherited from a
+        // pipeline/model; null remains reserved for legacy/system resources.
+        model.setUserId(actor.userId().toString());
         model.setStatus(ModelStatus.DRAFT);
         model.setVersion(1);
         model.setDeleted(0);
@@ -146,14 +155,22 @@ public class MiningService {
     }
 
     public MiningModel updateModel(Long id, MiningModel updates) {
-        MiningModel existing = miningModelMapper.selectById(id);
-        if (existing == null) throw new IllegalArgumentException("模型不存在: " + id);
+        MiningModel existing = resourceAccess.requireModel(id);
 
         if (updates.getName() != null) existing.setName(updates.getName());
         if (updates.getDescription() != null) existing.setDescription(updates.getDescription());
         if (updates.getAlgorithm() != null) existing.setAlgorithm(updates.getAlgorithm());
         if (updates.getHyperparameters() != null) existing.setHyperparameters(updates.getHyperparameters());
-        if (updates.getDataSourceId() != null) existing.setDataSourceId(updates.getDataSourceId());
+        if (updates.getDataSourceId() != null) {
+            if (existing.getConversationId() != null) {
+                Conversation conversation = resourceAccess.requireConversation(existing.getConversationId());
+                if (conversation.getDataSourceId() != null
+                        && !conversation.getDataSourceId().equals(updates.getDataSourceId())) {
+                    throw new com.smartquery.common.BusinessException(403, "模型数据源与会话绑定的数据源不一致");
+                }
+            }
+            existing.setDataSourceId(updates.getDataSourceId());
+        }
         if (updates.getSourceTable() != null) existing.setSourceTable(updates.getSourceTable());
         if (updates.getFeatureColumns() != null) existing.setFeatureColumns(normalizeToJsonArray(updates.getFeatureColumns()));
         if (updates.getTargetColumn() != null) existing.setTargetColumn(updates.getTargetColumn());
@@ -169,6 +186,13 @@ public class MiningService {
         if (updates.getCvFolds() != null) existing.setCvFolds(updates.getCvFolds());
         if (updates.getTestSize() != null) existing.setTestSize(updates.getTestSize());
         if (updates.getTemporalColumn() != null) existing.setTemporalColumn(updates.getTemporalColumn());
+        if (updates.getPositiveClass() != null) existing.setPositiveClass(updates.getPositiveClass());
+        if (updates.getGroupColumns() != null) existing.setGroupColumns(normalizeToJsonArray(updates.getGroupColumns()));
+        if (updates.getOosTable() != null) existing.setOosTable(updates.getOosTable());
+        if (updates.getOosFilter() != null) existing.setOosFilter(updates.getOosFilter());
+        if (updates.getCalibrationMethod() != null) existing.setCalibrationMethod(updates.getCalibrationMethod());
+        if (updates.getThresholdPolicy() != null) existing.setThresholdPolicy(updates.getThresholdPolicy());
+        if (updates.getGovernancePolicy() != null) existing.setGovernancePolicy(updates.getGovernancePolicy());
 
         // Recompute nextRunAt when schedule config changes
         if (Boolean.TRUE.equals(existing.getScheduleEnabled()) && existing.getScheduleCron() != null) {
@@ -191,8 +215,10 @@ public class MiningService {
     }
 
     public void deleteModel(Long id) {
-        MiningModel model = miningModelMapper.selectById(id);
-        if (model == null) throw new IllegalArgumentException("模型不存在: " + id);
+        MiningModel model = resourceAccess.requireModel(id);
+        if (ModelStatus.TRAINING.equals(model.getStatus())) {
+            throw new IllegalStateException("模型正在训练中，无法删除");
+        }
         if (ModelStatus.PUBLISHED.equals(model.getStatus())) {
             throw new IllegalStateException("已发布的模型不能删除，请先下线");
         }
@@ -203,8 +229,7 @@ public class MiningService {
     // ======================== Validation ========================
 
     public Map<String, Object> validateForTraining(Long modelId) {
-        MiningModel model = miningModelMapper.selectById(modelId);
-        if (model == null) throw new IllegalArgumentException("模型不存在: " + modelId);
+        MiningModel model = resourceAccess.requireModel(modelId);
 
         Map<String, Object> result = new LinkedHashMap<>();
         List<String> errors = new ArrayList<>();
@@ -329,21 +354,96 @@ public class MiningService {
     }
 
     public MiningModel trainModel(Long modelId, String triggerType, String inputFilter) {
-        MiningModel model = miningModelMapper.selectById(modelId);
-        if (model == null) throw new IllegalArgumentException("模型不存在: " + modelId);
+        resourceAccess.requireModel(modelId);
+        return trainModelInternal(modelId, triggerType, inputFilter, UserContextHolder.require());
+    }
 
-        if (ModelStatus.TRAINING.equals(model.getStatus())) {
+    /** Submit a user-triggered training run and return without waiting for Python. */
+    public TrainingSubmission submitTraining(Long modelId, String triggerType) {
+        MiningModel model = resourceAccess.requireModel(modelId);
+        UserContextHolder.UserContext actor = UserContextHolder.require();
+        validateTrainingConfiguration(model);
+        String previousStatus = model.getStatus();
+
+        int claimed = miningModelMapper.update(null,
+            new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<MiningModel>()
+                .eq(MiningModel::getId, modelId)
+                .ne(MiningModel::getStatus, ModelStatus.TRAINING)
+                .set(MiningModel::getStatus, ModelStatus.TRAINING));
+        if (claimed == 0) {
             throw new IllegalStateException("模型正在训练中，请等待完成: " + model.getName());
         }
 
-        // Guard: temporal validation mode requires temporal column
-        if ("temporal".equals(model.getValidationMode()) &&
-            (model.getTemporalColumn() == null || model.getTemporalColumn().isBlank())) {
-            throw new IllegalStateException("时间外验证模式(temporal)需要指定时间列(temporal_column)。请先设置 temporal_column，例如: update model set temporal_column = 'created_at'");
+        ModelExecution execution = new ModelExecution();
+        execution.setModelId(modelId);
+        execution.setTriggeredByUserId(actor.userId().toString());
+        execution.setTriggerType(triggerType == null ? "manual" : triggerType);
+        execution.setStatus(ModelStatus.EXEC_QUEUED);
+        execution.setHyperparameters(model.getHyperparameters());
+        execution.setProgressPercent(0);
+        execution.setCurrentStage("QUEUED");
+        execution.setProgressMessage("训练任务已进入队列");
+        execution.setCancelRequested(false);
+        modelExecutionMapper.insert(execution);
+        publishTrainingEvent(execution, "queued", Map.of(
+            "modelId", modelId,
+            "executionId", execution.getId(),
+            "status", execution.getStatus(),
+            "stage", execution.getCurrentStage(),
+            "progress", execution.getProgressPercent(),
+            "message", execution.getProgressMessage()), false);
+
+        try {
+            miningExecutor.execute(() -> {
+                try (UserContextHolder.Scope ignored = UserContextHolder.open(actor)) {
+                    try {
+                        trainModelInternal(modelId, execution.getTriggerType(), null, actor,
+                            execution.getId(), true);
+                    } catch (Exception error) {
+                        failPreparedExecution(modelId, execution.getId(), error);
+                    }
+                }
+            });
+        } catch (RuntimeException rejected) {
+            execution.setStatus(ModelStatus.FAILED);
+            execution.setCurrentStage("FAILED");
+            execution.setProgressMessage("训练线程池拒绝任务: " + rejected.getMessage());
+            execution.setFinishedAt(LocalDateTime.now());
+            modelExecutionMapper.updateById(execution);
+            restoreModelAfterCanceledTraining(modelId, previousStatus);
+            throw rejected;
         }
-        if (model.getSourceTable() == null || model.getSourceTable().isBlank()) {
-            throw new IllegalStateException("模型缺少源表(source_table)。请指定数据表，例如: source_table = 'loan'");
+        return new TrainingSubmission(modelId, execution.getId(), execution.getStatus(),
+            execution.getCurrentStage(), execution.getProgressPercent());
+    }
+
+    public record TrainingSubmission(Long modelId, Long executionId, String status,
+                                     String stage, Integer progressPercent) {}
+
+    /** Trusted scheduler entry point. It never inherits or fabricates a user identity. */
+    public MiningModel trainModelForSchedule(Long modelId, String inputFilter) {
+        MiningModel model = requireScheduledModel(modelId);
+        if (!ModelStatus.PUBLISHED.equals(model.getStatus()) && !ModelStatus.TRAINED.equals(model.getStatus())) {
+            throw new IllegalStateException("定时训练只允许已训练或已发布模型");
         }
+        return trainModelInternal(modelId, "schedule", inputFilter, null);
+    }
+
+    private MiningModel trainModelInternal(Long modelId, String triggerType, String inputFilter,
+                                           UserContextHolder.UserContext triggerActor) {
+        return trainModelInternal(modelId, triggerType, inputFilter, triggerActor, null, false);
+    }
+
+    private MiningModel trainModelInternal(Long modelId, String triggerType, String inputFilter,
+                                           UserContextHolder.UserContext triggerActor,
+                                           Long preparedExecutionId, boolean statusAlreadyClaimed) {
+        MiningModel model = miningModelMapper.selectById(modelId);
+        if (model == null) throw new IllegalArgumentException("模型不存在: " + modelId);
+
+        if (!statusAlreadyClaimed && ModelStatus.TRAINING.equals(model.getStatus())) {
+            throw new IllegalStateException("模型正在训练中，请等待完成: " + model.getName());
+        }
+        validateTrainingConfiguration(model);
 
         log.info("[MINING] Starting training for model '{}' (id={}, algo={}, type={})",
             model.getName(), modelId, model.getAlgorithm(), model.getModelType());
@@ -359,25 +459,72 @@ public class MiningService {
             throw new RuntimeException("训练队列已满，请稍后重试（当前最多 " + maxConcurrentTraining + " 个并发训练）");
         }
 
-        // DB-level atomic status check: only proceed if status is not TRAINING
-        int updated = miningModelMapper.update(null,
-            new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<MiningModel>()
-                .eq(MiningModel::getId, modelId)
-                .ne(MiningModel::getStatus, ModelStatus.TRAINING)
-                .set(MiningModel::getStatus, ModelStatus.TRAINING));
-        if (updated == 0) {
-            trainingSemaphore.release();
-            throw new IllegalStateException("模型正在训练中，请等待完成: " + model.getName());
+        if (!statusAlreadyClaimed) {
+            // DB-level atomic status check: only proceed if status is not TRAINING
+            int updated = miningModelMapper.update(null,
+                new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<MiningModel>()
+                    .eq(MiningModel::getId, modelId)
+                    .ne(MiningModel::getStatus, ModelStatus.TRAINING)
+                    .set(MiningModel::getStatus, ModelStatus.TRAINING));
+            if (updated == 0) {
+                trainingSemaphore.release();
+                throw new IllegalStateException("模型正在训练中，请等待完成: " + model.getName());
+            }
         }
         // Re-read after CAS to get latest field values
         model = miningModelMapper.selectById(modelId);
 
-        ModelExecution execution = new ModelExecution();
-        execution.setModelId(modelId);
-        execution.setTriggerType(triggerType != null ? triggerType : "manual");
-        execution.setStatus(ModelStatus.EXEC_RUNNING);
-        execution.setHyperparameters(model.getHyperparameters());
-        modelExecutionMapper.insert(execution);
+        ModelExecution execution = preparedExecutionId == null
+            ? new ModelExecution() : modelExecutionMapper.selectById(preparedExecutionId);
+        if (execution == null) {
+            trainingSemaphore.release();
+            throw new IllegalStateException("训练执行记录不存在: " + preparedExecutionId);
+        }
+        if (preparedExecutionId == null) {
+            execution.setModelId(modelId);
+            if (triggerActor != null && triggerActor.userId() != null) {
+                execution.setTriggeredByUserId(triggerActor.userId().toString());
+            }
+            execution.setTriggerType(triggerType != null ? triggerType : "manual");
+            execution.setHyperparameters(model.getHyperparameters());
+            execution.setCancelRequested(false);
+            execution.setStatus(ModelStatus.EXEC_RUNNING);
+            execution.setCurrentStage("STARTING");
+            execution.setProgressPercent(1);
+            execution.setProgressMessage("训练进程正在启动");
+            execution.setStartedAt(LocalDateTime.now());
+            modelExecutionMapper.insert(execution);
+        } else {
+            int executionClaimed = modelExecutionMapper.update(null,
+                new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<ModelExecution>()
+                    .eq(ModelExecution::getId, preparedExecutionId)
+                    .eq(ModelExecution::getStatus, ModelStatus.EXEC_QUEUED)
+                    .eq(ModelExecution::getCancelRequested, false)
+                    .set(ModelExecution::getStatus, ModelStatus.EXEC_RUNNING)
+                    .set(ModelExecution::getCurrentStage, "STARTING")
+                    .set(ModelExecution::getProgressPercent, 1)
+                    .set(ModelExecution::getProgressMessage, "训练进程正在启动")
+                    .set(ModelExecution::getStartedAt, LocalDateTime.now()));
+            if (executionClaimed == 0) {
+                execution = modelExecutionMapper.selectById(preparedExecutionId);
+                if (execution != null && Boolean.TRUE.equals(execution.getCancelRequested())) {
+                    markExecutionCanceled(execution, "训练在开始前已取消");
+                    restoreModelAfterCanceledTraining(modelId, null);
+                    trainingSemaphore.release();
+                    return miningModelMapper.selectById(modelId);
+                }
+                trainingSemaphore.release();
+                throw new IllegalStateException("训练执行状态已变化: " + preparedExecutionId);
+            }
+            execution = modelExecutionMapper.selectById(preparedExecutionId);
+        }
+        final Long activeExecutionId = execution.getId();
+        publishTrainingEvent(execution, "start", Map.of(
+            "modelId", modelId,
+            "executionId", activeExecutionId,
+            "model", model.getName(),
+            "stage", "STARTING",
+            "progress", 1), false);
 
         logMiningEvent(model, "mining_training_start", Map.of(
             "algorithm", model.getAlgorithm(), "modelType", model.getModelType(),
@@ -386,25 +533,72 @@ public class MiningService {
         ));
 
         try {
-            String pythonCode = buildTrainingScript(model, inputFilter);
+            if (isCancellationRequested(activeExecutionId)) {
+                markExecutionCanceled(execution, "训练在进程启动前已取消");
+                restoreModelAfterCanceledTraining(modelId, null);
+                return miningModelMapper.selectById(modelId);
+            }
             Long dsId = model.getDataSourceId();
-            PythonResult result = DiagnosticsTimer.timedSupply("mining.train", () -> pythonExecutor.execute(pythonCode, dsId, pythonTimeoutMs));
+            Map<String, Object> request = buildTrainingRequest(model, execution, inputFilter);
+            MiningRuntimeClient.RuntimeResult runtime = DiagnosticsTimer.timedSupply(
+                "mining.train",
+                () -> miningRuntimeClient.execute("train", request, dsId, pythonTimeoutMs,
+                    activeExecutionId,
+                    progress -> updateExecutionProgress(activeExecutionId, progress),
+                    line -> appendExecutionLog(activeExecutionId, line))
+            );
+            PythonResult result = runtime.process();
 
             execution.setExecutionTimeMs(result.executionTimeMs());
             execution.setExecutionLog(truncateLog(result.stdout(), logTruncation));
 
-            if (result.exitCode() == 0) {
-                Map<String, Object> parsed = parseTrainingOutput(result.stdout());
+            if (isCancellationRequested(execution.getId())) {
+                markExecutionCanceled(execution, "训练已由用户取消");
+                model.setStatus(restingStatus(model));
+                model.setTrainingLog("训练已取消");
+            } else if (runtime.successful()) {
+                Map<String, Object> parsed = runtime.payload();
+                if (!(parsed.get("metrics") instanceof Map<?, ?>)
+                        || parsed.get("model_path") == null) {
+                    throw new IllegalStateException("Python 训练结果缺少 metrics 或 model_path");
+                }
                 execution.setMetrics(toJson(parsed.get("metrics")));
                 execution.setStatus(ModelStatus.EXEC_SUCCESS);
+                execution.setCurrentStage("COMPLETED");
+                execution.setProgressPercent(100);
+                execution.setProgressMessage("训练完成");
+                execution.setFinishedAt(LocalDateTime.now());
+                execution.setArtifactPath(String.valueOf(parsed.get("model_path")));
+                if (parsed.get("artifact_sha256") != null) {
+                    execution.setArtifactSha256(String.valueOf(parsed.get("artifact_sha256")));
+                }
+                if (parsed.get("artifact_schema_version") instanceof Number schemaVersion) {
+                    execution.setArtifactSchemaVersion(schemaVersion.intValue());
+                }
 
                 model.setStatus(ModelStatus.TRAINED);
                 model.setVersion(model.getVersion() + 1);
                 model.setMetrics(toJson(parsed.get("metrics")));
                 model.setFeatureImportance(toJson(parsed.get("feature_importance")));
+                if (parsed.get("feature_columns") instanceof List<?>) {
+                    model.setFeatureColumns(toJson(parsed.get("feature_columns")));
+                }
                 model.setTrainingLog(truncateLog(result.stdout(), trainingLogTruncation));
                 if (parsed.get("model_path") != null) model.setModelPath(String.valueOf(parsed.get("model_path")));
+                model.setArtifactSha256(execution.getArtifactSha256());
+                model.setArtifactSchemaVersion(execution.getArtifactSchemaVersion());
                 if (parsed.get("validation") != null) model.setValidationMetrics(toJson(parsed.get("validation")));
+                if (parsed.get("monitoring_baseline") != null) {
+                    model.setMonitoringBaseline(toJson(parsed.get("monitoring_baseline")));
+                }
+                // Approval is bound to one trained artifact and is invalidated by retraining.
+                model.setEvaluationStatus("pending");
+                model.setApprovedByUserId(null);
+                model.setApprovedAt(null);
+                GovernanceReport governance = evaluateGovernance(model);
+                model.setEvaluationStatus(governance.passed() ? "evaluation_passed"
+                    : governance.qualityPassed() && governance.approvalRequired()
+                        ? "pending_approval" : "evaluation_failed");
 
                 if (model.getPipelineId() == null) {
                     MiningPipeline autoPipeline = createAutoPipeline(model);
@@ -422,8 +616,12 @@ public class MiningService {
                     "validation", parsed.get("validation") != null ? parsed.get("validation") : Map.of()
                 ));
             } else {
-                String errorDetail = result.stderr().isBlank() ? result.stdout() : result.stderr();
+                String errorDetail = runtime.errorMessage();
                 execution.setStatus(ModelStatus.FAILED);
+                execution.setCurrentStage("FAILED");
+                execution.setProgressPercent(100);
+                execution.setProgressMessage(truncateLog(errorDetail, errorSummaryTruncation));
+                execution.setFinishedAt(LocalDateTime.now());
                 execution.setExecutionLog(truncateLog(errorDetail, logTruncation));
                 model.setStatus(ModelStatus.FAILED);
                 model.setTrainingLog(truncateLog(errorDetail, trainingLogTruncation));
@@ -445,68 +643,368 @@ public class MiningService {
                     .set(MiningModel::getVersion, model.getVersion())
                     .set(MiningModel::getMetrics, model.getMetrics())
                     .set(MiningModel::getFeatureImportance, model.getFeatureImportance())
+                    .set(MiningModel::getFeatureColumns, model.getFeatureColumns())
                     .set(MiningModel::getModelPath, model.getModelPath())
+                    .set(MiningModel::getArtifactSha256, model.getArtifactSha256())
+                    .set(MiningModel::getArtifactSchemaVersion, model.getArtifactSchemaVersion())
                     .set(MiningModel::getTrainingLog, truncateLog(model.getTrainingLog(), trainingLogTruncation))
                     .set(MiningModel::getHyperparameters, model.getHyperparameters())
                     .set(MiningModel::getPreprocessing, model.getPreprocessing())
                     .set(MiningModel::getValidationMetrics, model.getValidationMetrics())
+                    .set(MiningModel::getEvaluationStatus, model.getEvaluationStatus())
+                    .set(MiningModel::getApprovedByUserId, model.getApprovedByUserId())
+                    .set(MiningModel::getApprovedAt, model.getApprovedAt())
+                    .set(MiningModel::getMonitoringBaseline, model.getMonitoringBaseline())
                     .set(MiningModel::getLastRunAt, model.getLastRunAt());
             if (model.getPipelineId() != null) {
                 updateWrapper.set(MiningModel::getPipelineId, model.getPipelineId());
             }
             miningModelMapper.update(null, updateWrapper);
             modelExecutionMapper.updateById(execution);
+            publishTerminalTrainingEvent(model, execution);
             return miningModelMapper.selectById(modelId);
         } catch (Exception e) {
             log.error("[MINING] Training exception for model {}: {}", modelId, e.getMessage(), e);
             logMiningError(model.getConversationId(), "training_failed", modelId, e.getMessage());
-            execution.setStatus(ModelStatus.FAILED);
-            execution.setExecutionLog(e.getMessage());
+            if (isCancellationRequested(execution.getId())) {
+                markExecutionCanceled(execution, "训练已由用户取消");
+            } else {
+                execution.setStatus(ModelStatus.FAILED);
+                execution.setCurrentStage("FAILED");
+                execution.setProgressPercent(100);
+                execution.setProgressMessage(truncateLog(e.getMessage(), errorSummaryTruncation));
+                execution.setExecutionLog(e.getMessage());
+                execution.setFinishedAt(LocalDateTime.now());
+            }
             modelExecutionMapper.updateById(execution);
             miningModelMapper.update(null,
                 new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<MiningModel>()
                     .eq(MiningModel::getId, modelId)
-                    .set(MiningModel::getStatus, ModelStatus.FAILED)
-                    .set(MiningModel::getTrainingLog, e.getMessage()));
+                    .set(MiningModel::getStatus, isCancellationRequested(execution.getId())
+                        ? restingStatus(model) : ModelStatus.FAILED)
+                    .set(MiningModel::getTrainingLog, isCancellationRequested(execution.getId())
+                        ? "训练已取消" : e.getMessage()));
+            publishTerminalTrainingEvent(model, execution);
             return miningModelMapper.selectById(modelId);
         } finally {
             trainingSemaphore.release();
         }
     }
 
+    public ModelExecution cancelTraining(Long modelId, Long executionId) {
+        ModelExecution execution = resourceAccess.requireModelExecution(modelId, executionId);
+        if (ModelStatus.EXEC_SUCCESS.equals(execution.getStatus())
+                || ModelStatus.FAILED.equals(execution.getStatus())
+                || ModelStatus.EXEC_CANCELED.equals(execution.getStatus())) {
+            return execution;
+        }
+        execution.setCancelRequested(true);
+        execution.setProgressMessage("已请求取消训练");
+        if (ModelStatus.EXEC_QUEUED.equals(execution.getStatus())
+                || "pending".equals(execution.getStatus())) {
+            markExecutionCanceled(execution, "训练在队列中被取消");
+            restoreModelAfterCanceledTraining(modelId, null);
+        } else {
+            modelExecutionMapper.updateById(execution);
+            for (int attempt = 0; attempt < 10; attempt++) {
+                if (miningRuntimeClient.cancel(executionId)) break;
+                try {
+                    TimeUnit.MILLISECONDS.sleep(100);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+        return modelExecutionMapper.selectById(executionId);
+    }
+
+    private void validateTrainingConfiguration(MiningModel model) {
+        if ("temporal".equals(model.getValidationMode())
+                && (model.getTemporalColumn() == null || model.getTemporalColumn().isBlank())) {
+            throw new IllegalStateException("时间外验证模式(temporal)需要指定时间列(temporal_column)");
+        }
+        if (model.getSourceTable() == null || model.getSourceTable().isBlank()) {
+            throw new IllegalStateException("模型缺少源表(source_table)");
+        }
+        if ("oos".equals(model.getValidationMode())
+                && (model.getOosTable() == null || model.getOosTable().isBlank())) {
+            throw new IllegalStateException("真正的 OOS 验证必须配置独立 oos_table，不能再从训练表随机切分");
+        }
+    }
+
+    private void updateExecutionProgress(Long executionId, MiningRuntimeClient.ProgressUpdate progress) {
+        modelExecutionMapper.update(null,
+            new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<ModelExecution>()
+                .eq(ModelExecution::getId, executionId)
+                .eq(ModelExecution::getStatus, ModelStatus.EXEC_RUNNING)
+                .set(ModelExecution::getCurrentStage, progress.stage())
+                .set(ModelExecution::getProgressPercent, progress.progressPercent())
+                .set(ModelExecution::getProgressMessage, progress.message()));
+        ModelExecution execution = modelExecutionMapper.selectById(executionId);
+        if (execution != null) {
+            publishTrainingEvent(execution, "progress", Map.of(
+                "executionId", executionId,
+                "status", ModelStatus.EXEC_RUNNING,
+                "stage", progress.stage(),
+                "progress", progress.progressPercent(),
+                "message", progress.message()), false);
+        }
+    }
+
+    private void appendExecutionLog(Long executionId, String line) {
+        if (line == null || line.isBlank()) return;
+        ModelExecution current = modelExecutionMapper.selectById(executionId);
+        if (current == null || !ModelStatus.EXEC_RUNNING.equals(current.getStatus())) return;
+        String existing = current.getExecutionLog() == null ? "" : current.getExecutionLog();
+        String updated = truncateLog(existing + line + "\n", logTruncation);
+        modelExecutionMapper.update(null,
+            new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<ModelExecution>()
+                .eq(ModelExecution::getId, executionId)
+                .eq(ModelExecution::getStatus, ModelStatus.EXEC_RUNNING)
+                .set(ModelExecution::getExecutionLog, updated));
+        publishTrainingEvent(current, "log", Map.of(
+            "executionId", executionId,
+            "line", line), false);
+    }
+
+    private boolean isCancellationRequested(Long executionId) {
+        ModelExecution current = executionId == null ? null : modelExecutionMapper.selectById(executionId);
+        return current != null && Boolean.TRUE.equals(current.getCancelRequested());
+    }
+
+    private void markExecutionCanceled(ModelExecution execution, String message) {
+        execution.setCancelRequested(true);
+        execution.setStatus(ModelStatus.EXEC_CANCELED);
+        execution.setCurrentStage("CANCELED");
+        execution.setProgressPercent(100);
+        execution.setProgressMessage(message);
+        execution.setFinishedAt(LocalDateTime.now());
+        modelExecutionMapper.updateById(execution);
+        publishTrainingEvent(execution, "canceled", Map.of(
+            "executionId", execution.getId(), "message", message, "progress", 100), true);
+    }
+
+    private String restingStatus(MiningModel model) {
+        return model != null && model.getModelPath() != null && !model.getModelPath().isBlank()
+            ? ModelStatus.TRAINED : ModelStatus.DRAFT;
+    }
+
+    private void restoreModelAfterCanceledTraining(Long modelId, String preferredStatus) {
+        MiningModel current = miningModelMapper.selectById(modelId);
+        if (current == null) return;
+        String status = preferredStatus != null && !ModelStatus.TRAINING.equals(preferredStatus)
+            ? preferredStatus : restingStatus(current);
+        miningModelMapper.update(null,
+            new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<MiningModel>()
+                .eq(MiningModel::getId, modelId)
+                .eq(MiningModel::getStatus, ModelStatus.TRAINING)
+                .set(MiningModel::getStatus, status));
+    }
+
+    private void failPreparedExecution(Long modelId, Long executionId, Exception error) {
+        ModelExecution execution = modelExecutionMapper.selectById(executionId);
+        if (execution == null || ModelStatus.EXEC_CANCELED.equals(execution.getStatus())) return;
+        execution.setStatus(ModelStatus.FAILED);
+        execution.setCurrentStage("FAILED");
+        execution.setProgressPercent(100);
+        execution.setProgressMessage(truncateLog(error.getMessage(), errorSummaryTruncation));
+        execution.setExecutionLog(error.getMessage());
+        execution.setFinishedAt(LocalDateTime.now());
+        modelExecutionMapper.updateById(execution);
+        miningModelMapper.update(null,
+            new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<MiningModel>()
+                .eq(MiningModel::getId, modelId)
+                .eq(MiningModel::getStatus, ModelStatus.TRAINING)
+                .set(MiningModel::getStatus, ModelStatus.FAILED)
+                .set(MiningModel::getTrainingLog, error.getMessage()));
+        publishTrainingEvent(execution, "failed", Map.of(
+            "executionId", executionId,
+            "message", error.getMessage() == null ? "训练失败" : error.getMessage(),
+            "progress", 100), true);
+    }
+
+    private void publishTerminalTrainingEvent(MiningModel model, ModelExecution execution) {
+        if (ModelStatus.EXEC_CANCELED.equals(execution.getStatus())) return;
+        if (ModelStatus.EXEC_SUCCESS.equals(execution.getStatus())) {
+            publishTrainingEvent(execution, "complete", Map.of(
+                "success", true,
+                "modelId", model.getId(),
+                "executionId", execution.getId(),
+                "progress", 100,
+                "metrics", parseJsonMap(execution.getMetrics())), true);
+        } else {
+            publishTrainingEvent(execution, "failed", Map.of(
+                "modelId", model.getId(),
+                "executionId", execution.getId(),
+                "progress", 100,
+                "message", execution.getProgressMessage() == null ? "模型训练失败" : execution.getProgressMessage()), true);
+        }
+        taskEventService.publish(TaskEventService.modelTopic(model.getId()), model.getUserId(),
+            "model_status", Map.of(
+                "type", "model_status",
+                "modelId", model.getId(),
+                "status", model.getStatus(),
+                "metrics", model.getMetrics() == null ? Map.of() : parseJsonMap(model.getMetrics())), true);
+    }
+
+    private void publishTrainingEvent(ModelExecution execution, String eventName,
+                                      Map<String, Object> payload, boolean terminal) {
+        if (execution == null || execution.getTriggeredByUserId() == null) return;
+        taskEventService.publish(TaskEventService.trainingTopic(execution.getId()),
+            execution.getTriggeredByUserId(), eventName, payload, terminal);
+    }
+
     // ======================== Lifecycle ========================
 
+    public GovernanceReport governanceReport(Long modelId) {
+        return evaluateGovernance(resourceAccess.requireModel(modelId));
+    }
+
+    public MiningModel approveEvaluation(Long modelId) {
+        if (!resourceAccess.isAdmin()) {
+            throw new com.smartquery.common.BusinessException(403, "仅管理员可审批模型发布");
+        }
+        MiningModel model = resourceAccess.requireModel(modelId);
+        GovernanceReport report = evaluateGovernance(model, false);
+        if (!report.qualityPassed()) {
+            throw new IllegalStateException("模型存在质量硬失败，不能审批: " + String.join("；", report.hardFailures()));
+        }
+        model.setEvaluationStatus("approved");
+        model.setApprovedByUserId(UserContextHolder.require().userId().toString());
+        model.setApprovedAt(LocalDateTime.now());
+        miningModelMapper.updateById(model);
+        return model;
+    }
+
+    private GovernanceReport evaluateGovernance(MiningModel model) {
+        return evaluateGovernance(model, true);
+    }
+
+    private GovernanceReport evaluateGovernance(MiningModel model, boolean checkApproval) {
+        Map<String, Object> metrics = parseJsonMap(model.getMetrics());
+        Map<String, Object> validation = parseJsonMap(model.getValidationMetrics());
+        Map<String, Object> policy = parseJsonMap(model.getGovernancePolicy());
+        List<String> failures = new ArrayList<>();
+        List<String> warnings = new ArrayList<>();
+        Map<String, Object> evaluated = new LinkedHashMap<>();
+
+        if (!Integer.valueOf(MiningRuntimeClient.ARTIFACT_SCHEMA_VERSION).equals(model.getArtifactSchemaVersion())) {
+            failures.add("模型制品版本不是当前 Pipeline 版本");
+        }
+        String mode = validationMode(model);
+        if (!Set.of("cv", "oos", "temporal").contains(mode)) {
+            failures.add("必须使用 cv、独立 OOS 或时间外验证，普通随机切分不能发布");
+        }
+        if ("oos".equals(mode) && !Boolean.TRUE.equals(validation.get("oos_independent"))) {
+            failures.add("OOS 不是独立数据快照");
+        }
+        if (Boolean.TRUE.equals(policy.get("requireGroupIsolation"))
+                && !Boolean.TRUE.equals(validation.get("group_isolation"))) {
+            failures.add("治理策略要求按实体分组隔离，但训练未配置 group_columns");
+        }
+        if ("temporal".equals(mode)) {
+            int windows = validation.get("rolling_windows") instanceof List<?> list ? list.size() : 0;
+            int minimumWindows = intPolicy(policy, "minTemporalWindows", 3);
+            evaluated.put("temporalWindows", windows);
+            if (windows < minimumWindows) failures.add("时间滚动回测窗口不足: " + windows + " < " + minimumWindows);
+        }
+        int testRows = number(validation.get("holdout_test_size"), 0).intValue();
+        int minimumTestRows = intPolicy(policy, "minTestRows", 20);
+        evaluated.put("testRows", testRows);
+        if (testRows < minimumTestRows) failures.add("独立测试样本量不足: " + testRows + " < " + minimumTestRows);
+
+        if (model.getModelType() != null && model.getModelType().contains("classification")) {
+            double balanced = number(metrics.get("test_balanced_accuracy"), -1).doubleValue();
+            double minBalanced = doublePolicy(policy, "minBalancedAccuracy", 0.55);
+            evaluated.put("balancedAccuracy", balanced);
+            if (balanced < minBalanced) failures.add(String.format(
+                "平衡准确率未达标: %.4f < %.4f", balanced, minBalanced));
+            if (metrics.get("risk_recall") instanceof Number riskRecall) {
+                double minRiskRecall = doublePolicy(policy, "minRiskRecall", 0.50);
+                evaluated.put("riskRecall", riskRecall.doubleValue());
+                if (riskRecall.doubleValue() < minRiskRecall) failures.add(String.format(
+                    "风险类召回率未达标: %.4f < %.4f", riskRecall.doubleValue(), minRiskRecall));
+            }
+            if (metrics.get("pr_auc") instanceof Number prAuc
+                    && metrics.get("positive_rate") instanceof Number positiveRate) {
+                double minPrAuc = doublePolicy(policy, "minPrAuc",
+                    positiveRate.doubleValue() + 0.02);
+                evaluated.put("prAuc", prAuc.doubleValue());
+                if (prAuc.doubleValue() < minPrAuc) failures.add(String.format(
+                    "PR-AUC 未明显超过随机基线: %.4f < %.4f", prAuc.doubleValue(), minPrAuc));
+            }
+            if (metrics.get("brier_score") instanceof Number brier) {
+                double maxBrier = doublePolicy(policy, "maxBrierScore", 0.25);
+                if (brier.doubleValue() > maxBrier) failures.add(String.format(
+                    "概率校准误差过高(Brier): %.4f > %.4f", brier.doubleValue(), maxBrier));
+            }
+        } else if (model.getModelType() != null && model.getModelType().contains("regression")) {
+            double r2 = number(metrics.get("test_r2"), -999).doubleValue();
+            double minR2 = doublePolicy(policy, "minR2", 0.0);
+            evaluated.put("testR2", r2);
+            if (r2 < minR2) failures.add(String.format("测试 R² 未达标: %.4f < %.4f", r2, minR2));
+        }
+
+        if (metrics.get("overfitting_gap") instanceof Number gap
+                && gap.doubleValue() > doublePolicy(policy, "maxOverfittingGap", overfittingGapThreshold)) {
+            failures.add(String.format("训练/测试差距过大: %.4f", gap.doubleValue()));
+        }
+        if (validation.get("cv_std") instanceof Number cvStd) {
+            double maxCvStd = doublePolicy(policy, "maxCvStd", 0.10);
+            evaluated.put("cvStd", cvStd.doubleValue());
+            if (cvStd.doubleValue() > maxCvStd) failures.add(String.format(
+                "交叉验证波动过大: %.4f > %.4f", cvStd.doubleValue(), maxCvStd));
+        }
+        if (model.getMonitoringBaseline() == null || model.getMonitoringBaseline().isBlank()) {
+            failures.add("缺少上线漂移监控基线");
+        }
+        if ("drift_critical".equals(model.getEvaluationStatus())) {
+            failures.add("最近一次漂移检查为 Critical，必须分析或重新训练后才能发布");
+        }
+
+        boolean requireApproval = Boolean.TRUE.equals(policy.get("requireApproval"));
+        boolean qualityPassed = failures.isEmpty();
+        if (checkApproval && requireApproval && !"approved".equals(model.getEvaluationStatus())) {
+            failures.add("治理策略要求管理员人工审批");
+        }
+        return new GovernanceReport(failures.isEmpty(), qualityPassed, requireApproval,
+            List.copyOf(failures), List.copyOf(warnings), Map.copyOf(evaluated));
+    }
+
+    private Number number(Object value, Number fallback) {
+        return value instanceof Number number ? number : fallback;
+    }
+
+    private double doublePolicy(Map<String, Object> policy, String key, double fallback) {
+        return number(policy.get(key), fallback).doubleValue();
+    }
+
+    private int intPolicy(Map<String, Object> policy, String key, int fallback) {
+        return number(policy.get(key), fallback).intValue();
+    }
+
+    public record GovernanceReport(boolean passed, boolean qualityPassed, boolean approvalRequired,
+                                   List<String> hardFailures, List<String> warnings,
+                                   Map<String, Object> evaluatedMetrics) {}
+
     public MiningModel publishModel(Long modelId, Map<String, Object> config) {
-        MiningModel model = miningModelMapper.selectById(modelId);
-        if (model == null) throw new IllegalArgumentException("模型不存在: " + modelId);
+        MiningModel model = resourceAccess.requireModel(modelId);
         if (!ModelStatus.TRAINED.equals(model.getStatus()) && !ModelStatus.OFFLINE.equals(model.getStatus())) {
             throw new IllegalStateException("只有训练完成或已下线的模型才能发布，当前状态: " + model.getStatus());
         }
         if (model.getModelPath() == null || model.getModelPath().isBlank()) {
             throw new IllegalStateException("模型文件不存在，请先训练模型");
         }
-
-        // 发布前验证检查: 必须经过样本外/时间外验证
-        if (model.getValidationMode() == null || "none".equals(model.getValidationMode())) {
-            throw new IllegalStateException(
-                "模型尚未进行样本外验证。请先设置验证模式 (validation_mode: cv/oos/temporal) 并重新训练，确保模型泛化能力。\n" +
-                "操作: 1) update 设置 validation_mode  2) train 重新训练  3) 确认指标达标后再发布");
+        if (!Integer.valueOf(MiningRuntimeClient.ARTIFACT_SCHEMA_VERSION)
+                .equals(model.getArtifactSchemaVersion())) {
+            throw new IllegalStateException("旧版模型制品不能发布，请先执行制品迁移（重新训练）");
         }
-        if (model.getMetrics() != null && !model.getMetrics().isBlank()) {
-            try {
-                com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
-                Map<String, Object> metrics = om.readValue(model.getMetrics(), Map.class);
-                Object overfittingGap = metrics.get("overfitting_gap");
-                boolean force = config != null && Boolean.TRUE.equals(config.get("force"));
-                if (overfittingGap instanceof Number gap && gap.doubleValue() > overfittingGapThreshold && !force) {
-                    throw new IllegalStateException(
-                        String.format("过拟合风险过高 (gap=%.2f > %.2f)。建议: 减少特征、增加正则化或收集更多数据后再发布。可传 force=true 强制发布。",
-                            gap.doubleValue(), overfittingGapThreshold));
-                }
-            } catch (IllegalStateException e) { throw e; }
-            catch (Exception e) {
-                log.warn("[MINING] Failed to parse metrics for overfitting check on model {}: {}", modelId, e.getMessage());
-            }
+
+        GovernanceReport governance = evaluateGovernance(model);
+        if (!governance.passed()) {
+            throw new IllegalStateException("模型发布治理检查失败（force 不能绕过硬门槛）: "
+                + String.join("；", governance.hardFailures()));
         }
 
         model.setStatus(ModelStatus.PUBLISHED);
@@ -572,8 +1070,7 @@ public class MiningService {
     }
 
     public MiningModel offlineModel(Long modelId) {
-        MiningModel model = miningModelMapper.selectById(modelId);
-        if (model == null) throw new IllegalArgumentException("模型不存在: " + modelId);
+        MiningModel model = resourceAccess.requireModel(modelId);
         int updated = miningModelMapper.update(null,
             new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<MiningModel>()
                 .eq(MiningModel::getId, modelId)
@@ -588,8 +1085,7 @@ public class MiningService {
     }
 
     public MiningModel updateHyperparameters(Long modelId, String hyperparametersJson) {
-        MiningModel model = miningModelMapper.selectById(modelId);
-        if (model == null) throw new IllegalArgumentException("模型不存在: " + modelId);
+        MiningModel model = resourceAccess.requireModel(modelId);
         if (ModelStatus.PUBLISHED.equals(model.getStatus())) {
             throw new IllegalStateException("已发布的模型不能修改超参数，请先下线");
         }
@@ -606,8 +1102,7 @@ public class MiningService {
     }
 
     public void updateSchedule(Long modelId, String cron, Boolean enabled, String mode) {
-        MiningModel model = miningModelMapper.selectById(modelId);
-        if (model == null) throw new IllegalArgumentException("模型不存在: " + modelId);
+        MiningModel model = resourceAccess.requireModel(modelId);
         if (cron != null) model.setScheduleCron(cron);
         if (enabled != null) model.setScheduleEnabled(enabled);
         if (mode != null) model.setScheduleMode(mode);
@@ -623,16 +1118,26 @@ public class MiningService {
     // ======================== Delegation ========================
 
     public Map<String, Object> predictModel(Long modelId, List<Map<String, Object>> inputRows, String saveTable) {
+        resourceAccess.requireModel(modelId);
         return predictionService.predict(modelId, inputRows, saveTable);
     }
 
     public Map<String, Object> batchPredict(Long modelId) {
+        resourceAccess.requireModel(modelId);
+        return predictionService.batchPredict(modelId);
+    }
+
+    /** Trusted scheduler entry point; prediction records remain attached to the owned model. */
+    public Map<String, Object> batchPredictForSchedule(Long modelId) {
+        MiningModel model = requireScheduledModel(modelId);
+        if (!ModelStatus.PUBLISHED.equals(model.getStatus())) {
+            throw new IllegalStateException("定时预测只允许已发布模型");
+        }
         return predictionService.batchPredict(modelId);
     }
 
     public Map<String, Object> batchPredictWithOverrides(Long modelId, String inputTable, String resultTable, String inputFilter) {
-        MiningModel model = miningModelMapper.selectById(modelId);
-        if (model == null) throw new IllegalArgumentException("模型不存在: " + modelId);
+        resourceAccess.requireModel(modelId);
         // Apply overrides to a transient copy — do NOT persist to model entity
         if (inputTable != null && !inputTable.isBlank()) {
             com.smartquery.common.IdentifierValidator.validateTableName(inputTable);
@@ -646,11 +1151,58 @@ public class MiningService {
         return predictionService.batchPredictWithConfig(modelId, inputTable, resultTable, inputFilter);
     }
 
+    public Map<String, Object> checkDrift(Long modelId, String inputTable, String inputFilter) {
+        MiningModel model = resourceAccess.requireModel(modelId);
+        return checkDriftInternal(model, inputTable, inputFilter);
+    }
+
+    /** Scheduler entry point; model ownership is preserved and no user is fabricated. */
+    public Map<String, Object> checkDriftForSchedule(Long modelId) {
+        MiningModel model = miningModelMapper.selectById(modelId);
+        if (model == null || !ModelStatus.PUBLISHED.equals(model.getStatus())) {
+            throw new IllegalStateException("漂移定时检查只允许已发布模型");
+        }
+        return checkDriftInternal(model, null, null);
+    }
+
+    private Map<String, Object> checkDriftInternal(MiningModel model, String inputTable, String inputFilter) {
+        if (!Integer.valueOf(MiningRuntimeClient.ARTIFACT_SCHEMA_VERSION).equals(model.getArtifactSchemaVersion())) {
+            throw new IllegalStateException("旧版模型没有监控基线，请重新训练");
+        }
+        String table = inputTable != null && !inputTable.isBlank()
+            ? inputTable : model.getPredictInputTable();
+        if (table == null || table.isBlank()) table = model.getSourceTable();
+        com.smartquery.common.IdentifierValidator.validateTableName(table);
+        String filter = inputFilter != null ? inputFilter : model.getPredictInputFilter();
+        if (filter != null && !filter.isBlank()) {
+            com.smartquery.common.IdentifierValidator.validateFilter(filter);
+        }
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("modelPath", model.getModelPath());
+        request.put("inputTable", table);
+        request.put("inputFilter", filter);
+        MiningRuntimeClient.RuntimeResult runtime = miningRuntimeClient.execute(
+            "drift", request, model.getDataSourceId(), pythonTimeoutMs);
+        if (!runtime.successful()) {
+            throw new IllegalStateException("漂移检查失败: " + runtime.errorMessage());
+        }
+        Map<String, Object> result = runtime.payload();
+        model.setLastDriftMetrics(toJson(result));
+        model.setLastDriftAt(LocalDateTime.now());
+        String driftStatus = String.valueOf(result.getOrDefault("drift_status", "unknown"));
+        if ("critical".equals(driftStatus)) model.setEvaluationStatus("drift_critical");
+        else if ("warning".equals(driftStatus)) model.setEvaluationStatus("drift_warning");
+        miningModelMapper.updateById(model);
+        return result;
+    }
+
     public List<PredictionResult> getPredictionResults(Long modelId, int limit) {
+        resourceAccess.requireModel(modelId);
         return predictionService.getPredictionResults(modelId, limit);
     }
 
     public Map<String, Object> executePipeline(Long pipelineId) {
+        resourceAccess.requirePipeline(pipelineId);
         return pipelineService.executePipeline(pipelineId);
     }
 
@@ -659,8 +1211,7 @@ public class MiningService {
     }
 
     public void syncPipelineToModel(Long pipelineId) {
-        MiningPipeline pipeline = miningPipelineMapper.selectById(pipelineId);
-        if (pipeline == null) return;
+        MiningPipeline pipeline = resourceAccess.requirePipeline(pipelineId);
 
         var wrapper = new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<MiningModel>()
             .eq(MiningModel::getPipelineId, pipelineId)
@@ -689,6 +1240,13 @@ public class MiningService {
             if (cfg.cvFold() > 0) model.setCvFolds(cfg.cvFold());
             if (cfg.testSize() > 0) model.setTestSize(cfg.testSize());
             if (cfg.temporalColumn() != null) model.setTemporalColumn(cfg.temporalColumn());
+            model.setGroupColumns(toJson(cfg.groupColumns()));
+            model.setOosTable(cfg.oosTable());
+            model.setOosFilter(cfg.oosFilter());
+            model.setPositiveClass(cfg.positiveClass());
+            model.setCalibrationMethod(cfg.calibrationMethod());
+            model.setThresholdPolicy(toJson(cfg.thresholdPolicy()));
+            model.setGovernancePolicy(toJson(cfg.governancePolicy()));
 
             LocalDateTime now = LocalDateTime.now();
             model.setLastSyncedAt(now);
@@ -702,15 +1260,8 @@ public class MiningService {
     }
 
     public MiningModel rollbackToExecution(Long modelId, Long executionId) {
-        MiningModel model = miningModelMapper.selectById(modelId);
-        if (model == null || Integer.valueOf(1).equals(model.getDeleted())) {
-            throw new IllegalArgumentException("模型不存在: " + modelId);
-        }
-
-        ModelExecution execution = modelExecutionMapper.selectById(executionId);
-        if (execution == null || !execution.getModelId().equals(modelId)) {
-            throw new IllegalArgumentException("执行记录不存在或不属于该模型: " + executionId);
-        }
+        MiningModel model = resourceAccess.requireModel(modelId);
+        ModelExecution execution = resourceAccess.requireModelExecution(modelId, executionId);
         if (!ModelStatus.EXEC_SUCCESS.equals(execution.getStatus())) {
             throw new IllegalArgumentException("只能回滚到成功的执行记录");
         }
@@ -721,6 +1272,12 @@ public class MiningService {
         if (execution.getMetrics() != null) {
             model.setMetrics(execution.getMetrics());
         }
+        if (execution.getArtifactPath() == null || execution.getArtifactSchemaVersion() == null) {
+            throw new IllegalArgumentException("该历史执行没有版本化 Pipeline 制品，不能安全回滚；请重新训练");
+        }
+        model.setModelPath(execution.getArtifactPath());
+        model.setArtifactSha256(execution.getArtifactSha256());
+        model.setArtifactSchemaVersion(execution.getArtifactSchemaVersion());
         model.setStatus(ModelStatus.TRAINED);
         miningModelMapper.updateById(model);
 
@@ -734,229 +1291,107 @@ public class MiningService {
         return model;
     }
 
-    // ======================== Training Script Generation ========================
+    // ======================== Versioned Training Protocol ========================
 
-    private String buildTrainingScript(MiningModel model, String inputFilter) {
+    private Map<String, Object> buildTrainingRequest(MiningModel model, ModelExecution execution,
+                                                     String inputFilter) {
         com.smartquery.common.IdentifierValidator.validateTableName(model.getSourceTable());
-        if (model.getTargetColumn() != null) com.smartquery.common.IdentifierValidator.validateColumnName(model.getTargetColumn());
-        if (model.getTemporalColumn() != null) com.smartquery.common.IdentifierValidator.validateColumnName(model.getTemporalColumn());
-
-        DataSource ds = dataSourceMapper.selectById(model.getDataSourceId());
-        String dbUrl = ds != null ? DbUrlUtil.buildSqlalchemyUrl(ds) : "";
+        if (model.getTargetColumn() != null && !model.getTargetColumn().isBlank()) {
+            com.smartquery.common.IdentifierValidator.validateColumnName(model.getTargetColumn());
+        }
+        if (model.getTemporalColumn() != null && !model.getTemporalColumn().isBlank()) {
+            com.smartquery.common.IdentifierValidator.validateColumnName(model.getTemporalColumn());
+        }
+        if (model.getOosTable() != null && !model.getOosTable().isBlank()) {
+            com.smartquery.common.IdentifierValidator.validateTableName(model.getOosTable());
+        }
+        if (model.getOosFilter() != null && !model.getOosFilter().isBlank()) {
+            com.smartquery.common.IdentifierValidator.validateFilter(model.getOosFilter());
+        }
+        List<String> groupColumns = parseJsonList(model.getGroupColumns());
+        groupColumns.forEach(com.smartquery.common.IdentifierValidator::validateColumnName);
 
         String resolvedFilter = inputFilter;
-        if (resolvedFilter == null && model.getPredictInputFilter() != null && !model.getPredictInputFilter().isBlank()) {
+        if ((resolvedFilter == null || resolvedFilter.isBlank())
+                && model.getPredictInputFilter() != null && !model.getPredictInputFilter().isBlank()) {
             resolvedFilter = model.getPredictInputFilter();
         }
-
-        StringBuilder sb = new StringBuilder();
-        sb.append("import pandas as pd\nimport numpy as np\nimport json\nimport os\nimport warnings\nwarnings.filterwarnings('ignore', category=FutureWarning)\nfrom sqlalchemy import create_engine\nimport joblib\n\n");
-        sb.append("engine = create_engine('").append(dbUrl).append("')\n");
-        String sqlQuery = "SELECT * FROM `" + model.getSourceTable() + "`";
+        resolvedFilter = resolveFilterVariables(resolvedFilter);
         if (resolvedFilter != null && !resolvedFilter.isBlank()) {
             com.smartquery.common.IdentifierValidator.validateFilter(resolvedFilter);
-            String resolved = resolvedFilter.replace("${etl_date}", java.time.LocalDate.now().toString());
-            sqlQuery += " WHERE " + resolved;
         }
-        sb.append("df = pd.read_sql('").append(sqlQuery).append("', engine)\n");
-        sb.append("print(f'[INFO] Loaded {len(df)} rows, {len(df.columns)} columns')\n\n");
 
-        sb.append("preprocessing = ").append(safeJsonEmbed(model.getPreprocessing())).append("\n");
-        sb.append("_hm = preprocessing.get('handleMissing', 'drop')\n");
-        sb.append("_col_strats = preprocessing.get('columnStrategies', {})\n");
-        sb.append("if _col_strats:\n");
-        sb.append("    for _col, _strat in _col_strats.items():\n");
-        sb.append("        if _strat == 'inherit' or _strat == 'none' or _col not in df.columns: continue\n");
-        sb.append("        if _strat == 'drop': df = df.dropna(subset=[_col])\n");
-        sb.append("        elif _strat == 'fill_mean':\n");
-        sb.append("            if df[_col].dtype in ['float64','int64','int32']: df[_col] = df[_col].fillna(df[_col].mean())\n");
-        sb.append("        elif _strat == 'fill_median':\n");
-        sb.append("            if df[_col].dtype in ['float64','int64','int32']: df[_col] = df[_col].fillna(df[_col].median())\n");
-        sb.append("        elif _strat == 'fill_mode':\n");
-        sb.append("            _m = df[_col].mode(); df[_col] = df[_col].fillna(_m.iloc[0] if len(_m) > 0 else None)\n");
-        sb.append("    _exc = set(_col_strats.keys())\n");
-        sb.append("    if _hm == 'drop':\n");
-        sb.append("        for c in [c for c in df.columns if c not in _exc and df[c].isnull().any()]: df = df.dropna(subset=[c])\n");
-        sb.append("    elif _hm == 'fill_mean':\n");
-        sb.append("        for c in df.columns:\n");
-        sb.append("            if c not in _exc and df[c].isnull().any():\n");
-        sb.append("                if df[c].dtype in ['float64','int64','int32']: df[c] = df[c].fillna(df[c].mean())\n");
-        sb.append("                else: df[c] = df[c].fillna(df[c].mode().iloc[0] if len(df[c].mode()) > 0 else 'unknown')\n");
-        sb.append("    elif _hm == 'fill_median':\n");
-        sb.append("        for c in df.columns:\n");
-        sb.append("            if c not in _exc and df[c].isnull().any():\n");
-        sb.append("                if df[c].dtype in ['float64','int64','int32']: df[c] = df[c].fillna(df[c].median())\n");
-        sb.append("                else: df[c] = df[c].fillna(df[c].mode().iloc[0] if len(df[c].mode()) > 0 else 'unknown')\n");
-        sb.append("    df = df.dropna()\n");
-        sb.append("else:\n");
-        sb.append("    if _hm == 'drop': df = df.dropna()\n");
-        sb.append("    elif _hm == 'fill_mean':\n");
-        sb.append("        for c in df.select_dtypes(include=['number']).columns: df[c] = df[c].fillna(df[c].mean())\n");
-        sb.append("        df = df.dropna()\n");
-        sb.append("    elif _hm == 'fill_median':\n");
-        sb.append("        for c in df.select_dtypes(include=['number']).columns: df[c] = df[c].fillna(df[c].median())\n");
-        sb.append("        df = df.dropna()\n");
-        sb.append("print(f'[INFO] After handleMissing({_hm}): {len(df)} rows')\n\n");
-
-        sb.append("_fc_raw = ").append(model.getFeatureColumns()).append("\nif isinstance(_fc_raw, str): feature_cols = [c.strip() for c in _fc_raw.split(',') if c.strip()]\nelse: feature_cols = list(_fc_raw)\n");
-        sb.append("X = df[feature_cols].copy()\n");
-        if (model.getTargetColumn() != null && !model.getTargetColumn().isBlank()) {
-            sb.append("y = df['").append(model.getTargetColumn()).append("']\n_y_le = None\n");
-            sb.append("if y.dtype == 'object':\n    from sklearn.preprocessing import LabelEncoder\n    _y_le = LabelEncoder(); y = pd.Series(_y_le.fit_transform(y.astype(str)), index=y.index)\n    print(f'[INFO] Encoded target column with {len(_y_le.classes_)} classes: {list(_y_le.classes_)}')\n");
-        } else {
-            sb.append("y = None\n");
+        Algorithm algorithm = algorithmService.getByAlgorithmId(model.getAlgorithm());
+        if (algorithm == null || algorithm.getPythonCodeTemplate() == null
+                || algorithm.getPythonCodeTemplate().isBlank()) {
+            throw new IllegalStateException("算法配置缺失: " + model.getAlgorithm());
         }
-        sb.append("\n");
+        PythonSandbox.validate(algorithm.getPythonCodeTemplate());
 
-        sb.append("_enc = preprocessing.get('encoding', 'label')\n_dt_cols = X.select_dtypes(include=['datetime', 'datetimetz']).columns.tolist()\n");
-        sb.append("if _dt_cols:\n    for c in _dt_cols: X[c] = pd.to_numeric(X[c].astype('int64'), errors='coerce')\n    print(f'[INFO] Converted datetime columns: {_dt_cols}')\n");
-        sb.append("cat_cols = X.select_dtypes(include=['object']).columns.tolist()\n_encoders = {}\nif cat_cols:\n");
-        sb.append("    if _enc == 'onehot': X = pd.get_dummies(X, columns=cat_cols); _encoders['_onehot_columns'] = list(X.columns)\n");
-        sb.append("    else:\n        from sklearn.preprocessing import LabelEncoder\n        for c in cat_cols: _le = LabelEncoder(); X[c] = _le.fit_transform(X[c].astype(str)); _encoders[c] = _le\n\n");
+        int nextVersion = model.getVersion() == null ? 1 : model.getVersion() + 1;
+        String artifactName = "model_" + model.getId() + "_v" + nextVersion
+            + "_execution_" + execution.getId() + ".joblib";
 
-        sb.append("_scaler = None\n_sc = preprocessing.get('scaling', 'none')\nnum_cols = X.select_dtypes(include=['number']).columns.tolist()\n");
-        sb.append("if _sc == 'standard' and num_cols:\n    from sklearn.preprocessing import StandardScaler\n    _scaler = StandardScaler(); X[num_cols] = X[num_cols].astype(float); X[num_cols] = _scaler.fit_transform(X[num_cols])\n");
-        sb.append("elif _sc == 'minmax' and num_cols:\n    from sklearn.preprocessing import MinMaxScaler\n    _scaler = MinMaxScaler(); X[num_cols] = X[num_cols].astype(float); X[num_cols] = _scaler.fit_transform(X[num_cols])\n\n");
+        Map<String, Object> validation = new LinkedHashMap<>();
+        validation.put("mode", validationMode(model));
+        validation.put("cvFolds", model.getCvFolds() != null ? model.getCvFolds() : 5);
+        validation.put("testSize", model.getTestSize() != null ? model.getTestSize() : 0.2);
+        validation.put("temporalColumn", model.getTemporalColumn());
+        validation.put("groupColumns", groupColumns);
+        validation.put("oosTable", model.getOosTable());
+        validation.put("oosFilter", model.getOosFilter());
+        validation.put("randomState", randomState);
 
-        // Feature transforms (log, binning, polynomial, etc.)
-        sb.append("_transforms = preprocessing.get('transforms', [])\n");
-        sb.append("for _t in _transforms:\n");
-        sb.append("    _ttype = _t.get('type', '')\n");
-        sb.append("    _tcols = [c for c in _t.get('columns', []) if c in X.columns]\n");
-        sb.append("    if not _tcols: continue\n");
-        sb.append("    if _ttype == 'log':\n");
-        sb.append("        for c in _tcols: X[c] = np.log1p(X[c].clip(lower=0))\n");
-        sb.append("        print(f'[INFO] Applied log transform to {_tcols}')\n");
-        sb.append("    elif _ttype == 'binning':\n");
-        sb.append("        _bins = _t.get('bins', 5)\n");
-        sb.append("        for c in _tcols: X[c] = pd.cut(X[c], bins=_bins, labels=False, duplicates='drop')\n");
-        sb.append("        print(f'[INFO] Applied binning ({_bins} bins) to {_tcols}')\n");
-        sb.append("    elif _ttype == 'polynomial':\n");
-        sb.append("        from sklearn.preprocessing import PolynomialFeatures\n");
-        sb.append("        _deg = _t.get('degree', 2)\n");
-        sb.append("        _pf = PolynomialFeatures(degree=_deg, include_bias=False)\n");
-        sb.append("        _pf_data = _pf.fit_transform(X[_tcols].fillna(0))\n");
-        sb.append("        _pf_names = [f'{c}_poly{i}' for i, c in enumerate(_pf.get_feature_names_out(_tcols))]\n");
-        sb.append("        X = X.drop(columns=_tcols)\n");
-        sb.append("        for i, n in enumerate(_pf_names): X[n] = _pf_data[:, i]\n");
-        sb.append("        print(f'[INFO] Applied polynomial (degree={_deg}) to {_tcols}, generated {len(_pf_names)} features')\n");
-        sb.append("    elif _ttype == 'date_extract':\n");
-        sb.append("        for c in _tcols:\n");
-        sb.append("            _ds = pd.to_datetime(df[c], errors='coerce')\n");
-        sb.append("            X[f'{c}_year'] = _ds.dt.year\n");
-        sb.append("            X[f'{c}_month'] = _ds.dt.month\n");
-        sb.append("            X[f'{c}_day'] = _ds.dt.day\n");
-        sb.append("            X[f'{c}_dow'] = _ds.dt.dayofweek\n");
-        sb.append("            X = X.drop(columns=[c])\n");
-        sb.append("        print(f'[INFO] Extracted date features from {_tcols}')\n");
-        sb.append("    elif _ttype == 'interaction':\n");
-        sb.append("        import itertools\n");
-        sb.append("        for c1, c2 in itertools.combinations(_tcols, 2):\n");
-        sb.append("            X[f'{c1}_x_{c2}'] = X[c1].fillna(0) * X[c2].fillna(0)\n");
-        sb.append("        print(f'[INFO] Created interaction features from {_tcols}')\n");
-        sb.append("    elif _ttype == 'target_encode' and y is not None:\n");
-        sb.append("        for c in _tcols:\n");
-        sb.append("            _te_map = y.groupby(X[c]).mean()\n");
-        sb.append("            X[c] = X[c].map(_te_map).fillna(y.mean())\n");
-        sb.append("        print(f'[INFO] Applied target encoding to {_tcols}')\n");
-        sb.append("    elif _ttype == 'frequency_encode':\n");
-        sb.append("        for c in _tcols:\n");
-        sb.append("            _freq = X[c].value_counts(normalize=True)\n");
-        sb.append("            X[c] = X[c].map(_freq).fillna(0)\n");
-        sb.append("        print(f'[INFO] Applied frequency encoding to {_tcols}')\n");
-        sb.append("\n");
-
-        String hyperparams = model.getHyperparameters();
-        if (hyperparams == null || "null".equals(hyperparams) || hyperparams.isBlank()) hyperparams = "{}";
-        sb.append("params = ").append(safeJsonEmbed(hyperparams)).append("\n_model_type = '").append(model.getModelType()).append("'\n\n");
-        sb.append(buildAlgorithmBlock(model.getAlgorithm()));
-
-        sb.append("\nfrom sklearn.model_selection import train_test_split, cross_val_score\n");
-        sb.append("_val_mode = '").append(validationMode(model)).append("'\n");
-        sb.append("_cv_folds = ").append(model.getCvFolds() != null ? model.getCvFolds() : 5).append("\n");
-        sb.append("_test_size = ").append(model.getTestSize() != null ? model.getTestSize() : 0.2).append("\n\n");
-
-        sb.append("if y is not None:\n");
-        // Temporal validation: sort by time column first, then split sequentially
-        if ("temporal".equals(validationMode(model)) && model.getTemporalColumn() != null && !model.getTemporalColumn().isBlank()) {
-            sb.append("    _tcol = '").append(model.getTemporalColumn()).append("'\n");
-            sb.append("    _sort_idx = df.sort_values(_tcol).index\n");
-            sb.append("    X = X.loc[_sort_idx].reset_index(drop=True)\n    y = y.loc[_sort_idx].reset_index(drop=True)\n");
-            sb.append("    _split_idx = int(len(X) * (1 - _test_size))\n    X_train, X_test = X.iloc[:_split_idx], X.iloc[_split_idx:]\n    y_train, y_test = y.iloc[:_split_idx], y.iloc[_split_idx:]\n");
-            sb.append("    print(f'[INFO] Temporal split: train={len(X_train)}, test={len(X_test)}, sorted by {_tcol}')\n");
-        } else {
-            sb.append("    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=_test_size, random_state=").append(randomState).append(")\n");
-        }
-        sb.append("else:\n    X_train = X; X_test = None; y_train = None; y_test = None\n\n");
-        sb.append("clf.fit(X_train, y_train if y is not None else X_train)\n\n");
-
-        sb.append("import sklearn.metrics as metrics\nresult = {}\nif y_test is not None:\n    y_pred = clf.predict(X_test)\n");
-        sb.append("    y_train_pred = clf.predict(X_train)\n");
-        sb.append("    if 'classification' in '").append(model.getModelType()).append("':\n");
-        sb.append("        result['test_accuracy'] = round(metrics.accuracy_score(y_test, y_pred), 4)\n        result['test_precision'] = round(metrics.precision_score(y_test, y_pred, average='weighted', zero_division=0), 4)\n");
-        sb.append("        result['test_recall'] = round(metrics.recall_score(y_test, y_pred, average='weighted', zero_division=0), 4)\n        result['test_f1'] = round(metrics.f1_score(y_test, y_pred, average='weighted', zero_division=0), 4)\n");
-        sb.append("        result['train_accuracy'] = round(metrics.accuracy_score(y_train, y_train_pred), 4)\n");
-        sb.append("        _gap = round(abs(result['train_accuracy'] - result['test_accuracy']), 4)\n        result['overfitting_gap'] = _gap\n");
-        sb.append("        if _gap > " + overfittingGapThreshold + ": result['overfitting_warning'] = f'训练精度({result[\"train_accuracy\"]})与测试精度({result[\"test_accuracy\"]})差值{_gap}>" + overfittingGapThreshold + "，可能过拟合'\n");
-        sb.append("        try:\n            _cm = metrics.confusion_matrix(y_test, y_pred)\n            result['confusion_matrix'] = _cm.tolist()\n");
-        sb.append("            _cls = sorted(set(list(y_test.astype(str)) + list(y_pred.astype(str))))\n            result['class_labels'] = _cls\n        except: pass\n");
-        sb.append("    else:\n");
-        sb.append("        result['test_mse'] = round(metrics.mean_squared_error(y_test, y_pred), 4)\n        result['test_rmse'] = round(np.sqrt(metrics.mean_squared_error(y_test, y_pred)), 4)\n        result['test_r2'] = round(metrics.r2_score(y_test, y_pred), 4)\n");
-        sb.append("        result['test_mae'] = round(metrics.mean_absolute_error(y_test, y_pred), 4)\n");
-        sb.append("        result['train_r2'] = round(metrics.r2_score(y_train, y_train_pred), 4)\n");
-        sb.append("        _gap = round(abs(result['train_r2'] - result['test_r2']), 4)\n        result['overfitting_gap'] = _gap\n");
-        sb.append("        if _gap > " + overfittingGapThreshold + ": result['overfitting_warning'] = f'训练R²({result[\"train_r2\"]})与测试R²({result[\"test_r2\"]})差值{_gap}>" + overfittingGapThreshold + "，可能过拟合'\n");
-        sb.append("else:\n    result['inertia'] = getattr(clf, 'inertia_', None)\n    _labels = getattr(clf, 'labels_', clf.predict(X)) if hasattr(clf, 'predict') else getattr(clf, 'labels_', None)\n");
-        sb.append("    if _labels is not None:\n        result['n_clusters'] = len(set(_labels))\n        _uk, _uv = np.unique(_labels, return_counts=True)\n        result['cluster_sizes'] = {int(k): int(v) for k, v in zip(_uk, _uv)}\n");
-        sb.append("        try: result['silhouette_score'] = round(float(metrics.silhouette_score(X, _labels, sample_size=min(5000, len(X)))), 4)\n        except: pass\n\n");
-
-        // Sample size warning
-        sb.append("if len(df) < 100: result['sample_warning'] = f'样本量仅{len(df)}行，模型结果可能不可靠，建议至少200行以上'\n");
-        sb.append("if y is not None and 'classification' in '").append(model.getModelType()).append("':\n");
-        sb.append("    _counts = y.value_counts()\n    if len(_counts) >= 2:\n        _ratio = _counts.min() / _counts.max()\n");
-        sb.append("        if _ratio < 0.1: result['imbalance_warning'] = f'类别不平衡比为{round(_ratio,3)}，少数类仅{_counts.min()}条，建议增加数据或使用class_weight参数'\n\n");
-
-        sb.append("val_result = {}\nif _val_mode == 'cv' and y is not None:\n");
-        sb.append("    _cv_scoring = 'f1_weighted' if 'classification' in '").append(model.getModelType()).append("' else 'r2'\n");
-        sb.append("    try:\n");
-        sb.append("        from sklearn.model_selection import StratifiedKFold, KFold\n");
-        sb.append("        _cv = StratifiedKFold(n_splits=_cv_folds, shuffle=True, random_state=").append(randomState).append(") if 'classification' in '").append(model.getModelType()).append("' else KFold(n_splits=_cv_folds, shuffle=True, random_state=").append(randomState).append(")\n");
-        sb.append("        _cv_scores = cross_val_score(clf.__class__(**params) if params else clf.__class__(), X, y, cv=_cv, scoring=_cv_scoring)\n");
-        sb.append("        val_result['cv_mean'] = round(float(_cv_scores.mean()), 4)\n        val_result['cv_std'] = round(float(_cv_scores.std()), 4)\n        val_result['cv_folds'] = _cv_folds\n");
-        sb.append("    except Exception as _e: val_result['cv_error'] = str(_e)\n");
-        sb.append("elif _val_mode == 'oos' and y is not None:\n");
-        sb.append("    _cv_scoring = 'f1_weighted' if 'classification' in '").append(model.getModelType()).append("' else 'r2'\n");
-        sb.append("    try:\n");
-        sb.append("        from sklearn.model_selection import StratifiedKFold, KFold\n");
-        sb.append("        _cv = StratifiedKFold(n_splits=_cv_folds, shuffle=True, random_state=").append(randomState).append(") if 'classification' in '").append(model.getModelType()).append("' else KFold(n_splits=_cv_folds, shuffle=True, random_state=").append(randomState).append(")\n");
-        sb.append("        _cv_scores = cross_val_score(clf.__class__(**params) if params else clf.__class__(), X_train, y_train, cv=_cv, scoring=_cv_scoring)\n");
-        sb.append("        val_result['cv_mean'] = round(float(_cv_scores.mean()), 4)\n        val_result['cv_std'] = round(float(_cv_scores.std()), 4)\n        val_result['cv_folds'] = _cv_folds\n");
-        sb.append("        val_result['oos_train_size'] = len(X_train)\n        val_result['oos_test_size'] = len(X_test)\n");
-        sb.append("        val_result['oos_test_accuracy'] = result.get('test_accuracy')\n        val_result['oos_test_f1'] = result.get('test_f1')\n");
-        sb.append("        val_result['oos_test_r2'] = result.get('test_r2')\n        val_result['oos_overfitting_gap'] = result.get('overfitting_gap')\n");
-        sb.append("        if result.get('overfitting_warning'): val_result['oos_overfitting_warning'] = result['overfitting_warning']\n");
-        sb.append("    except Exception as _e: val_result['cv_error'] = str(_e)\n");
-        sb.append("elif _val_mode == 'temporal' and y_test is not None:\n    val_result['temporal_split'] = 'train={}/test={}'.format(len(X_train), len(X_test))\n    val_result['temporal_test_accuracy'] = result.get('test_accuracy')\n    val_result['temporal_test_f1'] = result.get('test_f1')\n\n");
-
-        sb.append("fi = {}\nif hasattr(clf, 'feature_importances_'): fi = dict(zip(X_train.columns, [round(float(v), 4) for v in clf.feature_importances_]))\n");
-        sb.append("elif hasattr(clf, 'coef_'): fi = dict(zip(X_train.columns, [round(float(v), 4) for v in clf.coef_.flatten()]))\n\n");
-
-        sb.append("_workspace = r'").append(modelWorkspace).append("'\nos.makedirs(_workspace, exist_ok=True)\n");
-        sb.append("_model_path = os.path.join(_workspace, 'model_").append(model.getId()).append("_v' + clf.__class__.__name__ + '.pkl')\n");
-        sb.append("joblib.dump(clf, _model_path)\n");
-        sb.append("_preproc_path = os.path.join(_workspace, 'model_").append(model.getId()).append("_preprocessors.pkl')\n");
-        sb.append("joblib.dump({'encoders': _encoders, 'scaler': _scaler, 'target_encoder': _y_le, 'feature_cols': list(X_train.columns), 'encoding': _enc, 'scaling': _sc}, _preproc_path)\n\n");
-
-        sb.append("print('[TRAIN_RESULT] ' + json.dumps({'metrics': result, 'feature_importance': fi, 'model_path': _model_path, 'validation': val_result}))\n");
-        return sb.toString();
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("modelId", model.getId());
+        request.put("modelVersion", nextVersion);
+        request.put("modelType", model.getModelType());
+        request.put("algorithmId", model.getAlgorithm());
+        request.put("algorithmCode", algorithm.getPythonCodeTemplate());
+        request.put("sourceTable", model.getSourceTable());
+        request.put("featureColumns", parseJsonList(model.getFeatureColumns()));
+        request.put("targetColumn", model.getTargetColumn());
+        Map<String, Object> preprocessing = parseJsonMap(model.getPreprocessing());
+        request.put("preprocessing", preprocessing);
+        request.put("targetPreprocessing",
+            preprocessing.get("targetPreprocessing") instanceof Map<?, ?> targetConfig
+                ? targetConfig : Map.of());
+        request.put("hyperparameters", parseJsonMap(model.getHyperparameters()));
+        request.put("validation", validation);
+        request.put("inputFilter", resolvedFilter);
+        request.put("artifactPath", Path.of(modelWorkspace, artifactName).toString());
+        request.put("overfittingGapThreshold", overfittingGapThreshold);
+        request.put("positiveClass", model.getPositiveClass());
+        request.put("calibrationMethod", model.getCalibrationMethod() == null
+            ? "none" : model.getCalibrationMethod());
+        request.put("thresholdPolicy", parseJsonMap(model.getThresholdPolicy()));
+        return request;
     }
 
-    private String buildAlgorithmBlock(String algorithmId) {
-        Algorithm algo = algorithmService.getByAlgorithmId(algorithmId);
-        if (algo != null && algo.getPythonCodeTemplate() != null && !algo.getPythonCodeTemplate().isBlank()) {
-            return algo.getPythonCodeTemplate();
+    private String resolveFilterVariables(String filter) {
+        if (filter == null || filter.isBlank()) return null;
+        java.time.format.DateTimeFormatter format = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd");
+        java.time.LocalDate today = java.time.LocalDate.now();
+        String todayValue = "'" + today.format(format) + "'";
+        String yesterdayValue = "'" + today.minusDays(1).format(format) + "'";
+        String resolved = filter
+            .replace("'${etl_date}'", todayValue)
+            .replace("'${today}'", todayValue)
+            .replace("'${yesterday}'", yesterdayValue)
+            .replace("${etl_date}", todayValue)
+            .replace("${today}", todayValue)
+            .replace("${yesterday}", yesterdayValue);
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+            .compile("'?\\$\\{today-(\\d+)\\}'?")
+            .matcher(resolved);
+        StringBuffer buffer = new StringBuffer();
+        while (matcher.find()) {
+            int daysAgo = Integer.parseInt(matcher.group(1));
+            matcher.appendReplacement(buffer,
+                java.util.regex.Matcher.quoteReplacement("'" + today.minusDays(daysAgo).format(format) + "'"));
         }
-        throw new IllegalStateException("算法配置缺失: " + algorithmId);
+        matcher.appendTail(buffer);
+        return buffer.toString();
     }
 
     private MiningPipeline createAutoPipeline(MiningModel model) {
@@ -1038,6 +1473,13 @@ public class MiningService {
         evConfig.put("cvFold", model.getCvFolds() != null ? model.getCvFolds() : 5);
         if (model.getValidationMode() != null) evConfig.put("validationMode", model.getValidationMode());
         if (model.getTemporalColumn() != null) evConfig.put("temporalColumn", model.getTemporalColumn());
+        evConfig.put("groupColumns", parseJsonList(model.getGroupColumns()));
+        if (model.getOosTable() != null) evConfig.put("oosTable", model.getOosTable());
+        if (model.getOosFilter() != null) evConfig.put("oosFilter", model.getOosFilter());
+        if (model.getPositiveClass() != null) evConfig.put("positiveClass", model.getPositiveClass());
+        evConfig.put("calibrationMethod", model.getCalibrationMethod() == null ? "none" : model.getCalibrationMethod());
+        evConfig.put("thresholdPolicy", parseJsonMap(model.getThresholdPolicy()));
+        evConfig.put("governancePolicy", parseJsonMap(model.getGovernancePolicy()));
         String evId = "ev_" + model.getId();
         nodes.add(Map.of("id", evId, "type", "evaluation", "config", evConfig));
         edges.add(Map.of("source", trId, "target", evId));
@@ -1103,6 +1545,7 @@ public class MiningService {
         LocalDateTime now = LocalDateTime.now();
         MiningPipeline pipeline = new MiningPipeline();
         pipeline.setName(model.getName());
+        pipeline.setUserId(model.getUserId());
         pipeline.setDataSourceId(model.getDataSourceId() != null ? model.getDataSourceId() : 0L);
         pipeline.setConversationId(model.getConversationId());
         pipeline.setStatus(ModelStatus.PIPELINE_COMPLETED);
@@ -1119,6 +1562,12 @@ public class MiningService {
     }
 
     public void syncModelToPipeline(Long pipelineId, MiningModel model) {
+        MiningPipeline ownedPipeline = resourceAccess.requirePipeline(pipelineId);
+        MiningModel ownedModel = resourceAccess.requireModel(model == null ? null : model.getId());
+        if (ownedPipeline.getUserId() != null && ownedModel.getUserId() != null
+                && !ownedPipeline.getUserId().equals(ownedModel.getUserId())) {
+            throw new com.smartquery.common.BusinessException(403, "模型与流水线不属于同一用户");
+        }
         try {
             MiningPipeline pipeline = miningPipelineMapper.selectById(pipelineId);
             if (pipeline == null) return;
@@ -1230,6 +1679,13 @@ public class MiningService {
                         if (model.getCvFolds() != null) config.put("cvFold", model.getCvFolds());
                         if (model.getTestSize() != null) config.put("testSize", (int)(model.getTestSize() * 100));
                         if (model.getTemporalColumn() != null) config.put("temporalColumn", model.getTemporalColumn());
+                        config.put("groupColumns", parseJsonList(model.getGroupColumns()));
+                        if (model.getOosTable() != null) config.put("oosTable", model.getOosTable());
+                        if (model.getOosFilter() != null) config.put("oosFilter", model.getOosFilter());
+                        if (model.getPositiveClass() != null) config.put("positiveClass", model.getPositiveClass());
+                        config.put("calibrationMethod", model.getCalibrationMethod() == null ? "none" : model.getCalibrationMethod());
+                        config.put("thresholdPolicy", parseJsonMap(model.getThresholdPolicy()));
+                        config.put("governancePolicy", parseJsonMap(model.getGovernancePolicy()));
                     }
                     case "output" -> {
                         if (model.getPredictResultTable() != null) config.put("table", model.getPredictResultTable());
@@ -1251,6 +1707,17 @@ public class MiningService {
         }
     }
 
+    private MiningModel requireScheduledModel(Long modelId) {
+        MiningModel model = miningModelMapper.selectById(modelId);
+        if (model == null || Integer.valueOf(1).equals(model.getDeleted())) {
+            throw new IllegalArgumentException("模型不存在: " + modelId);
+        }
+        if (!Boolean.TRUE.equals(model.getScheduleEnabled())) {
+            throw new IllegalStateException("模型未启用定时任务: " + modelId);
+        }
+        return model;
+    }
+
     // ======================== Utilities ========================
 
     public DataSource getDataSource(Long dataSourceId) { return dataSourceMapper.selectById(dataSourceId); }
@@ -1260,14 +1727,6 @@ public class MiningService {
         if (dataType == null) return false;
         return Set.of("int", "bigint", "tinyint", "smallint", "mediumint", "float", "double", "decimal", "numeric", "real")
             .contains(dataType.toLowerCase());
-    }
-
-    private Map<String, Object> parseTrainingOutput(String stdout) {
-        return MiningLogUtils.parseResultMarker(stdout, "[TRAIN_RESULT]", "MINING", objectMapper);
-    }
-
-    private Map<String, Object> parseResultMarker(String stdout, String marker) {
-        return MiningLogUtils.parseResultMarker(stdout, marker, "MINING", objectMapper);
     }
 
     private List<String> parseJsonList(String json) {
@@ -1374,16 +1833,6 @@ public class MiningService {
         payload.put("dataSourceId", model.getDataSourceId());
         payload.putAll(extra);
         eventLogger.logEvent(model.getConversationId(), null, eventType, payload);
-    }
-
-    private String safeJsonEmbed(String json) {
-        if (json == null || json.isBlank() || "null".equals(json)) return "{}";
-        try {
-            return objectMapper.readTree(json).toString();
-        } catch (Exception e) {
-            log.warn("[MINING] Invalid JSON rejected for Python embedding: {}", e.getMessage());
-            return "{}";
-        }
     }
 
     private void logMiningError(Long conversationId, String errorType, Long modelId, String error) {

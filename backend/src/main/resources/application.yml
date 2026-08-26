@@ -90,6 +90,7 @@ smart-query:
       deepseek:
         api-url: https://api.deepseek.com/v1/chat/completions
         api-key: ${DEEPSEEK_API_KEY:}
+        model-name: deepseek-chat
         max-tokens: 4096
         temperature: 0.1
       ollama:
@@ -116,6 +117,9 @@ smart-query:
   # SSE
   sse:
     timeout-ms: 300000
+    heartbeat-ms: 15000
+    event-scan-ms: 1000
+    event-retention-cron: "0 30 3 * * *"
 
   # 限流（ChatController 每用户每分钟提问数；RateLimiter 内部窗口/清理周期）
   rate-limit:
@@ -177,7 +181,8 @@ smart-query:
     schedule:
       poll-interval-ms: 60000
     train-poll-interval-ms: 2000
-    status-stream-timeout-ms: 120000
+    status-stream-timeout-ms: ${MINING_STATUS_STREAM_TIMEOUT_MS:600000}
+    drift-monitor-interval-ms: ${MINING_DRIFT_MONITOR_INTERVAL_MS:21600000}
     python-timeout-ms: 300000
     predict-timeout-ms: 120000
     overfitting-gap-threshold: 0.15

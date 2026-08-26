@@ -1,0 +1,3 @@
+# 达梦 DBAPI + SQLAlchemy 2.0 方言（DbUrlUtil: dm+dmPython://）
+dmPython==2.5.38
+dmSQLAlchemy==2.0.17

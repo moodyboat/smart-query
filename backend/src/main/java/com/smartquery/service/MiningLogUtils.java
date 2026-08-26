@@ -1,43 +1,13 @@
 package com.smartquery.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.extern.slf4j.Slf4j;
-
-import java.util.HashMap;
-import java.util.Map;
-
 /**
- * 挖掘/预测/Pipeline 三处共用的日志与结果解析工具。
- * <p>抽离以避免 MiningService / MiningPredictionService / PipelineService 各自维护同份实现导致漂移。
+ * 挖掘/预测/Pipeline 三处共用的日志工具。
+ * 结构化结果使用 MiningRuntimeClient 的文件协议，不再从 stdout 解析。
  */
-@Slf4j
 public final class MiningLogUtils {
 
     private MiningLogUtils() {}
-
-    /**
-     * 从 Python stdout 中解析形如 [MARKER]{json} 的结果行。
-     * 找到第一个包含 marker 的行，尝试解析 marker 之后的 JSON；解析失败返回空 Map。
-     *
-     * @param logTag 日志前缀（如 "MINING"/"PREDICT"/"PIPELINE"），用于失败时定位日志
-     */
-    @SuppressWarnings("unchecked")
-    public static Map<String, Object> parseResultMarker(String stdout, String marker, String logTag, ObjectMapper objectMapper) {
-        Map<String, Object> result = new HashMap<>();
-        if (stdout == null) return result;
-        for (String line : stdout.split("\n")) {
-            if (line.contains(marker)) {
-                try {
-                    String json = line.substring(line.indexOf(marker) + marker.length()).trim();
-                    result = objectMapper.readValue(json, Map.class);
-                } catch (Exception e) {
-                    log.warn("[{}] Failed to parse marker '{}': {}", logTag, marker, e.getMessage());
-                }
-                break;
-            }
-        }
-        return result;
-    }
 
     /**
      * 截断日志：去掉控制字符 + 截断到 maxLen。

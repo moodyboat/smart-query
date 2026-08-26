@@ -1,5 +1,7 @@
 package com.smartquery.config;
 
+import com.smartquery.common.UserContextHolder;
+import com.smartquery.engine.ConversationContextHolder;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.util.concurrent.Executor;
@@ -25,6 +27,26 @@ public final class ThreadPoolFactory {
         executor.setMaxPoolSize(max);
         executor.setQueueCapacity(queue);
         executor.setThreadNamePrefix(name + "-");
+        // ThreadLocal values do not cross executor boundaries. Capture them when
+        // a task is submitted and restore/clear them around each worker task so
+        // pooled threads can never leak one user's identity into another task.
+        executor.setTaskDecorator(task -> {
+            UserContextHolder.UserContext user = UserContextHolder.get();
+            Long conversationId = ConversationContextHolder.getConversationId();
+            Long dataSourceId = ConversationContextHolder.getDataSourceId();
+            String traceId = ConversationContextHolder.getTraceId();
+            return () -> {
+                Long previousConversationId = ConversationContextHolder.getConversationId();
+                Long previousDataSourceId = ConversationContextHolder.getDataSourceId();
+                String previousTraceId = ConversationContextHolder.getTraceId();
+                try (UserContextHolder.Scope ignored = UserContextHolder.open(user)) {
+                    setConversationContext(conversationId, dataSourceId, traceId);
+                    task.run();
+                } finally {
+                    setConversationContext(previousConversationId, previousDataSourceId, previousTraceId);
+                }
+            };
+        });
         executor.setRejectedExecutionHandler(switch (policy) {
             case CALLER_RUNS -> new ThreadPoolExecutor.CallerRunsPolicy();
             case ABORT -> new ThreadPoolExecutor.AbortPolicy();
@@ -33,6 +55,13 @@ public final class ThreadPoolFactory {
         executor.setAwaitTerminationSeconds(30);
         executor.initialize();
         return executor;
+    }
+
+    private static void setConversationContext(Long conversationId, Long dataSourceId, String traceId) {
+        ConversationContextHolder.clear();
+        if (conversationId != null) ConversationContextHolder.setConversationId(conversationId);
+        if (dataSourceId != null) ConversationContextHolder.setDataSourceId(dataSourceId);
+        if (traceId != null) ConversationContextHolder.setTraceId(traceId);
     }
 
     public enum RejectedPolicy {

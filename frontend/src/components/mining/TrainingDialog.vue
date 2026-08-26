@@ -110,7 +110,8 @@ import { ElMessage } from 'element-plus'
 import TrainingCodeViewer from '../TrainingCodeViewer.vue'
 import { analyzeCodeForSteps } from '../../config/trainingSteps'
 import { createCodeAnalyzer } from '../../utils/codeAnalyzer'
-import { fetchMiningModel } from '../../api'
+import { fetchMiningModel, trainMiningModel } from '../../api'
+import { createAuthenticatedEventStream } from '../../api/sse.js'
 import { MODEL_STATUS } from '../../constants'
 
 const props = defineProps({
@@ -129,6 +130,7 @@ const visible = computed({
 // 训练状态
 const trainingStatus = ref('准备中...')
 const progressPercentage = ref(0)
+const lastStreamLog = ref('')
 const progressStatus = ref(null)
 const progressText = ref('0/0')
 const canClose = ref(false)
@@ -144,6 +146,7 @@ const logsContent = ref(null)
 let eventSource = null
 let trainingSimulation = null
 const useRealStream = ref(true) // 设置为 false 使用模拟数据
+const allowSimulation = import.meta.env.DEV && import.meta.env.VITE_ENABLE_TRAINING_DEMO === 'true'
 
 watch(() => props.show, (newVal) => {
   if (newVal) {
@@ -447,6 +450,7 @@ function startTraining() {
   completedSteps.value = []
   currentStepId.value = null
   logs.value = []
+  lastStreamLog.value = ''
 
   addLog('info', `开始训练模型: ${props.model.name}`)
   addLog('info', `算法类型: ${props.model.algorithm}`)
@@ -454,37 +458,27 @@ function startTraining() {
   // 使用真实的SSE连接或模拟数据
   if (useRealStream.value) {
     startRealTraining()
-  } else {
+  } else if (allowSimulation) {
     simulateTrainingProgress()
+  } else {
+    addLog('error', '生产环境禁止模拟训练，请启用真实训练流')
+    completeTraining(false, { error: '模拟训练仅允许在显式启用的开发演示模式使用' })
   }
 }
 
-function startRealTraining() {
+async function startRealTraining() {
   try {
-    // 首先触发训练API
-    fetch(`/api/v1/mining/model/${props.model.id}/train`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      }
-    }).then(response => {
-      if (!response.ok) {
-        throw new Error('训练请求失败')
-      }
-      addLog('info', '训练请求已发送，后端开始处理...')
-      console.log('[TRAIN] 训练请求已发送，状态:', response.status)
-    }).catch(error => {
-      console.error('[TRAIN] 训练请求失败:', error)
-      addLog('error', `训练请求失败: ${error.message}`)
-      useRealStream.value = false
-      simulateTrainingProgress()
-      return
-    })
+    // 先提交异步训练，拿到唯一 executionId 后再订阅对应任务。
+    const submission = await trainMiningModel(props.model.id)
+    if (!submission.executionId) throw new Error('后端未返回 executionId')
+    addLog('info', `训练任务已进入队列，执行ID: ${submission.executionId}`)
 
     // 建立SSE连接获取训练进度
     addLog('info', '连接到实时训练流...')
 
-    eventSource = new EventSource(`/api/v1/mining/model/${props.model.id}/train-stream`)
+    eventSource = createAuthenticatedEventStream(
+      `/api/v1/mining/model/${props.model.id}/train-stream?executionId=${submission.executionId}`
+    )
 
     eventSource.addEventListener('start', (event) => {
       const data = JSON.parse(event.data)
@@ -493,22 +487,21 @@ function startRealTraining() {
       trainingStatus.value = '训练开始'
     })
 
-    eventSource.addEventListener('step', (event) => {
+    eventSource.addEventListener('progress', (event) => {
       const data = JSON.parse(event.data)
-      console.log('[SSE] 步骤事件:', data)
+      console.log('[SSE] 进度事件:', data)
 
-      currentStepId.value = data.stepId
-      trainingStatus.value = data.label
-      progressPercentage.value = data.progress
-      progressText.value = `${data.progress}%`
-
-      // 查找对应的步骤配置
-      const stepConfig = trainingSteps.value.find(s => s.id === data.stepId)
-      if (stepConfig) {
-        trainingStatus.value = stepConfig.label
-        addLog('info', `执行步骤: ${stepConfig.label}`)
-      } else {
-        addLog('info', `执行步骤: ${data.label}`)
+      currentStepId.value = data.stage
+      trainingStatus.value = data.message || data.stage || '训练中'
+      progressPercentage.value = Number(data.progress || 0)
+      progressText.value = `${progressPercentage.value}%`
+      addLog('info', `${trainingStatus.value} (${progressPercentage.value}%)`)
+      if (data.logTail && data.logTail !== lastStreamLog.value) {
+        const incremental = data.logTail.startsWith(lastStreamLog.value)
+          ? data.logTail.slice(lastStreamLog.value.length)
+          : data.logTail
+        lastStreamLog.value = data.logTail
+        if (incremental.trim()) addLog('info', incremental.trim())
       }
     })
 
@@ -534,11 +527,22 @@ function startRealTraining() {
       completeTraining(true, resultData)
     })
 
-    eventSource.addEventListener('error', (event) => {
+    eventSource.addEventListener('failed', (event) => {
       const data = JSON.parse(event.data)
       console.log('[SSE] 错误事件:', data)
       addLog('error', `训练错误: ${data.message}`)
       completeTraining(false, { error: data.message })
+    })
+
+    eventSource.addEventListener('log', (event) => {
+      const data = JSON.parse(event.data)
+      if (data.line) addLog('info', data.line)
+    })
+
+    eventSource.addEventListener('canceled', (event) => {
+      const data = JSON.parse(event.data)
+      addLog('warning', data.message || '训练已取消')
+      completeTraining(false, { error: data.message || '训练已取消', canceled: true })
     })
 
     eventSource.addEventListener('timeout', (event) => {
@@ -549,23 +553,18 @@ function startRealTraining() {
 
     eventSource.onerror = (error) => {
       console.error('[SSE] 连接错误:', error)
-      addLog('error', 'SSE连接错误，尝试切换到模拟模式')
-      eventSource?.close()
-      useRealStream.value = false
-
-      // 延迟一下再启动模拟训练，避免频繁切换
-      setTimeout(() => {
-        if (!canClose.value) {
-          simulateTrainingProgress()
-        }
-      }, 1000)
+      if (error.willReconnect) {
+        addLog('warning', `实时进度连接中断，正在续传（第 ${error.retryCount} 次）`)
+      } else if (!canClose.value) {
+        addLog('error', '实时进度连接无法恢复，请重新打开训练记录查看任务状态')
+        completeTraining(false, { error: '实时进度连接中断，训练任务可能仍在后台运行' })
+      }
     }
 
   } catch (error) {
     console.error('启动训练失败:', error)
     addLog('error', `启动训练失败: ${error.message}`)
-    useRealStream.value = false
-    simulateTrainingProgress()
+    completeTraining(false, { error: error.message })
   }
 }
 
@@ -593,8 +592,8 @@ function simulateTrainingProgress() {
     }
 
     if (stepIndex >= steps.length) {
-      // 假进度走完仍未拿到终态：按成功兜底（后端 train-stream 会补真实结果）
-      completeTraining(true)
+      // 模拟模式不能证明真实训练成功，禁止用假进度伪造成功终态。
+      completeTraining(false, { error: '模拟进度结束，未获得后端真实训练结果' })
       return
     }
 

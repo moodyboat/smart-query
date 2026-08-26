@@ -63,7 +63,7 @@ public class ModelScheduleService {
                     }
                     log.info("[SCHEDULE] Running scheduled PREDICT for model: {} (id={})", model.getName(), model.getId());
                     try {
-                        miningService.batchPredict(model.getId());
+                        miningService.batchPredictForSchedule(model.getId());
                     } catch (Exception e) {
                         success = false;
                         errorMsg = e.getMessage();
@@ -75,7 +75,7 @@ public class ModelScheduleService {
                     }
                     log.info("[SCHEDULE] Running scheduled TRAIN for model: {} (id={})", model.getName(), model.getId());
                     try {
-                        miningService.trainModel(model.getId(), "schedule", model.getPredictInputFilter());
+                        miningService.trainModelForSchedule(model.getId(), model.getPredictInputFilter());
                     } catch (Exception e) {
                         success = false;
                         errorMsg = e.getMessage();

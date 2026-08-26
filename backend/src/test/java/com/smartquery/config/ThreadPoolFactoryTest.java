@@ -1,5 +1,7 @@
 package com.smartquery.config;
 
+import com.smartquery.common.UserContextHolder;
+import com.smartquery.engine.ConversationContextHolder;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.CountDownLatch;
@@ -69,5 +71,35 @@ class ThreadPoolFactoryTest {
 
         assertThrows(RejectedExecutionException.class, () -> exec.execute(() -> {}));
         blockLatch.countDown();
+    }
+
+    @Test
+    void build_propagatesAndThenClearsRequestContext() throws Exception {
+        Executor exec = ThreadPoolFactory.build("context", 1, 1, 10, ThreadPoolFactory.RejectedPolicy.ABORT);
+        UserContextHolder.set(new UserContextHolder.UserContext(42L, "alice", "user"));
+        ConversationContextHolder.setConversationId(7L);
+
+        AtomicReference<Long> seenUser = new AtomicReference<>();
+        AtomicReference<Long> seenConversation = new AtomicReference<>();
+        CountDownLatch first = new CountDownLatch(1);
+        exec.execute(() -> {
+            seenUser.set(UserContextHolder.getUserId());
+            seenConversation.set(ConversationContextHolder.getConversationId());
+            first.countDown();
+        });
+        assertTrue(first.await(2, TimeUnit.SECONDS));
+        assertEquals(42L, seenUser.get());
+        assertEquals(7L, seenConversation.get());
+
+        UserContextHolder.clear();
+        ConversationContextHolder.clear();
+        AtomicReference<Long> leakedUser = new AtomicReference<>(-1L);
+        CountDownLatch second = new CountDownLatch(1);
+        exec.execute(() -> {
+            leakedUser.set(UserContextHolder.getUserId());
+            second.countDown();
+        });
+        assertTrue(second.await(2, TimeUnit.SECONDS));
+        assertNull(leakedUser.get(), "pooled worker must not retain the previous user's identity");
     }
 }

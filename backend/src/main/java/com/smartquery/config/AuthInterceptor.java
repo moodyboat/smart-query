@@ -34,8 +34,9 @@ public class AuthInterceptor implements HandlerInterceptor {
         String token = null;
         if (header != null && header.startsWith("Bearer ")) {
             token = header.substring(7).trim();
-        } else {
-            // SSE (EventSource) 与文件下载 (window.open) 无法设置请求头，允许 ?token= 兜底
+        } else if (allowsQueryToken(request.getRequestURI())) {
+            // <img>/window.open 等浏览器资源请求无法设置 Authorization；仅为这类
+            // 资源保留 query token 兼容。任务 SSE 已统一使用带请求头的 fetch 流。
             String queryToken = request.getParameter("token");
             if (queryToken != null && !queryToken.isBlank()) {
                 token = queryToken.trim();
@@ -55,6 +56,11 @@ public class AuthInterceptor implements HandlerInterceptor {
             log.debug("[AUTH] token 校验失败: {}", e.getMessage());
             return writeUnauthorized(response, "登录已过期，请重新登录");
         }
+    }
+
+    private boolean allowsQueryToken(String uri) {
+        return uri != null && (uri.startsWith("/artifacts/")
+            || uri.startsWith("/api/v1/word-report/download/"));
     }
 
     private boolean writeUnauthorized(HttpServletResponse response, String message) throws Exception {
