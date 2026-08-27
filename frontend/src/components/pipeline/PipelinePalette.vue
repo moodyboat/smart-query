@@ -1,6 +1,9 @@
 <template>
   <div class="algorithm-palette">
-    <div class="palette-title">算法库</div>
+    <div class="palette-title">
+      <span>算法库</span>
+      <el-button size="small" text type="primary" @click="$emit('manageAlgorithms')">查看 / 管理</el-button>
+    </div>
     <div v-for="group in algorithmGroups" :key="group.category" class="palette-group">
       <div class="palette-group-title" @click="toggleGroup(group.category)">
         <span>{{ group.category }}</span>
@@ -13,6 +16,7 @@
           class="palette-card"
           draggable="true"
           @dragstart="$emit('paletteDragStart', $event, algo)"
+          @click="$emit('algorithmClick', algo)"
         >
           <span class="palette-icon">{{ algo.icon || '🤖' }}</span>
           <div class="palette-info">
@@ -51,7 +55,7 @@ const props = defineProps({
   modelTypeNames: { type: Function, required: true }
 })
 
-defineEmits(['paletteDragStart'])
+defineEmits(['paletteDragStart', 'algorithmClick', 'manageAlgorithms'])
 
 // 每个算法组的展开状态
 const groupStates = reactive({})
@@ -108,6 +112,9 @@ const baseNodes = [
   font-weight: 600;
   padding: var(--space-sm) var(--space-xs);
   margin-bottom: var(--space-xs);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .palette-group { margin-bottom: var(--space-md); }

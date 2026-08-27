@@ -67,7 +67,58 @@
       <el-tab-pane label="流程编排" name="pipeline">
         <PipelineEditor ref="pipelineEditorRef" :dataSources="dataSources" @goToModel="goToModel" />
       </el-tab-pane>
+      <el-tab-pane label="算法库管理" name="algorithms">
+        <div class="algorithm-admin-page">
+          <div class="tab-toolbar">
+            <div>
+              <h3>算法模板管理</h3>
+              <p>查看内置实现；管理员可新增模板、复制内置模板，并修改或删除自定义模板。</p>
+            </div>
+            <el-button v-if="userStore.isAdmin" type="primary" @click="openAlgorithmManager(null, 'create')">+ 新增算法模板</el-button>
+          </div>
+          <el-alert v-if="!userStore.isAdmin" type="info" :closable="false" style="margin-bottom: 12px">
+            当前账号为只读权限；新增、修改和删除算法模板需要管理员账号。
+          </el-alert>
+          <el-table :data="algorithms" border stripe height="calc(100vh - 230px)">
+            <el-table-column label="算法" min-width="180">
+              <template #default="{ row }">
+                <span class="algorithm-name-cell"><span>{{ row.icon || '🤖' }}</span><strong>{{ row.name }}</strong></span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="algorithmId" label="算法标识" min-width="160" />
+            <el-table-column prop="category" label="分类" width="120" />
+            <el-table-column label="适用类型" min-width="150">
+              <template #default="{ row }">{{ modelTypeNames(row.modelTypes) }}</template>
+            </el-table-column>
+            <el-table-column label="来源" width="90">
+              <template #default="{ row }"><el-tag :type="row.isBuiltin ? 'info' : 'success'" size="small">{{ row.isBuiltin ? '内置' : '自定义' }}</el-tag></template>
+            </el-table-column>
+            <el-table-column label="操作" width="300" fixed="right">
+              <template #default="{ row }">
+                <el-button link type="primary" @click="openAlgorithmManager(row, 'view')">查看实现</el-button>
+                <el-button v-if="userStore.isAdmin && row.isBuiltin" link type="primary" @click="openAlgorithmManager(row, 'clone')">复制为模板</el-button>
+                <template v-if="userStore.isAdmin && !row.isBuiltin">
+                  <el-button link type="primary" @click="openAlgorithmManager(row, 'edit')">修改</el-button>
+                  <el-button link type="danger" @click="removeAlgorithmTemplate(row)">删除</el-button>
+                </template>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </el-tab-pane>
     </el-tabs>
+
+    <AlgorithmLibraryDialog
+      v-model:visible="showAlgorithmManager"
+      :algorithms="algorithms"
+      :categories="categories"
+      :model-types="modelTypes"
+      :model-type-names="modelTypeNames"
+      :is-admin="userStore.isAdmin"
+      :initial-algorithm="managedAlgorithm"
+      :initial-mode="algorithmManagerMode"
+      @refresh="refreshAlgorithmManager"
+    />
 
     <!-- Create/Edit Dialog -->
     <ModelCreateDialog
@@ -111,7 +162,14 @@
             size="small" style="width: 180px" :teleported="false">
             <el-option v-for="o in p.options" :key="o" :label="o" :value="o" />
           </el-select>
+          <el-switch v-else-if="p.type === 'boolean'" v-model="paramForm[p.key]" />
           <el-input v-else v-model="paramForm[p.key]" size="small" style="width: 180px" />
+        </div>
+        <el-divider v-if="customParamKeys.length" content-position="left">自定义参数</el-divider>
+        <div v-for="key in customParamKeys" :key="key" class="param-row">
+          <label class="param-label"><code>{{ key }}</code></label>
+          <el-input v-model="paramForm[key]" size="small" style="width: 180px" />
+          <el-button text type="danger" size="small" @click="removeCustomParam(key)">删除</el-button>
         </div>
         <el-button size="small" type="primary" link @click="showAddParamDialog = true" style="margin-top: 8px">+ 添加自定义参数</el-button>
       </div>
@@ -288,6 +346,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PipelineEditor from './PipelineEditor.vue'
+import AlgorithmLibraryDialog from './pipeline/AlgorithmLibraryDialog.vue'
 import ModelList from './mining/ModelList.vue'
 import ModelCreateDialog from './mining/ModelCreateDialog.vue'
 import ModelScheduleDialog from './mining/ModelScheduleDialog.vue'
@@ -301,11 +360,12 @@ import {
   fetchDataSourceTables, fetchTableColumns, updateModelSchedule, predictMiningModel,
   batchPredictMiningModel, validateMiningModel, fetchModelPredictions,
   fetchMiningPipeline, previewResultTable, syncModelPipeline, rollbackModel,
-  updateModelPredictConfig
+  updateModelPredictConfig, deleteAlgorithm
 } from '../api'
 import { useAlgorithms } from '../composables/useAlgorithms.js'
 import { useMiningStore } from '../stores/mining'
 import { useUIStore } from '../stores/ui'
+import { useUserStore } from '../stores/user'
 import { TRAINING_SAFETY_TIMEOUT_MS, DEFAULT_MODEL_TYPE, DEFAULT_ALGORITHM, PREVIEW_ROW_LIMIT, PREDICTION_RECORD_LIMIT, MODEL_STATUS, MODEL_TYPE, EXECUTION_STATUS, NODE_TYPES, NODE_TYPE_LABELS, STATUS_LABELS, SCHEDULE_INTERVALS, FILTER_VARIABLES } from '../constants'
 import { useModelDetail, pipelineNodeIcon, pipelineNodeTitle, pipelineNodeSummary, isNodeConfigured, parsedMetrics, formatMetricName, formatMetricValue, metricQuality, overfittingWarning } from '../composables/useModelDetail'
 import { useModelActions } from '../composables/useModelActions'
@@ -315,11 +375,12 @@ const emit = defineEmits(['close'])
 
 const mining = useMiningStore()
 const ui = useUIStore()
+const userStore = useUserStore()
 
 const {
-  algorithms, modelTypes, loadAlgorithms,
+  algorithms, modelTypes, categories, loadAlgorithms,
   getAlgorithmLabel, getAlgorithmsForModelType,
-  getAlgorithmParams, getDefaultHyperparams, getModelTypeLabel
+  getAlgorithmParams, getDefaultHyperparams, getModelTypeLabel, modelTypeNames
 } = useAlgorithms()
 
 const {
@@ -360,6 +421,9 @@ const selectedModels = ref(new Set())
 const saving = ref(false)
 const savingParams = ref(false)
 const pipelineEditorRef = ref(null)
+const showAlgorithmManager = ref(false)
+const managedAlgorithm = ref(null)
+const algorithmManagerMode = ref('view')
 
 // Table/Column selectors (for create/edit dialog)
 const tableOptions = ref([])
@@ -414,6 +478,12 @@ const featureIndeterminate = computed(() => {
 
 const filteredAlgorithms = computed(() => {
   return getAlgorithmsForModelType(form.value.modelType)
+})
+
+const customParamKeys = computed(() => {
+  if (!paramModel.value) return []
+  const defined = new Set(algorithmParams(paramModel.value.algorithm).map(p => p.key))
+  return Object.keys(paramForm.value || {}).filter(key => !defined.has(key))
 })
 
 const filteredModels = computed(() => {
@@ -740,6 +810,12 @@ function confirmAddParam() {
   showAddParamDialog.value = false
 }
 
+function removeCustomParam(key) {
+  const next = { ...paramForm.value }
+  delete next[key]
+  paramForm.value = next
+}
+
 async function handleSaveParams() {
   if (!paramModel.value) return
   savingParams.value = true
@@ -984,6 +1060,29 @@ function goToModel(modelId) {
   })
 }
 
+function openAlgorithmManager(algorithm = null, mode = 'view') {
+  managedAlgorithm.value = algorithm
+  algorithmManagerMode.value = mode
+  showAlgorithmManager.value = true
+}
+
+async function refreshAlgorithmManager(selectedId) {
+  await loadAlgorithms(true)
+  managedAlgorithm.value = selectedId ? algorithms.value.find(item => item.id === selectedId) || null : null
+  algorithmManagerMode.value = 'view'
+}
+
+async function removeAlgorithmTemplate(algorithm) {
+  try {
+    await ElMessageBox.confirm(`确定删除自定义算法“${algorithm.name}”吗？已有流程若引用它将无法继续训练。`, '删除算法模板', { type: 'warning' })
+    await deleteAlgorithm(algorithm.id)
+    await loadAlgorithms(true)
+    ElMessage.success('算法模板已删除')
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(error.message || '删除失败')
+  }
+}
+
 function needsSync(model) {
   if (!model.pipelineId || !model.updatedAt) return false
   if (!model.lastSyncedAt) return true
@@ -1036,6 +1135,11 @@ function onDetailTuneParams(model) {
 }
 .mining-tabs :deep(.el-tabs__content) { flex: 1; overflow: auto; }
 .mining-tabs :deep(.el-tab-pane) { height: 100%; }
+.algorithm-admin-page { height: 100%; padding: 0 var(--space-sm) var(--space-sm); }
+.algorithm-admin-page .tab-toolbar { align-items: flex-start; }
+.algorithm-admin-page h3 { margin: 0 0 4px; font-size: var(--font-lg); }
+.algorithm-admin-page p { margin: 0; color: var(--text-muted); font-size: var(--font-sm); }
+.algorithm-name-cell { display: inline-flex; align-items: center; gap: 8px; }
 .tab-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 .toolbar-left { display: flex; align-items: center; gap: 12px; flex: 1; flex-wrap: wrap; }
 .selection-info { display: flex; align-items: center; gap: 8px; background: var(--el-color-danger-light-9); padding: 6px 12px; border-radius: var(--radius-md); border: 1px solid var(--el-color-danger-light-5); }

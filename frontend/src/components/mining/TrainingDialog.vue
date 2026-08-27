@@ -75,16 +75,12 @@
             {{ trainingResult.success ? '成功' : '失败' }}
           </el-tag>
         </div>
-        <div v-if="trainingResult.metrics" class="result-metrics">
-          <div
-            v-for="(val, key) in trainingResult.metrics"
-            :key="key"
-            class="result-metric"
-          >
-            <span class="metric-label">{{ formatMetricName(key) }}</span>
-            <span class="metric-value">{{ formatMetricValue(key, val) }}</span>
-          </div>
-        </div>
+        <ModelMetricsDashboard
+          v-if="trainingResult.success && trainingResult.metrics"
+          :metrics="trainingResult.metrics"
+          :validation="trainingResult.validation"
+          :feature-importance="trainingResult.featureImportance"
+        />
         <div v-if="trainingResult.error" class="result-error">
           <span class="error-label">错误信息：</span>
           <span class="error-message">{{ trainingResult.error }}</span>
@@ -108,11 +104,11 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import TrainingCodeViewer from '../TrainingCodeViewer.vue'
+import ModelMetricsDashboard from './ModelMetricsDashboard.vue'
 import { analyzeCodeForSteps } from '../../config/trainingSteps'
 import { createCodeAnalyzer } from '../../utils/codeAnalyzer'
-import { fetchMiningModel, trainMiningModel } from '../../api'
+import { trainMiningModel } from '../../api'
 import { createAuthenticatedEventStream } from '../../api/sse.js'
-import { MODEL_STATUS } from '../../constants'
 
 const props = defineProps({
   show: { type: Boolean, default: false },
@@ -142,11 +138,8 @@ const completedSteps = ref([])
 const logs = ref([])
 const logsContent = ref(null)
 
-// SSE 连接和模拟训练进度
+// 仅接受后端真实 SSE 训练进度
 let eventSource = null
-let trainingSimulation = null
-const useRealStream = ref(true) // 设置为 false 使用模拟数据
-const allowSimulation = import.meta.env.DEV && import.meta.env.VITE_ENABLE_TRAINING_DEMO === 'true'
 
 watch(() => props.show, (newVal) => {
   if (newVal) {
@@ -169,14 +162,15 @@ async function loadTrainingCode(model) {
       const response = await fetch(`/api/v1/mining/model/${model.id}/training-code`)
       if (response.ok) {
         const data = await response.json()
-        trainingCode.value = data.code || generateMockTrainingCode(model.algorithm)
+        if (!data.code) throw new Error('后端未返回训练代码')
+        trainingCode.value = data.code
         console.log('[TRAINING-CODE] 从后端加载训练代码，长度:', trainingCode.value.length)
       } else {
         throw new Error('获取训练代码失败')
       }
     } catch (error) {
-      console.log('[TRAINING-CODE] 无法从后端获取代码，使用生成的代码')
-      trainingCode.value = generateMockTrainingCode(model.algorithm)
+      console.warn('[TRAINING-CODE] 无法从后端获取真实训练代码', error)
+      trainingCode.value = '# 真实训练代码暂不可用，请检查后端训练代码接口。'
     }
 
     // 使用智能代码分析来获取精确的步骤映射
@@ -291,152 +285,6 @@ function formatStepDescription(stepId) {
   return descriptions[stepId] || ''
 }
 
-function generateMockTrainingCode(algorithm) {
-  // 这里返回模拟的训练代码
-  // 实际应该从后端API获取
-  return `# 数据挖掘训练脚本 - ${algorithm}
-import pandas as pd
-import numpy as np
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import accuracy_score, classification_report
-
-# 1. 数据加载
-def load_data():
-    """从数据库加载训练数据"""
-    import mysql.connector
-    conn = mysql.connector.connect(
-        host='localhost',
-        user='root',
-        password='password',
-        database='smart_query_sample'
-    )
-    query = "SELECT * FROM customers WHERE status = 'active'"
-    data = pd.read_sql(query, conn)
-    conn.close()
-    return data
-
-# 2. 数据预处理
-def preprocess_data(df):
-    """处理缺失值和异常值"""
-    # 处理缺失值
-    df = df.fillna(df.mean(numeric_only=True))
-    df = df.dropna()
-
-    # 处理异常值
-    Q1 = df.quantile(0.25)
-    Q3 = df.quantile(0.75)
-    IQR = Q3 - Q1
-    df = df[~((df < (Q1 - 1.5 * IQR)) | (df > (Q3 + 1.5 * IQR))).any(axis=1)]
-
-    return df
-
-# 3. 特征工程
-def engineer_features(df):
-    """特征选择和转换"""
-    # 选择特征列
-    feature_cols = ['age', 'income', 'spending_score', 'membership_years']
-    X = df[feature_cols]
-
-    # 特征标准化
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-
-    # 目标变量
-    y = df['target_column']
-
-    return X_scaled, y, feature_cols
-
-# 4. 数据分割
-def split_data(X, y, test_size=0.2):
-    """训练集和测试集划分"""
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=42, stratify=y
-    )
-    return X_train, X_test, y_train, y_test
-
-# 5. 模型训练
-def train_model(X_train, y_train):
-    """训练${algorithm}模型"""
-    from sklearn.ensemble import RandomForestClassifier
-
-    model = RandomForestClassifier(
-        n_estimators=100,
-        max_depth=10,
-        min_samples_split=5,
-        min_samples_leaf=2,
-        random_state=42
-    )
-
-    model.fit(X_train, y_train)
-    return model
-
-# 6. 模型评估
-def evaluate_model(model, X_test, y_test):
-    """计算评估指标"""
-    y_pred = model.predict(X_test)
-
-    accuracy = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred)
-
-    return {
-        'accuracy': accuracy,
-        'report': report
-    }
-
-# 7. 特征重要性分析
-def analyze_feature_importance(model, feature_cols):
-    """分析特征重要性"""
-    importances = model.feature_importances_
-    feature_importance = dict(zip(feature_cols, importances))
-
-    # 排序
-    sorted_features = sorted(
-        feature_importance.items(),
-        key=lambda x: x[1],
-        reverse=True
-    )
-
-    return dict(sorted_features)
-
-# 主训练流程
-def main():
-    # 1. 加载数据
-    data = load_data()
-    print(f"数据加载完成: {data.shape[0]} 行, {data.shape[1]} 列")
-
-    # 2. 数据预处理
-    data = preprocess_data(data)
-    print(f"数据预处理完成: {data.shape[0]} 行, {data.shape[1]} 列")
-
-    # 3. 特征工程
-    X, y, feature_cols = engineer_features(data)
-    print(f"特征工程完成: {X.shape[0]} 样本, {X.shape[1]} 特征")
-
-    # 4. 数据分割
-    X_train, X_test, y_train, y_test = split_data(X, y)
-    print(f"数据分割完成: 训练集 {X_train.shape[0]}, 测试集 {X_test.shape[0]}")
-
-    # 5. 模型训练
-    model = train_model(X_train, y_train)
-    print("模型训练完成")
-
-    # 6. 模型评估
-    metrics = evaluate_model(model, X_test, y_test)
-    print(f"模型评估完成: 准确率 {metrics['accuracy']:.4f}")
-
-    # 7. 特征重要性
-    importance = analyze_feature_importance(model, feature_cols)
-    print("特征重要性分析完成")
-
-    return model, metrics, importance
-
-if __name__ == "__main__":
-    model, metrics, importance = main()
-    print("训练流程全部完成！")
-`
-}
-
 function startTraining() {
   if (!props.model) return
 
@@ -455,15 +303,7 @@ function startTraining() {
   addLog('info', `开始训练模型: ${props.model.name}`)
   addLog('info', `算法类型: ${props.model.algorithm}`)
 
-  // 使用真实的SSE连接或模拟数据
-  if (useRealStream.value) {
-    startRealTraining()
-  } else if (allowSimulation) {
-    simulateTrainingProgress()
-  } else {
-    addLog('error', '生产环境禁止模拟训练，请启用真实训练流')
-    completeTraining(false, { error: '模拟训练仅允许在显式启用的开发演示模式使用' })
-  }
+  startRealTraining()
 }
 
 async function startRealTraining() {
@@ -522,7 +362,8 @@ async function startRealTraining() {
         success: data.success !== false, // 只有明确为false才算失败
         metrics: data.metrics || {},
         modelPath: data.modelPath,
-        featureImportance: data.featureImportance
+        featureImportance: data.featureImportance,
+        validation: data.validation
       }
       completeTraining(true, resultData)
     })
@@ -566,55 +407,6 @@ async function startRealTraining() {
     addLog('error', `启动训练失败: ${error.message}`)
     completeTraining(false, { error: error.message })
   }
-}
-
-function simulateTrainingProgress() {
-  let stepIndex = 0
-  const steps = trainingSteps.value
-  const modelId = props.model?.id
-
-  trainingSimulation = setInterval(async () => {
-    // 先查真实状态：后端可能已秒失败（如数据源连不上），避免 UI 永远转圈
-    if (modelId) {
-      try {
-        const real = await fetchMiningModel(modelId)
-        if (real && [MODEL_STATUS.TRAINED, MODEL_STATUS.FAILED, MODEL_STATUS.PUBLISHED].includes(real.status)) {
-          const success = real.status !== MODEL_STATUS.FAILED
-          completeTraining(success, success ? {
-            success: true,
-            metrics: typeof real.metrics === 'string' ? JSON.parse(real.metrics || '{}') : (real.metrics || {}),
-            modelPath: real.modelPath,
-            featureImportance: real.featureImportance
-          } : { error: (typeof real.trainingLog === 'string' ? real.trainingLog.slice(-300) : '训练失败，请查看执行历史') })
-          return
-        }
-      } catch { /* 查询失败则继续走假进度 */ }
-    }
-
-    if (stepIndex >= steps.length) {
-      // 模拟模式不能证明真实训练成功，禁止用假进度伪造成功终态。
-      completeTraining(false, { error: '模拟进度结束，未获得后端真实训练结果' })
-      return
-    }
-
-    const step = steps[stepIndex]
-    currentStepId.value = step.id
-    trainingStatus.value = step.label
-
-    const progress = ((stepIndex + 1) / steps.length * 100).toFixed(0)
-    progressPercentage.value = parseInt(progress)
-    progressText.value = `${stepIndex + 1}/${steps.length}`
-
-    addLog('info', `执行步骤: ${step.label}`)
-
-    // 标记当前步骤为已完成
-    setTimeout(() => {
-      completedSteps.value.push(step.id)
-      addLog('success', `完成步骤: ${step.label}`)
-      stepIndex++
-    }, 1000) // 每个步骤模拟1秒
-
-  }, 1500) // 每1.5秒一个新步骤
 }
 
 function completeTraining(success, result = null) {
@@ -661,10 +453,6 @@ function stopTraining() {
   if (eventSource) {
     eventSource.close()
     eventSource = null
-  }
-  if (trainingSimulation) {
-    clearInterval(trainingSimulation)
-    trainingSimulation = null
   }
 }
 
@@ -719,23 +507,6 @@ function exportLogs() {
 
 function formatLogTime(timestamp) {
   return new Date(timestamp).toLocaleTimeString('zh-CN')
-}
-
-function formatMetricName(key) {
-  const names = {
-    accuracy: '准确率',
-    precision: '精确率',
-    recall: '召回率',
-    f1: 'F1分数'
-  }
-  return names[key] || key
-}
-
-function formatMetricValue(key, val) {
-  if (typeof val === 'number') {
-    return (val * 100).toFixed(1) + '%'
-  }
-  return val
 }
 
 onMounted(() => {

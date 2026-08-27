@@ -476,12 +476,15 @@
               :model-value="selectedNode.config.algorithm"
               style="width: 100%"
               :teleported="false"
-              @update:model-value="updateConfig('algorithm', $event)"
+              @update:model-value="onAlgorithmChange"
             >
               <el-option v-for="a in algoOptions" :key="a.value" :label="a.label" :value="a.value" />
             </el-select>
           </el-form-item>
           <el-divider content-position="left">超参数</el-divider>
+          <el-alert v-if="!currentAlgoParams.length" type="info" :closable="false" style="margin-bottom: 10px">
+            该算法模板没有声明可编辑参数，可在算法库查看模板实现。
+          </el-alert>
           <div v-for="p in currentAlgoParams" :key="p.key" class="param-row">
             <label class="param-label">
               {{ p.label }}
@@ -489,7 +492,7 @@
             </label>
             <el-input-number
               v-if="p.type === 'int'"
-              :model-value="selectedNode.config.hyperparams?.[p.key]"
+              :model-value="selectedNode.config.hyperparams?.[p.key] ?? p.defaultValue"
               :min="p.min"
               :max="p.max"
               :step="p.step || 1"
@@ -499,7 +502,7 @@
             />
             <el-input-number
               v-else-if="p.type === 'float'"
-              :model-value="selectedNode.config.hyperparams?.[p.key]"
+              :model-value="selectedNode.config.hyperparams?.[p.key] ?? p.defaultValue"
               :min="p.min"
               :max="p.max"
               :step="p.step || 0.1"
@@ -510,7 +513,7 @@
             />
             <el-select
               v-else-if="p.type === 'select'"
-              :model-value="selectedNode.config.hyperparams?.[p.key]"
+              :model-value="selectedNode.config.hyperparams?.[p.key] ?? p.defaultValue"
               size="small"
               style="width: 100%"
               :teleported="false"
@@ -518,6 +521,17 @@
             >
               <el-option v-for="o in p.options" :key="o" :label="o" :value="o" />
             </el-select>
+            <el-switch
+              v-else-if="p.type === 'boolean'"
+              :model-value="selectedNode.config.hyperparams?.[p.key] ?? p.defaultValue"
+              @update:model-value="updateHyperparam(p.key, $event)"
+            />
+            <el-input
+              v-else
+              :model-value="selectedNode.config.hyperparams?.[p.key] ?? p.defaultValue"
+              size="small"
+              @update:model-value="updateHyperparam(p.key, $event)"
+            />
           </div>
         </el-form>
       </template>
@@ -535,10 +549,10 @@
               :teleported="false"
               @update:model-value="onValidationModeChange"
             >
-              <el-option label="训练/测试分割" value="train_test" />
-              <el-option label="交叉验证" value="cv" />
-              <el-option label="样本外验证" value="oos" />
-              <el-option label="时间外验证" value="temporal" />
+              <el-option label="训练/测试分割（仅探索）" value="train_test" />
+              <el-option label="分层 K-Fold 交叉验证 + 留出集" value="cv" />
+              <el-option label="独立样本外验证 (OOS)" value="oos" />
+              <el-option label="时间滚动回测 + 留出集" value="temporal" />
             </el-select>
           </el-form-item>
           <el-form-item v-if="selectedNode.config.validationMode === 'temporal'" label="时间列">
@@ -553,6 +567,28 @@
               <el-option v-for="col in columnOptions" :key="col.name" :label="col.name" :value="col.name" />
             </el-select>
           </el-form-item>
+          <el-form-item label="实体隔离列">
+            <el-select
+              :model-value="selectedNode.config.groupColumns || []"
+              multiple filterable clearable placeholder="如客户ID、企业ID，防止实体泄漏"
+              style="width: 100%" :teleported="false"
+              @update:model-value="updateConfig('groupColumns', $event)"
+            >
+              <el-option v-for="col in columnOptions" :key="col.name" :label="col.name" :value="col.name" />
+            </el-select>
+          </el-form-item>
+          <template v-if="selectedNode.config.validationMode === 'oos'">
+            <el-form-item label="OOS数据表" required>
+              <el-select :model-value="selectedNode.config.oosTable" filterable placeholder="选择完全独立的数据表"
+                style="width: 100%" :teleported="false" @update:model-value="updateConfig('oosTable', $event)">
+                <el-option v-for="table in tableOptions" :key="table.name" :label="table.name" :value="table.name" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="OOS过滤条件">
+              <el-input :model-value="selectedNode.config.oosFilter" placeholder="可选、安全 SQL 条件"
+                @update:model-value="updateConfig('oosFilter', $event)" />
+            </el-form-item>
+          </template>
           <el-form-item label="测试集比例">
             <el-slider
               :model-value="selectedNode.config.testSize"
@@ -574,6 +610,52 @@
               <el-option v-for="n in [3, 5, 10]" :key="n" :label="`${n}-Fold`" :value="n" />
             </el-select>
           </el-form-item>
+          <el-divider content-position="left">分类评估与阈值</el-divider>
+          <el-form-item label="风险正类">
+            <el-input :model-value="selectedNode.config.positiveClass" placeholder="留空时自动选少数类"
+              @update:model-value="updateConfig('positiveClass', $event)" />
+          </el-form-item>
+          <el-form-item label="概率校准">
+            <el-select :model-value="selectedNode.config.calibrationMethod || 'none'" style="width: 100%" :teleported="false"
+              @update:model-value="updateConfig('calibrationMethod', $event)">
+              <el-option label="不校准" value="none" />
+              <el-option label="Sigmoid / Platt" value="sigmoid" />
+              <el-option label="Isotonic" value="isotonic" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="决策阈值">
+            <el-select :model-value="selectedNode.config.thresholdPolicy?.mode || 'default'" style="width: 100%" :teleported="false"
+              @update:model-value="updateNestedConfig('thresholdPolicy', 'mode', $event)">
+              <el-option label="默认 0.5" value="default" />
+              <el-option label="固定阈值" value="fixed" />
+              <el-option label="最大 F1" value="max_f1" />
+              <el-option label="最低召回约束" value="min_recall" />
+              <el-option label="最小业务成本" value="min_cost" />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-if="selectedNode.config.thresholdPolicy?.mode === 'fixed'" label="固定值">
+            <el-input-number :model-value="selectedNode.config.thresholdPolicy?.value ?? 0.5" :min="0.01" :max="0.99" :step="0.01" :precision="2"
+              @update:model-value="updateNestedConfig('thresholdPolicy', 'value', $event)" />
+          </el-form-item>
+          <el-form-item v-if="selectedNode.config.thresholdPolicy?.mode === 'min_recall'" label="最低召回率">
+            <el-input-number :model-value="selectedNode.config.thresholdPolicy?.targetRecall ?? 0.8" :min="0.1" :max="1" :step="0.05" :precision="2"
+              @update:model-value="updateNestedConfig('thresholdPolicy', 'targetRecall', $event)" />
+          </el-form-item>
+          <template v-if="selectedNode.config.thresholdPolicy?.mode === 'min_cost'">
+            <el-form-item label="误报成本"><el-input-number :model-value="selectedNode.config.thresholdPolicy?.falsePositiveCost ?? 1" :min="0" :step="1"
+              @update:model-value="updateNestedConfig('thresholdPolicy', 'falsePositiveCost', $event)" /></el-form-item>
+            <el-form-item label="漏报成本"><el-input-number :model-value="selectedNode.config.thresholdPolicy?.falseNegativeCost ?? 5" :min="0" :step="1"
+              @update:model-value="updateNestedConfig('thresholdPolicy', 'falseNegativeCost', $event)" /></el-form-item>
+          </template>
+          <el-divider content-position="left">发布门槛</el-divider>
+          <el-form-item label="最少测试样本"><el-input-number :model-value="selectedNode.config.governancePolicy?.minTestRows ?? 20" :min="1" :step="10"
+            @update:model-value="updateNestedConfig('governancePolicy', 'minTestRows', $event)" /></el-form-item>
+          <el-form-item label="最大过拟合差"><el-input-number :model-value="selectedNode.config.governancePolicy?.maxOverfittingGap ?? 0.15" :min="0" :max="1" :step="0.01" :precision="2"
+            @update:model-value="updateNestedConfig('governancePolicy', 'maxOverfittingGap', $event)" /></el-form-item>
+          <el-form-item label="最大CV波动"><el-input-number :model-value="selectedNode.config.governancePolicy?.maxCvStd ?? 0.1" :min="0" :max="1" :step="0.01" :precision="2"
+            @update:model-value="updateNestedConfig('governancePolicy', 'maxCvStd', $event)" /></el-form-item>
+          <el-form-item label="要求实体隔离"><el-switch :model-value="selectedNode.config.governancePolicy?.requireGroupIsolation || false"
+            @update:model-value="updateNestedConfig('governancePolicy', 'requireGroupIsolation', $event)" /></el-form-item>
         </el-form>
       </template>
 
@@ -717,6 +799,7 @@ const emit = defineEmits([
   'analyzeFeatures',
   'loadDsPreview',
   'modelTypeChange',
+  'algorithmChange',
   'addTransform',
   'removeTransform',
   'onTransformTypeChange',
@@ -782,7 +865,7 @@ const algoOptions = computed(() => {
   const mt = props.selectedNode?.config?.modelType
   if (!mt || !props.algorithms.length) return []
   return props.algorithms
-    .filter(a => !a.modelTypes || a.modelTypes.includes(mt))
+    .filter(a => parseJson(a.modelTypes, []).includes(mt))
     .map(a => ({ value: a.algorithmId, label: (a.icon ? a.icon + ' ' : '') + a.name }))
 })
 
@@ -790,9 +873,24 @@ const currentAlgoParams = computed(() => {
   const algoId = props.selectedNode?.config?.algorithm
   if (!algoId) return []
   const algo = props.algorithms.find(a => a.algorithmId === algoId)
-  if (!algo?.params) return []
-  return Object.entries(algo.params).map(([key, p]) => ({ key, ...p }))
+  if (!algo) return []
+  const schema = parseJson(algo.paramsSchema, [])
+  if (Array.isArray(schema)) return schema
+  if (schema?.properties) {
+    return Object.entries(schema.properties).map(([key, value]) => ({
+      key, label: value.title || key,
+      type: value.type === 'integer' ? 'int' : value.type === 'number' ? 'float' : value.type,
+      defaultValue: value.default, min: value.minimum, max: value.maximum, options: value.enum
+    }))
+  }
+  return []
 })
+
+function parseJson(value, fallback) {
+  if (value == null || value === '') return fallback
+  if (typeof value !== 'string') return value
+  try { return JSON.parse(value) } catch { return fallback }
+}
 
 function updateConfig(field, value) {
   if (!props.selectedNode) return
@@ -815,6 +913,18 @@ function updateHyperparam(key, value) {
   emit('update:selectedNode', updated)
 }
 
+function updateNestedConfig(section, key, value) {
+  if (!props.selectedNode) return
+  const updated = {
+    ...props.selectedNode,
+    config: {
+      ...props.selectedNode.config,
+      [section]: { ...(props.selectedNode.config[section] || {}), [key]: value }
+    }
+  }
+  emit('update:selectedNode', updated)
+}
+
 function onTableSelected(tableName) {
   updateConfig('table', tableName)
   emit('tableSelected', tableName)
@@ -828,6 +938,10 @@ function onTargetColumnChange(target) {
 function onModelTypeChange(val) {
   updateConfig('modelType', val)
   emit('modelTypeChange', val)
+}
+
+function onAlgorithmChange(val) {
+  emit('algorithmChange', val)
 }
 
 function onValidationModeChange(val) {

@@ -6,6 +6,7 @@ import com.smartquery.engine.ConversationContextHolder;
 import com.smartquery.engine.QueryEngine;
 import com.smartquery.engine.ReActEvent;
 import com.smartquery.logging.ConversationStatsService;
+import com.smartquery.logging.SystemMonitorService;
 import com.smartquery.service.ScenarioAuthService;
 import com.smartquery.service.ResourceAccessService;
 import com.smartquery.tool.ToolRegistry;
@@ -38,6 +39,7 @@ public class ChatController {
     private final ChatMessageMapper chatMessageMapper;
     private final ConversationEventLogger eventLogger;
     private final ConversationStatsService statsService;
+    private final SystemMonitorService systemMonitorService;
     private final ToolRegistry toolRegistry;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
     @Qualifier("asyncExecutor")
@@ -331,6 +333,12 @@ public class ChatController {
     public Map<String, Object> getStats() {
         resourceAccess.requireAdmin();
         return statsService.getStats();
+    }
+
+    @GetMapping("/admin/system-monitor")
+    public Map<String, Object> getSystemMonitor() {
+        resourceAccess.requireAdmin();
+        return systemMonitorService.snapshot();
     }
 
     @GetMapping("/admin/tools")

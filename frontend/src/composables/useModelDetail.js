@@ -75,6 +75,10 @@ const METRIC_NAMES = {
   train_recall: '训练召回率', test_recall: '测试召回率',
   train_r2: '训练R²', test_r2: '测试R²',
   cv_mean: 'CV均值', cv_std: 'CV标准差',
+  test_balanced_accuracy: '平衡准确率', test_precision_macro: '宏平均精确率',
+  test_recall_macro: '宏平均召回率', test_f1_macro: '宏平均 F1',
+  roc_auc: 'ROC-AUC', pr_auc: 'PR-AUC', ks: 'KS', lift_at_10pct: 'Top10% Lift',
+  risk_recall: '风险类召回率', decision_threshold: '决策阈值',
   overfitting_gap: '过拟合差距', confusion_matrix: '混淆矩阵',
   class_labels: '类别标签', silhouette_score: '轮廓系数',
   inertia: '惯性', n_clusters: '聚类数',
@@ -91,7 +95,9 @@ export function formatMetricValue(key, val) {
   const pctKeys = ['accuracy', 'precision', 'recall', 'f1', 'r2',
     'train_accuracy', 'test_accuracy', 'train_f1', 'test_f1',
     'train_precision', 'test_precision', 'train_recall', 'test_recall',
-    'train_r2', 'test_r2', 'silhouette_score']
+    'train_r2', 'test_r2', 'silhouette_score', 'test_balanced_accuracy',
+    'test_precision_macro', 'test_recall_macro', 'test_f1_macro',
+    'roc_auc', 'pr_auc', 'ks', 'risk_recall']
   return pctKeys.includes(key) ? (val * 100).toFixed(1) + '%' : Number(val).toFixed(4)
 }
 

@@ -58,18 +58,18 @@ export MYSQL_PASSWORD=900110   # 业务库示例容器密码（仅 demo）
 ## 四、构建与启动
 
 ```bash
-# 一键：mvn 打 jar（本地热 ~/.m2，快）→ 拷 app.jar → 构建全部 docker 镜像
+# 一键：Docker 多阶段构建 backend、frontend 和 Python 执行镜像
 ./scripts/build.sh
 
 # 启动全部（DM8 系统库需先就绪 + redis 健康后 backend 起，DataSeeder 自动兜底建表）
 docker compose up -d
 ```
 
-> 后端镜像采用「拷预构建 jar」模式（运行时态 = Node20 + JRE17），避开 in-Docker 冷 maven 下载。`scripts/build.sh` 自动完成 `mvn -DskipTests package` + `cp target/*.jar backend/app.jar` + `docker compose build`。CI/离线打包用 `scripts/airpack.sh`（同样的 mvn 步骤）。
+> 后端采用 Maven + JRE/Node 多阶段 Dockerfile。干净的虚拟机检出仓库后可直接执行 `docker compose --profile tools build`，不依赖被 Git 忽略的本地 `backend/app.jar`。首次构建会下载 Maven、npm 和 pip 依赖，后续构建使用 BuildKit 缓存。
 
-> **宿主端口**默认避开本地开发端口（3307/9001/5174），可与本地 `start.sh` 同时跑；专用部署机可在 `.env` 设 `MYSQL_HOST_PORT=3306 BACKEND_HOST_PORT=9000 FRONTEND_HOST_PORT=80`。
+> **宿主端口**默认只把前端 `80` 绑定到 `0.0.0.0`；后端 `9001` 和 DM8 `5236` 仅绑定 `127.0.0.1`。需要调整时修改 `.env` 中的 `*_BIND_ADDRESS` 和 `*_HOST_PORT`。
 
-- 前端：http://localhost:${FRONTEND_HOST_PORT:-5174}
+- 前端：http://localhost:${FRONTEND_HOST_PORT:-80}
 - 后端 API：http://localhost:${BACKEND_HOST_PORT:-9001}/api/v1/...
 - 日志：`docker compose logs -f backend`
 - 停止：`docker compose down`（加 `-v` 清库数据）
@@ -91,7 +91,7 @@ docker compose up -d
 docker compose up -d
 ```
 
-`airpack.sh` 导出的镜像：`smart-query-backend` / `smart-query-frontend` / `smart-query-python` + `mysql:8.0` / `redis:7-alpine`（**不需要** nginx/node/python 等 base——已烘焙进项目镜像，甲方 `docker compose up` 不重建）。save/load 机制本地已实测通过。注意：**达梦适配完成后，mysql 镜像替换为达梦驱动 vendor 方案**（见路线图）。
+`airpack.sh` 导出的镜像：`smart-query-backend` / `smart-query-frontend` / `smart-query-python` + `DM_IMAGE` 指定的 DM8 镜像 + `redis:7-alpine`。nginx/node/python/maven 等构建阶段基础镜像不需要在离线现场单独导入。
 
 ## 五、本地测试要点
 

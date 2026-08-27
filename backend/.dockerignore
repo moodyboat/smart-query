@@ -1,6 +1,9 @@
 target/
+app.jar
 !.mvn/wrapper/maven-wrapper.jar
 *.log
 .idea/
 .vscode/
 .DS_Store
+concurrency_test.py
+db-export/

@@ -10,7 +10,6 @@
 - [前端界面体验指南](guides/USER_EXPERIENCE_GUIDE.md) — 前端界面导览
 
 ## 🏗️ 架构与设计
-- [智能体交接文档](AGENT_HANDOFF.md) — 当前分支、改造状态、部署数据、风险和后续任务
 - [建模运行时架构](mining-runtime.md) — 固定 Python Runtime、Pipeline、异步训练和评估协议
 - [协调器 Coordinator](COORDINATOR.md)
 

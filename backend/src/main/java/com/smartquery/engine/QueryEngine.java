@@ -15,9 +15,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
@@ -155,12 +158,18 @@ public class QueryEngine {
         // 3. 运行 ReAct 循环 (实时回调)
         StringBuilder assistantContent = new StringBuilder();
         ConcurrentLinkedQueue<Map<String, Object>> toolBlocks = new ConcurrentLinkedQueue<>();
+        AtomicInteger persistedTokens = new AtomicInteger(0);
+        AtomicReference<BigDecimal> persistedCost = new AtomicReference<>(BigDecimal.ZERO);
         // Span 追踪栈: 记录当前运行中的 spanId
         Deque<String> spanStack = new ArrayDeque<>();
         Consumer<ReActEvent> wrappingConsumer = event -> {
             // 收集 assistant 文本用于持久化
             if (event instanceof ReActEvent.Thinking t) {
                 assistantContent.append(t.content());
+            }
+            if (event instanceof ReActEvent.Done done) {
+                persistedTokens.accumulateAndGet(done.totalTokens(), Math::max);
+                persistedCost.set(BigDecimal.valueOf(done.cost()));
             }
             // 收集工具块用于 metadata
             collectToolBlock(toolBlocks, event);
@@ -172,10 +181,14 @@ public class QueryEngine {
             eventConsumer.accept(event);
         };
 
+        boolean querySuccessful = true;
+        String queryError = null;
         try {
             reActEngine.runReActLoopStreaming(
                 conversationId, model, dataSourceId, userMessage, history, scenarioCode, scenarioVariables, abortChecker, wrappingConsumer);
         } catch (Exception e) {
+            querySuccessful = false;
+            queryError = e.getMessage();
             log.error("[QUERY] ReAct loop failed: {}", e.getMessage(), e);
             eventConsumer.accept(new ReActEvent.Error("处理失败", e.getMessage()));
         }
@@ -188,6 +201,7 @@ public class QueryEngine {
             assistantMsg.setContent(assistantContent.toString());
             assistantMsg.setModel(model);
             assistantMsg.setTraceId(traceId);
+            assistantMsg.setTokenCount(persistedTokens.get());
             if (!toolBlocks.isEmpty()) {
                 try {
                     List<Map<String, Object>> blocks = List.copyOf(toolBlocks);
@@ -228,9 +242,15 @@ public class QueryEngine {
         historyRecord.setTraceId(traceId);
         historyRecord.setQuestion(userMessage);
         historyRecord.setModel(model);
+        historyRecord.setTotalTokens(persistedTokens.get());
+        historyRecord.setTotalTokensUsed(persistedTokens.get());
+        historyRecord.setCostUsd(persistedCost.get());
+        historyRecord.setTotalCostUsd(persistedCost.get());
         long duration = System.currentTimeMillis() - startTime;
         historyRecord.setDurationMs((int) duration);
-        historyRecord.setStatus("success");
+        historyRecord.setExecutionTimeMs((int) duration);
+        historyRecord.setStatus(querySuccessful ? "success" : "error");
+        historyRecord.setErrorMessage(queryError);
         queryHistoryMapper.insert(historyRecord);
 
         // JSONL: 记录查询完成

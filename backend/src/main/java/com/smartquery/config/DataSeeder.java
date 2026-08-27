@@ -256,6 +256,71 @@ public class DataSeeder implements CommandLineRunner {
 
         seedDefaultAdmin();
         seedDefaultRoleScenarios();
+        seedAlgorithmCatalog();
+    }
+
+    private void seedAlgorithmCatalog() {
+        String[][] categories = {
+            {"random_forest", "集成学习"}, {"xgboost", "集成学习"},
+            {"gradient_boosting", "集成学习"}, {"lightgbm", "集成学习"},
+            {"decision_tree", "树模型"}, {"logistic_regression", "线性模型"},
+            {"svm", "核方法"}, {"knn", "近邻方法"}, {"kmeans", "聚类"}
+        };
+        for (String[] item : categories) {
+            jdbcTemplate.update("UPDATE sq_algorithm SET category = ? WHERE algorithm_id = ? AND is_builtin = 1",
+                item[1], item[0]);
+        }
+
+        ensureAlgorithm("neural_network", "多层感知机 (MLP)",
+            "基于反向传播的全连接神经网络，支持分类和回归，可配置网络宽度、层数、激活函数、学习率与早停。",
+            "[\"classification\",\"regression\"]",
+            "[{\"key\":\"hidden_layer_size\",\"label\":\"每层神经元\",\"type\":\"int\",\"min\":4,\"max\":1024,\"step\":4,\"defaultValue\":100},"
+                + "{\"key\":\"hidden_layers\",\"label\":\"隐藏层数\",\"type\":\"int\",\"min\":1,\"max\":8,\"step\":1,\"defaultValue\":2},"
+                + "{\"key\":\"activation\",\"label\":\"激活函数\",\"type\":\"select\",\"options\":[\"relu\",\"tanh\",\"logistic\"],\"defaultValue\":\"relu\"},"
+                + "{\"key\":\"solver\",\"label\":\"优化器\",\"type\":\"select\",\"options\":[\"adam\",\"sgd\",\"lbfgs\"],\"defaultValue\":\"adam\"},"
+                + "{\"key\":\"learning_rate_init\",\"label\":\"初始学习率\",\"type\":\"float\",\"min\":0.00001,\"max\":1,\"step\":0.0001,\"defaultValue\":0.001},"
+                + "{\"key\":\"alpha\",\"label\":\"L2正则系数\",\"type\":\"float\",\"min\":0,\"max\":1,\"step\":0.0001,\"defaultValue\":0.0001},"
+                + "{\"key\":\"max_iter\",\"label\":\"最大迭代次数\",\"type\":\"int\",\"min\":50,\"max\":5000,\"step\":50,\"defaultValue\":500},"
+                + "{\"key\":\"early_stopping\",\"label\":\"启用早停\",\"type\":\"boolean\",\"defaultValue\":true}]",
+            "from sklearn.neural_network import MLPClassifier, MLPRegressor\n"
+                + "hidden_size = int(params.pop('hidden_layer_size', 100))\n"
+                + "hidden_layers = int(params.pop('hidden_layers', 2))\n"
+                + "params['hidden_layer_sizes'] = tuple([hidden_size] * hidden_layers)\n"
+                + "params.setdefault('random_state', 42)\n"
+                + "model_cls = MLPClassifier if _model_type == 'classification' else MLPRegressor\n"
+                + "clf = model_cls(**params)", "🧠", "神经网络");
+
+        ensureAlgorithm("linear_regression", "线性回归", "可解释的回归基线模型，适合线性关系与基准比较。",
+            "[\"regression\"]",
+            "[{\"key\":\"fit_intercept\",\"label\":\"拟合截距\",\"type\":\"boolean\",\"defaultValue\":true},"
+                + "{\"key\":\"positive\",\"label\":\"限制正系数\",\"type\":\"boolean\",\"defaultValue\":false}]",
+            "from sklearn.linear_model import LinearRegression\nclf = LinearRegression(**params)", "📏", "线性模型");
+
+        ensureAlgorithm("naive_bayes", "高斯朴素贝叶斯", "训练快速的概率分类基线，适合连续特征和小样本场景。",
+            "[\"classification\"]",
+            "[{\"key\":\"var_smoothing\",\"label\":\"方差平滑\",\"type\":\"float\",\"min\":0.000000000001,\"max\":0.1,\"step\":0.000000001,\"defaultValue\":0.000000001}]",
+            "from sklearn.naive_bayes import GaussianNB\nclf = GaussianNB(**params)", "🎲", "概率模型");
+
+        ensureAlgorithm("isolation_forest", "孤立森林", "通过随机切分隔离异常点，适合无监督异常检测。",
+            "[\"anomaly_detection\"]",
+            "[{\"key\":\"n_estimators\",\"label\":\"树的数量\",\"type\":\"int\",\"min\":10,\"max\":1000,\"step\":10,\"defaultValue\":100},"
+                + "{\"key\":\"contamination\",\"label\":\"异常比例\",\"type\":\"float\",\"min\":0.001,\"max\":0.5,\"step\":0.01,\"defaultValue\":0.05}]",
+            "from sklearn.ensemble import IsolationForest\nparams.setdefault('random_state', 42)\nclf = IsolationForest(**params)", "🚨", "异常检测");
+    }
+
+    private void ensureAlgorithm(String algorithmId, String name, String description,
+                                 String modelTypes, String paramsSchema, String pythonCode,
+                                 String icon, String category) {
+        Integer count = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM sq_algorithm WHERE algorithm_id = ?", Integer.class, algorithmId);
+        if (count != null && count > 0) return;
+        jdbcTemplate.update("""
+            INSERT INTO sq_algorithm
+              (algorithm_id, name, description, model_types, params_schema, python_code_template,
+               is_builtin, icon, category, created_at, updated_at, deleted)
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)
+            """, algorithmId, name, description, modelTypes, paramsSchema, pythonCode, icon, category);
+        log.info("[SEED] 新增内置算法模板: {} ({})", name, algorithmId);
     }
 
     private void seedDefaultAdmin() {

@@ -61,53 +61,11 @@
 
       <div v-if="model.metrics" class="detail-section">
         <h4>评估指标</h4>
-        <div v-if="overfittingWarningFn(model)" class="overfitting-warning">
-          {{ overfittingWarningFn(model) }}
-        </div>
-        <div class="metrics-grid">
-          <div v-for="(val, key) in parsedMetrics(model.metrics)" :key="key" class="metric-card">
-            <span class="metric-value">{{ formatMetricValue(key, val) }}</span>
-            <span class="metric-name">{{ formatMetricName(key) }}</span>
-          </div>
-        </div>
-      </div>
-
-      <div v-if="model.featureImportance" class="detail-section">
-        <h4>特征重要性</h4>
-        <div class="importance-list">
-          <div v-for="(val, key) in sortedImportance" :key="key" class="importance-bar">
-            <span class="imp-label">{{ key }}</span>
-            <div class="imp-track">
-              <div class="imp-fill" :style="{ width: (val / maxImportance * 100) + '%' }"></div>
-            </div>
-            <span class="imp-value">{{ (val * 100).toFixed(1) }}%</span>
-          </div>
-        </div>
-      </div>
-
-      <div v-if="model.validationMetrics" class="detail-section">
-        <h4>验证结果</h4>
-        <div class="validation-info">
-          <template v-if="parsedMetrics(model.validationMetrics).cv_mean !== undefined">
-            <div class="val-item">
-              <span class="val-label">CV {{ parsedMetrics(model.validationMetrics).cv_folds || 5 }}-Fold</span>
-              <span class="val-value">{{ (parsedMetrics(model.validationMetrics).cv_mean * 100).toFixed(1) }}% &pm; {{ (parsedMetrics(model.validationMetrics).cv_std * 100).toFixed(1) }}%</span>
-            </div>
-            <div v-if="parsedMetrics(model.validationMetrics).cv_scores" class="val-scores">
-              <span v-for="(s, i) in parsedMetrics(model.validationMetrics).cv_scores" :key="i" class="score-chip">{{ (s * 100).toFixed(1) }}%</span>
-            </div>
-          </template>
-          <template v-if="parsedMetrics(model.validationMetrics).temporal_split">
-            <div class="val-item">
-              <span class="val-label">时间外验证</span>
-              <span class="val-value">{{ parsedMetrics(model.validationMetrics).temporal_split }}</span>
-            </div>
-            <div v-if="parsedMetrics(model.validationMetrics).temporal_accuracy" class="val-item">
-              <span class="val-label">时序准确率</span>
-              <span class="val-value">{{ (parsedMetrics(model.validationMetrics).temporal_accuracy * 100).toFixed(1) }}%</span>
-            </div>
-          </template>
-        </div>
+        <ModelMetricsDashboard
+          :metrics="model.metrics"
+          :validation="model.validationMetrics"
+          :feature-importance="model.featureImportance"
+        />
       </div>
 
       <div v-if="model.status === MODEL_STATUS.PUBLISHED && (model.predictInputTable || model.predictResultTable || model.scheduleEnabled)" class="detail-section">
@@ -177,6 +135,7 @@
 
 <script setup>
 import NodeParamsEditor from '../NodeParamsEditor.vue'
+import ModelMetricsDashboard from './ModelMetricsDashboard.vue'
 import {
   pipelineNodeIcon, pipelineNodeTitle, pipelineNodeSummary,
   isNodeConfigured, parsedMetrics, formatMetricName, formatMetricValue,

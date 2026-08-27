@@ -1,27 +1,33 @@
-# smart-query 本地/测试部署编排
+# smart-query Linux 虚拟机 / Docker Compose 部署编排
 # 用法：
-#   docker compose --profile tools build python     # 先构建 python 执行镜像（后端 docker run 调用）
-#   docker compose build                            # 构建后端 + 前端
-#   docker compose up                               # 启动（前端 http://localhost:5173  后端 :9000）
-# 配置：复制 .env.example → .env 覆盖 DEEPSEEK_API_KEY / DM_PASSWORD 等
+#   cp .env.example .env                            # 修改密码、JWT 和 API Key
+#   docker compose --profile tools build            # 构建后端、前端和 Python 执行镜像
+#   docker compose up -d                            # 启动常驻服务
+# 默认只向外网公开前端 80；DM8 和后端仅绑定宿主回环地址。
 #
 # 数据库角色分工（重要）：
 #   - 系统库：达梦 DM8（Compose 服务 dm8:5236；也可通过环境变量连接外部实例）
 #     schema=SMART_QUERY 由 DataSeeder 兜底建表 + smart_query_seed.sql 导入种子
 #   - 达梦 DM8：同时承载 SMART_QUERY 系统 Schema 与 SMART_QUERY_SAMPLE 演示业务 Schema
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
 services:
   # 系统库 + 演示业务库：首次创建实例时强制大小写不敏感和 MySQL 兼容模式。
   dm8:
-    image: dm8_single:dm8_20241022_rev244896_x86_rh6_64
-    container_name: dm8
+    image: ${DM_IMAGE:-dm8_single:dm8_20241022_rev244896_x86_rh6_64}
     privileged: true
     restart: unless-stopped
+    init: true
     environment:
       DM_SYSDBA_PASSWORD: ${DM_PASSWORD:-Dameng123}
       TZ: Asia/Shanghai
     entrypoint: ["/bin/bash", "/entrypoint.sh"]
-    ports: ["${DM_HOST_PORT:-5236}:5236"]
+    ports: ["${DM_BIND_ADDRESS:-127.0.0.1}:${DM_HOST_PORT:-5236}:5236"]
     volumes:
       - dm8_data:/opt/dmdbms/data
       - ./docker/dm8-entrypoint.sh:/entrypoint.sh:ro
@@ -31,21 +37,27 @@ services:
       timeout: 8s
       retries: 60
       start_period: 30s
+    logging: *default-logging
 
   redis:
-    image: redis:7-alpine
-    ports: ["6379:6379"]
+    image: ${REDIS_IMAGE:-redis:7-alpine}
+    restart: unless-stopped
+    init: true
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
+      timeout: 3s
       retries: 30
+    logging: *default-logging
 
   backend:
-    image: smart-query-backend:latest
+    image: ${BACKEND_IMAGE:-smart-query-backend:latest}
     build:
       context: ./backend
       dockerfile: Dockerfile
-    ports: ["${BACKEND_HOST_PORT:-9001}:9000"]
+    restart: unless-stopped
+    init: true
+    ports: ["${BACKEND_BIND_ADDRESS:-127.0.0.1}:${BACKEND_HOST_PORT:-9001}:9000"]
     environment:
       # 系统库（达梦 DM8）：默认连接 Compose 内的 dm8 服务，也可由环境变量覆盖
       # DM8 已开 COMPATIBLE_MODE=4 + CASE_SENSITIVE=0，schema=SMART_QUERY
@@ -65,7 +77,7 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
       # Python 执行走独立镜像（后端通过 docker socket 以 docker run 调用）
       SMART_QUERY_PYTHON_EXECUTION_MODE: docker
-      SMART_QUERY_PYTHON_DOCKER_IMAGE: smart-query-python:latest
+      SMART_QUERY_PYTHON_DOCKER_IMAGE: ${PYTHON_IMAGE:-smart-query-python:latest}
       SMART_QUERY_PYTHON_DOCKER_SHARED_VOLUME: sq_artifacts
       SMART_QUERY_PYTHON_DOCKER_WORKSPACE_VOLUME: sq_workspace
       SMART_QUERY_PYTHON_DOCKER_NETWORK: smartquery-net
@@ -79,19 +91,41 @@ services:
     depends_on:
       dm8: { condition: service_healthy }
       redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:9000/v3/api-docs').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+    stop_grace_period: 30s
+    logging: *default-logging
 
   frontend:
-    image: smart-query-frontend:latest
+    image: ${FRONTEND_IMAGE:-smart-query-frontend:latest}
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    ports: ["${FRONTEND_HOST_PORT:-5174}:80"]
-    depends_on: [backend]
+    restart: unless-stopped
+    init: true
+    ports: ["${FRONTEND_BIND_ADDRESS:-0.0.0.0}:${FRONTEND_HOST_PORT:-80}:80"]
+    depends_on:
+      backend: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    logging: *default-logging
 
   # Python 执行镜像：仅构建、非常驻（后端 docker run 调用）。用 --profile 隔离，up 不启动它
   python:
-    build: { context: ./docker/python, dockerfile: Dockerfile }
-    image: smart-query-python:latest
+    build:
+      context: ./docker/python
+      dockerfile: Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+    image: ${PYTHON_IMAGE:-smart-query-python:latest}
     profiles: ["tools"]
     command: ["python3", "-c", "print('smart-query-python image ready')"]
 

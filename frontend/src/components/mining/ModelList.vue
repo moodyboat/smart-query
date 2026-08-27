@@ -43,8 +43,8 @@
               {{ primaryMetricLabel(model) }}
               <strong>{{ primaryMetricValue(model) }}</strong>
             </span>
-            <template v-for="(val, key) in parsedMetrics(model.metrics)" :key="key">
-              <span v-if="!isPrimary(key, model.modelType)" :class="['metric-chip', 'quality-' + metricQuality(val, model.modelType, key)]">{{ formatMetricName(key) }} {{ formatMetricValue(key, val) }}</span>
+            <template v-for="(val, key) in summaryMetrics(model)" :key="key">
+              <span :class="['metric-chip', 'quality-' + metricQuality(val, model.modelType, key)]">{{ formatMetricName(key) }} {{ formatMetricValue(key, val) }}</span>
             </template>
           </div>
         </div>
@@ -119,6 +119,20 @@ const emit = defineEmits([
 
 function handleSelectChange(modelId, checked) {
   emit('updateSelection', modelId, checked)
+}
+
+const SUMMARY_METRIC_KEYS = [
+  'test_balanced_accuracy', 'test_f1_macro', 'roc_auc', 'pr_auc', 'ks',
+  'lift_at_10pct', 'test_rmse', 'test_mae', 'cv_mean',
+  'silhouette_score', 'overfitting_gap'
+]
+
+function summaryMetrics(model) {
+  const metrics = props.parsedMetrics(model.metrics)
+  return Object.fromEntries(SUMMARY_METRIC_KEYS
+    .filter(key => typeof metrics[key] === 'number' && !props.isPrimary(key, model.modelType))
+    .slice(0, 6)
+    .map(key => [key, metrics[key]]))
 }
 </script>
 

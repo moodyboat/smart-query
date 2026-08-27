@@ -39,7 +39,12 @@ export function useAlgorithms() {
       if (!groups[cat]) groups[cat] = { category: cat, algorithms: [] }
       groups[cat].algorithms.push(algo)
     }
-    return Object.values(groups)
+    const order = ['集成学习', '树模型', '线性模型', '概率模型', '核方法', '近邻方法', '神经网络', '聚类', '异常检测', '自定义', '其他']
+    return Object.values(groups).sort((a, b) => {
+      const ai = order.indexOf(a.category)
+      const bi = order.indexOf(b.category)
+      return (ai < 0 ? order.length : ai) - (bi < 0 ? order.length : bi)
+    })
   })
 
   function getAlgorithmDef(algorithmId) {

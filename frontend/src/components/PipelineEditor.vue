@@ -34,6 +34,8 @@
           :algorithm-groups="algorithmGroups"
           :model-type-names="modelTypeNames"
           @palette-drag-start="onPaletteDragStart"
+          @algorithm-click="openAlgorithmLibrary"
+          @manage-algorithms="openAlgorithmLibrary()"
         />
         <PipelineCanvas
           :nodes="pipelineNodes"
@@ -151,6 +153,7 @@
         @analyze-features="analyzeFeatures"
         @load-ds-preview="loadDsPreview"
         @model-type-change="onModelTypeChange"
+        @algorithm-change="onAlgorithmChange"
         @add-transform="addTransform"
         @remove-transform="removeTransform"
         @on-transform-type-change="tf => onTransformTypeChange(tf)"
@@ -159,6 +162,17 @@
         @update-column-strategy="updateColumnStrategy"
         @sync-feat-cols="syncFeatCols"
         @run-missing-trial="handleMissingTrial"
+      />
+
+      <AlgorithmLibraryDialog
+        v-model:visible="showAlgorithmLibrary"
+        :algorithms="algorithms"
+        :categories="categories"
+        :model-types="modelTypes"
+        :model-type-names="modelTypeNames"
+        :is-admin="userStore.isAdmin"
+        :initial-algorithm="libraryAlgorithm"
+        @refresh="refreshAlgorithmLibrary"
       />
     </template>
 
@@ -181,6 +195,7 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useMiningStore } from '../stores/mining'
+import { useUserStore } from '../stores/user'
 import {
   fetchMiningPipelines, fetchMiningPipeline, createMiningPipeline,
   updateMiningPipeline, deleteMiningPipeline, executeMiningPipeline,
@@ -201,19 +216,23 @@ import PipelineToolbar from './pipeline/PipelineToolbar.vue'
 import PipelinePreview from './pipeline/PipelinePreview.vue'
 import NodeConfigPanel from './pipeline/NodeConfigPanel.vue'
 import ScriptTabs from './pipeline/ScriptTabs.vue'
+import AlgorithmLibraryDialog from './pipeline/AlgorithmLibraryDialog.vue'
 
 const props = defineProps({
   dataSources: { type: Array, default: () => [] }
 })
 
 const {
-  algorithms, modelTypes, algorithmGroups, loadAlgorithms,
+  algorithms, modelTypes, categories, algorithmGroups, loadAlgorithms,
   getAlgorithmLabel, getAlgorithmsForModelType,
   getAlgorithmParams, getDefaultHyperparams, getModelTypeLabel, modelTypeNames
 } = useAlgorithms()
 
 const emit = defineEmits(['close', 'goToModel'])
 const miningStore = useMiningStore()
+const userStore = useUserStore()
+const showAlgorithmLibrary = ref(false)
+const libraryAlgorithm = ref(null)
 
 async function openPipelineById(id) {
   if (editingPipeline.value?.id === id) return
@@ -378,7 +397,9 @@ function nodeSummary(node) {
       return parts.length ? parts.join(' ') : '未配置'
     }
     case 'training': {
-      return c.algorithm ? getAlgorithmLabel(c.algorithm) : '未配置'
+      if (!c.algorithm) return '未配置'
+      const params = Object.entries(c.hyperparams || {}).slice(0, 2).map(([key, value]) => `${key}=${value}`)
+      return `${getAlgorithmLabel(c.algorithm)}${params.length ? ' | ' + params.join(', ') : ''}`
     }
     case 'evaluation': {
       const vm = c.validationMode
@@ -400,8 +421,16 @@ function defaultNodeConfig(type) {
     case T.PREPROCESSING: return { title: NODE_TYPE_LABELS[T.PREPROCESSING], handleMissing: 'drop', encoding: 'label', scaling: 'standard' }
     case T.FILL_MISSING: return { title: NODE_TYPE_LABELS[T.FILL_MISSING], strategy: 'auto', columns: [], fillValues: {} }
     case T.FEATURE_ENGINEERING: return { title: NODE_TYPE_LABELS[T.FEATURE_ENGINEERING], featureColumns: '[]', targetColumn: '' }
-    case T.TRAINING: return { title: NODE_TYPE_LABELS[T.TRAINING], modelType: firstModelType(), algorithm: firstAlgorithm(), hyperparams: {} }
-    case T.EVALUATION: return { title: NODE_TYPE_LABELS[T.EVALUATION], testSize: 20, cvFold: 0, validationMode: 'train_test', temporalColumn: null }
+    case T.TRAINING: {
+      const algorithm = firstAlgorithm()
+      return { title: NODE_TYPE_LABELS[T.TRAINING], modelType: firstModelType(), algorithm, hyperparams: getDefaultHyperparams(algorithm) }
+    }
+    case T.EVALUATION: return {
+      title: NODE_TYPE_LABELS[T.EVALUATION], testSize: 20, cvFold: 5, validationMode: 'cv',
+      temporalColumn: null, groupColumns: [], oosTable: '', oosFilter: '', positiveClass: '',
+      calibrationMethod: 'none', thresholdPolicy: { mode: 'default' },
+      governancePolicy: { minTestRows: 20, maxOverfittingGap: 0.15, maxCvStd: 0.1 }
+    }
     case T.OUTPUT: return { title: NODE_TYPE_LABELS[T.OUTPUT], table: '', mode: 'append', autoCreate: false }
     default: return { title: type }
   }
@@ -412,7 +441,8 @@ function firstModelType() {
 }
 
 function firstAlgorithm() {
-  return algorithms.value.length > 0 ? algorithms.value[0].algorithmId : DEFAULT_ALGORITHM
+  return algorithms.value.find(a => a.algorithmId === DEFAULT_ALGORITHM)?.algorithmId
+    || algorithms.value[0]?.algorithmId || DEFAULT_ALGORITHM
 }
 
 function isNodeConfigured(node) {
@@ -562,8 +592,17 @@ function normalizeNodes(nodes) {
         config.hyperparams = config.hyperparameters
         delete config.hyperparameters
       }
-      if (n.type === NODE_TYPES.TRAINING && !config.hyperparams) {
-        config.hyperparams = {}
+      if (n.type === NODE_TYPES.TRAINING && (!config.hyperparams || Object.keys(config.hyperparams).length === 0)) {
+        config.hyperparams = getDefaultHyperparams(config.algorithm)
+      }
+      if (n.type === NODE_TYPES.EVALUATION) {
+        if (!config.validationMode) config.validationMode = 'cv'
+        if (!config.cvFold) config.cvFold = 5
+        if (!Array.isArray(config.groupColumns)) config.groupColumns = []
+        if (!config.thresholdPolicy) config.thresholdPolicy = { mode: 'default' }
+        if (!config.governancePolicy) {
+          config.governancePolicy = { minTestRows: 20, maxOverfittingGap: 0.15, maxCvStd: 0.1 }
+        }
       }
       if (n.type === NODE_TYPES.FEATURE_ENGINEERING && Array.isArray(config.featureColumns)) {
         config.featureColumns = JSON.stringify(config.featureColumns)
@@ -1132,6 +1171,25 @@ function onModelTypeChange() {
   c.algorithm = available.length ? available[0].algorithmId : firstAlgorithm()
   const defaults = getDefaultHyperparams(c.algorithm)
   c.hyperparams = { ...defaults }
+}
+
+function onAlgorithmChange(algorithmId) {
+  if (!selectedNode.value) return
+  selectedNode.value.config = {
+    ...selectedNode.value.config,
+    algorithm: algorithmId,
+    hyperparams: { ...getDefaultHyperparams(algorithmId) }
+  }
+}
+
+function openAlgorithmLibrary(algorithm = null) {
+  libraryAlgorithm.value = algorithm
+  showAlgorithmLibrary.value = true
+}
+
+async function refreshAlgorithmLibrary(selectedId) {
+  await loadAlgorithms(true)
+  libraryAlgorithm.value = selectedId ? algorithms.value.find(a => a.id === selectedId) || null : null
 }
 
 // --- Node update from config panel ---

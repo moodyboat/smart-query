@@ -435,6 +435,11 @@ export async function fetchAlgorithms(modelType) {
   return data.data
 }
 
+export async function fetchAlgorithm(id) {
+  const { data } = await api.get(`/mining/algorithms/${id}`)
+  return data.data
+}
+
 export async function fetchAlgorithmCategories() {
   const { data } = await api.get('/mining/algorithms/categories')
   return data.data
@@ -471,6 +476,11 @@ export async function fetchAdminStats() {
 
 export async function fetchAdminSessions() {
   const { data } = await api.get('/admin/sessions')
+  return data
+}
+
+export async function fetchSystemMonitor() {
+  const { data } = await api.get('/admin/system-monitor')
   return data
 }
 
