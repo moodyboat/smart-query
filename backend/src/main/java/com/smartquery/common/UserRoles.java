@@ -9,7 +9,12 @@ package com.smartquery.common;
 public final class UserRoles {
 
     public static final String ADMIN = "admin";
+    public static final String OPERATOR_REVIEWER = "operator_reviewer";
     public static final String USER = "user";
+
+    public static boolean isSupported(String role) {
+        return ADMIN.equals(role) || OPERATOR_REVIEWER.equals(role) || USER.equals(role);
+    }
 
     private UserRoles() {
     }

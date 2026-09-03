@@ -88,6 +88,15 @@ public class PythonExecutor {
     @Value("${smart-query.python.progress-report-interval:5}")
     private int progressReportInterval;
 
+    @Value("${smart-query.python.rule-sandbox.max-memory-mb:128}")
+    private int ruleSandboxMaxMemoryMb;
+
+    @Value("${smart-query.python.rule-sandbox.max-cpus:0.5}")
+    private double ruleSandboxMaxCpus;
+
+    @Value("${smart-query.python.rule-sandbox.pids-limit:64}")
+    private int ruleSandboxPidsLimit;
+
     private final ConcurrentMap<String, Process> activeProcesses = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, String> activeContainerNames = new ConcurrentHashMap<>();
 
@@ -273,6 +282,14 @@ public class PythonExecutor {
     public PythonResult executeResource(String resourcePath, List<String> arguments,
                                         Long dataSourceId, int timeoutMs, String executionKey,
                                         java.util.function.Consumer<String> logConsumer) {
+        return executeResource(resourcePath, arguments, dataSourceId, timeoutMs, executionKey,
+            logConsumer, dockerImage);
+    }
+
+    public PythonResult executeResource(String resourcePath, List<String> arguments,
+                                        Long dataSourceId, int timeoutMs, String executionKey,
+                                        java.util.function.Consumer<String> logConsumer,
+                                        String runtimeImage) {
         timeoutMs = Math.min(Math.max(timeoutMs, 1000), maxTimeoutMs);
         long start = System.currentTimeMillis();
 
@@ -305,12 +322,17 @@ public class PythonExecutor {
             List<String> safeArguments = arguments == null ? List.of() : List.copyOf(arguments);
             ProcessBuilder pb;
             if ("docker".equals(executionMode)) {
+                if (!validRuntimeImage(runtimeImage)) {
+                    return PythonResult.error("模型运行时镜像引用不合法", -23,
+                        (int) (System.currentTimeMillis() - start));
+                }
                 if (executionKey != null && !executionKey.isBlank()) {
                     activeContainerName = executionKey.toLowerCase(Locale.ROOT)
                         .replaceAll("[^a-z0-9_.-]", "-");
                     activeContainerNames.put(executionKey, activeContainerName);
                 }
-                pb = buildDockerProcess(programFile, dataSourceId, dbUrl, safeArguments, activeContainerName);
+                pb = buildDockerProcess(programFile, dataSourceId, dbUrl, safeArguments,
+                    activeContainerName, runtimeImage);
             } else {
                 List<String> command = new ArrayList<>();
                 command.add(resolvedPythonCmd);
@@ -387,6 +409,94 @@ public class PythonExecutor {
                 activeProcesses.remove(executionKey, activeProcess);
             }
             if (executionKey != null) activeContainerNames.remove(executionKey);
+        }
+    }
+
+    /**
+     * Runs an untrusted rule through a version-controlled runner in a dedicated
+     * Docker container. It deliberately has no network, database credentials or
+     * access to the shared workspace/other artifact directories.
+     */
+    public PythonResult executeIsolatedResource(String resourcePath, List<String> arguments,
+                                                int timeoutMs, Path sandboxDirectory,
+                                                String executionKey) {
+        return executeIsolatedResource(resourcePath, arguments, timeoutMs, sandboxDirectory,
+            executionKey, dockerImage);
+    }
+
+    public PythonResult executeIsolatedResource(String resourcePath, List<String> arguments,
+                                                int timeoutMs, Path sandboxDirectory,
+                                                String executionKey, String runtimeImage) {
+        timeoutMs = Math.min(Math.max(timeoutMs, 1000), maxTimeoutMs);
+        long start = System.currentTimeMillis();
+        if (!"docker".equals(executionMode)) {
+            return PythonResult.error("自定义规则只允许在Docker隔离模式执行", -20, 0);
+        }
+        if (!circuitBreaker.allowExecution()) {
+            return PythonResult.error("Python 执行暂时不可用（熔断保护中）", -10, 0);
+        }
+
+        Path artifactRoot = Path.of(artifactDir).toAbsolutePath().normalize();
+        Path isolatedRoot = sandboxDirectory == null ? null
+            : sandboxDirectory.toAbsolutePath().normalize();
+        if (isolatedRoot == null || isolatedRoot.equals(artifactRoot) || !isolatedRoot.startsWith(artifactRoot)) {
+            return PythonResult.error("规则沙箱目录越界", -21, 0);
+        }
+        if (!validRuntimeImage(runtimeImage)) {
+            return PythonResult.error("规则运行时镜像引用不合法", -23, 0);
+        }
+
+        Path programFile = null;
+        Process activeProcess = null;
+        String containerName = null;
+        try {
+            Files.createDirectories(isolatedRoot);
+            ClassPathResource resource = new ClassPathResource(resourcePath);
+            if (!resource.exists()) {
+                return PythonResult.error("规则运行器不存在: " + resourcePath, -4,
+                    (int) (System.currentTimeMillis() - start));
+            }
+            programFile = isolatedRoot.resolve("rule-runner-" + UUID.randomUUID() + ".py");
+            try (InputStream input = resource.getInputStream()) {
+                Files.copy(input, programFile, StandardCopyOption.REPLACE_EXISTING);
+            }
+            restrictOwnerOnly(programFile);
+            containerName = executionKey == null || executionKey.isBlank() ? null
+                : executionKey.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_.-]", "-");
+            if (containerName != null) activeContainerNames.put(executionKey, containerName);
+            ProcessBuilder processBuilder = buildIsolatedDockerProcess(
+                programFile, isolatedRoot, arguments == null ? List.of() : arguments, containerName,
+                runtimeImage);
+            processBuilder.redirectErrorStream(false);
+            Process process = processBuilder.start();
+            activeProcess = process;
+            if (executionKey != null && !executionKey.isBlank()) activeProcesses.put(executionKey, process);
+
+            CompletableFuture<String> stdoutFuture = readAsync(process.getInputStream());
+            CompletableFuture<String> stderrFuture = readAsync(process.getErrorStream());
+            boolean completed = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS);
+            int elapsed = (int) (System.currentTimeMillis() - start);
+            if (!completed) {
+                process.destroyForcibly();
+                process.waitFor(5, TimeUnit.SECONDS);
+                stdoutFuture.cancel(true);
+                stderrFuture.cancel(true);
+                return PythonResult.timeout("规则沙箱执行超时 (" + timeoutMs + "ms)", elapsed);
+            }
+            String stdout = truncateOutput(stdoutFuture.get(streamDrainTimeoutSeconds, TimeUnit.SECONDS));
+            String stderr = truncateOutput(stderrFuture.get(streamDrainTimeoutSeconds, TimeUnit.SECONDS));
+            int exitCode = process.exitValue();
+            if (exitCode == 0) circuitBreaker.recordSuccess();
+            else circuitBreaker.recordFailure();
+            return new PythonResult(stdout, stderr, exitCode, List.of(), elapsed);
+        } catch (Exception e) {
+            circuitBreaker.recordFailure();
+            return PythonResult.error("规则沙箱执行异常: " + e.getClass().getSimpleName()
+                + " - " + e.getMessage(), -22, (int) (System.currentTimeMillis() - start));
+        } finally {
+            if (executionKey != null && activeProcess != null) activeProcesses.remove(executionKey, activeProcess);
+            if (executionKey != null) activeContainerNames.remove(executionKey);
+            try { Files.deleteIfExists(programFile); } catch (Exception ignored) {}
         }
     }
 
@@ -545,6 +655,12 @@ public class PythonExecutor {
 
     private ProcessBuilder buildDockerProcess(Path scriptFile, Long dataSourceId, String dbUrl,
                                               List<String> arguments, String containerName) {
+        return buildDockerProcess(scriptFile, dataSourceId, dbUrl, arguments, containerName, dockerImage);
+    }
+
+    private ProcessBuilder buildDockerProcess(Path scriptFile, Long dataSourceId, String dbUrl,
+                                              List<String> arguments, String containerName,
+                                              String runtimeImage) {
         String memLimit = maxMemoryMb + "m";
         String cpuLimit = String.valueOf(maxCpus);
         boolean dood = dockerSharedVolume != null && !dockerSharedVolume.isBlank();
@@ -577,12 +693,60 @@ public class PythonExecutor {
         if (dockerNetwork != null && !dockerNetwork.isBlank()) {
             cmd.add("--network"); cmd.add(dockerNetwork);
         }
-        cmd.add(dockerImage);
+        cmd.add(runtimeImage);
         cmd.add("python");
         // 脚本路径：DooD 下脚本在共享卷的 artifactDir 内（python 容器同路径可见）；否则走 /scripts
         cmd.add(dood ? scriptFile.toString() : "/scripts/" + scriptFile.getFileName());
         cmd.addAll(arguments);
         return new ProcessBuilder(cmd);
+    }
+
+    private boolean validRuntimeImage(String runtimeImage) {
+        return runtimeImage != null && runtimeImage.matches("^[A-Za-z0-9._/:@-]{3,500}$")
+            && !runtimeImage.startsWith("-") && !runtimeImage.contains("..");
+    }
+
+    private ProcessBuilder buildIsolatedDockerProcess(Path programFile, Path sandboxDirectory,
+                                                      List<String> arguments, String containerName,
+                                                      String runtimeImage) {
+        boolean dood = dockerSharedVolume != null && !dockerSharedVolume.isBlank();
+        List<String> command = new ArrayList<>();
+        command.add("docker");
+        command.add("run");
+        command.add("--rm");
+        if (containerName != null && !containerName.isBlank()) {
+            command.add("--name");
+            command.add(containerName);
+        }
+        command.add("--network=none");
+        command.add("--read-only");
+        command.add("--cap-drop=ALL");
+        command.add("--security-opt=no-new-privileges");
+        command.add("--pids-limit=" + Math.max(16, ruleSandboxPidsLimit));
+        command.add("--memory=" + Math.max(64, ruleSandboxMaxMemoryMb) + "m");
+        command.add("--cpus=" + Math.max(0.1d, ruleSandboxMaxCpus));
+        command.add("--tmpfs");
+        command.add("/tmp:rw,noexec,nosuid,size=32m");
+        if (dood) {
+            Path artifactRoot = Path.of(artifactDir).toAbsolutePath().normalize();
+            String relative = artifactRoot.relativize(sandboxDirectory).toString().replace('\\', '/');
+            if (relative.isBlank() || relative.startsWith("..") || relative.contains("/../")) {
+                throw new IllegalArgumentException("规则沙箱卷子目录无效");
+            }
+            command.add("--mount");
+            command.add("type=volume,src=" + dockerSharedVolume + ",dst=/sandbox,volume-subpath=" + relative);
+        } else {
+            command.add("--mount");
+            command.add("type=bind,src=" + sandboxDirectory + ",dst=/sandbox");
+        }
+        command.add("--workdir=/sandbox");
+        command.add("-e");
+        command.add("PYTHONIOENCODING=utf-8");
+        command.add(runtimeImage);
+        command.add("python");
+        command.add("/sandbox/" + programFile.getFileName());
+        command.addAll(arguments);
+        return new ProcessBuilder(command);
     }
 
     private String resolveDataSourceUrl(Long dataSourceId) {

@@ -1,18 +1,22 @@
 <template>
   <div class="pipeline-list-header">
     <div class="list-header-left">
-      <span class="list-count">{{ filteredPipelines.length }} 个流程</span>
+      <div v-if="props.repositoryMode" class="list-heading">
+        <strong>模型草稿</strong>
+        <small>保存未发布的训练设计；点击草稿进入模型流程编排</small>
+      </div>
+      <span class="list-count">{{ filteredPipelines.length }} 个{{ props.repositoryMode ? '模型草稿' : '流程' }}</span>
       <el-select v-model="filterDsId" placeholder="全部数据源" size="small" clearable style="width: 160px">
         <el-option v-for="ds in dataSources" :key="ds.id" :label="ds.name" :value="ds.id" />
       </el-select>
     </div>
-    <el-button type="primary" size="small" @click="$emit('create')">新建流程</el-button>
+    <el-button type="primary" size="small" @click="$emit('create')">{{ props.repositoryMode ? '新建模型流水线' : '新建流程' }}</el-button>
   </div>
   <div v-if="filteredPipelines.length === 0" class="empty-pipelines">
-    <p>暂无流程，点击「新建流程」开始编排数据分析管道</p>
+    <p>{{ props.repositoryMode ? '暂无模型草稿，点击「新建模型流水线」开始编排训练过程' : '暂无流程，点击「新建流程」开始编排数据分析管道' }}</p>
   </div>
   <div class="pipeline-grid">
-    <div v-for="p in filteredPipelines" :key="p.id" class="pipeline-card" @click="$emit('open', p)">
+    <div v-for="p in filteredPipelines" :key="p.id" class="pipeline-card" @click="openPrimary(p)">
       <div class="pipeline-card-header">
         <span class="pipeline-name">{{ p.name }}</span>
         <div style="display: flex; gap: 4px; align-items: center;">
@@ -24,6 +28,7 @@
         <span>{{ dataSourceName(p.dataSourceId) }}</span>
         <span>{{ nodeCount(p) }} 个步骤</span>
         <span>{{ formatDate(p.createdAt) }}</span>
+        <span v-if="props.repositoryMode">{{ props.isAdmin ? `归属用户 #${p.userId || '-'}` : '仅本人可编辑' }}</span>
       </div>
       <div v-if="parsedNodes(p).length" class="pipeline-card-flow">
         <span v-for="(n, i) in parsedNodes(p).slice(0, 5)" :key="i" class="mini-node">
@@ -33,7 +38,8 @@
         <span v-if="parsedNodes(p).length > 5" class="mini-more">+{{ parsedNodes(p).length - 5 }}</span>
       </div>
       <div class="pipeline-card-actions">
-        <el-button size="small" text type="primary" @click.stop="$emit('open', p)">编辑</el-button>
+        <el-button size="small" text type="primary" @click.stop="openPrimary(p)">{{ props.unifiedDag ? '进入流程编排' : props.repositoryMode ? '进入模型编排' : '编辑' }}</el-button>
+        <el-button v-if="props.unifiedDag" size="small" text @click.stop="emit('open', p)">编辑训练草稿</el-button>
         <el-button size="small" text type="success" @click.stop="$emit('runFromCard', p)" :disabled="p.status === PIPELINE_STATUS.RUNNING">
           {{ p.status === PIPELINE_STATUS.RUNNING ? '运行中' : '运行' }}
         </el-button>
@@ -49,16 +55,26 @@ import { PIPELINE_STATUS } from '../../constants'
 
 const props = defineProps({
   pipelines: { type: Array, default: () => [] },
-  dataSources: { type: Array, default: () => [] }
+  dataSources: { type: Array, default: () => [] },
+  repositoryMode: { type: Boolean, default: false },
+  unifiedDag: { type: Boolean, default: false },
+  isAdmin: { type: Boolean, default: false }
 })
 
-defineEmits(['create', 'open', 'runFromCard', 'delete'])
+const emit = defineEmits(['create', 'open', 'openDag', 'runFromCard', 'delete'])
 
 const filterDsId = ref(null)
 
+function openPrimary(pipeline) {
+  emit(props.unifiedDag ? 'openDag' : 'open', pipeline)
+}
+
 const filteredPipelines = computed(() => {
-  if (!filterDsId.value) return props.pipelines
-  return props.pipelines.filter(p => p.dataSourceId === filterDsId.value)
+  let visible = props.repositoryMode
+    ? props.pipelines.filter(p => [PIPELINE_STATUS.DRAFT, PIPELINE_STATUS.READY, PIPELINE_STATUS.RUNNING, PIPELINE_STATUS.FAILED].includes(p.status))
+    : props.pipelines
+  if (filterDsId.value) visible = visible.filter(p => p.dataSourceId === filterDsId.value)
+  return visible
 })
 
 function parsedNodes(p) {
@@ -109,6 +125,10 @@ function nodeLabel(node) {
   align-items: center;
   gap: var(--space-md);
 }
+
+.list-heading { display: flex; flex-direction: column; gap: 3px; margin-right: var(--space-sm); }
+.list-heading strong { color: #17365d; font-size: 16px; }
+.list-heading small { color: #7b899b; font-size: 10px; }
 
 .list-count {
   color: var(--text-muted);

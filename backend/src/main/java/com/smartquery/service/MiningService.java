@@ -8,10 +8,12 @@ import com.smartquery.entity.*;
 import com.smartquery.logging.ConversationEventLogger;
 import com.smartquery.logging.DiagnosticsTimer;
 import com.smartquery.mapper.*;
+import com.smartquery.orchestration.MiningOperatorRegistrationService;
 import com.smartquery.python.PythonResult;
 import com.smartquery.python.PythonSandbox;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -75,6 +77,7 @@ public class MiningService {
     private final ConversationEventLogger eventLogger;
     private final ResourceAccessService resourceAccess;
     private final TaskEventService taskEventService;
+    private final MiningOperatorRegistrationService miningOperatorRegistrationService;
     private final Executor miningExecutor;
 
     public MiningService(
@@ -92,6 +95,7 @@ public class MiningService {
             ConversationEventLogger eventLogger,
             ResourceAccessService resourceAccess,
             TaskEventService taskEventService,
+            @Lazy MiningOperatorRegistrationService miningOperatorRegistrationService,
             @Qualifier("miningExecutor") Executor miningExecutor
     ) {
         this.miningModelMapper = miningModelMapper;
@@ -108,6 +112,7 @@ public class MiningService {
         this.eventLogger = eventLogger;
         this.resourceAccess = resourceAccess;
         this.taskEventService = taskEventService;
+        this.miningOperatorRegistrationService = miningOperatorRegistrationService;
         this.miningExecutor = miningExecutor;
     }
 
@@ -222,8 +227,14 @@ public class MiningService {
         if (ModelStatus.PUBLISHED.equals(model.getStatus())) {
             throw new IllegalStateException("已发布的模型不能删除，请先下线");
         }
-        model.setDeleted(1);
-        miningModelMapper.updateById(model);
+        int updated = miningModelMapper.update(null,
+            new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<MiningModel>()
+                .eq(MiningModel::getId, id)
+                .eq(MiningModel::getDeleted, 0)
+                .set(MiningModel::getDeleted, 1));
+        if (updated != 1) {
+            throw new IllegalStateException("模型删除失败，请刷新后重试");
+        }
     }
 
     // ======================== Validation ========================
@@ -988,6 +999,7 @@ public class MiningService {
                                    List<String> hardFailures, List<String> warnings,
                                    Map<String, Object> evaluatedMetrics) {}
 
+    @org.springframework.transaction.annotation.Transactional
     public MiningModel publishModel(Long modelId, Map<String, Object> config) {
         MiningModel model = resourceAccess.requireModel(modelId);
         if (!ModelStatus.TRAINED.equals(model.getStatus()) && !ModelStatus.OFFLINE.equals(model.getStatus())) {
@@ -1060,6 +1072,7 @@ public class MiningService {
                 log.warn("[MINING] Failed to sync pipeline after publish: {}", e.getMessage());
             }
         }
+        miningOperatorRegistrationService.registerPublishedModel(model);
         logMiningEvent(model, "model_published", Map.of(
             "version", model.getVersion(),
             "scheduleEnabled", model.getScheduleEnabled(),
@@ -1120,6 +1133,18 @@ public class MiningService {
     public Map<String, Object> predictModel(Long modelId, List<Map<String, Object>> inputRows, String saveTable) {
         resourceAccess.requireModel(modelId);
         return predictionService.predict(modelId, inputRows, saveTable);
+    }
+
+    /** Ownership-checked, side-effect-free prediction entry point for orchestration nodes. */
+    public Map<String, Object> predictModelTransient(Long modelId, List<Map<String, Object>> inputRows) {
+        resourceAccess.requireModel(modelId);
+        return predictionService.predictTransient(modelId, inputRows);
+    }
+
+    public Map<String, Object> predictModelTransient(Long modelId, List<Map<String, Object>> inputRows,
+                                                     String runtimeImage) {
+        resourceAccess.requireModel(modelId);
+        return predictionService.predictTransient(modelId, inputRows, runtimeImage);
     }
 
     public Map<String, Object> batchPredict(Long modelId) {

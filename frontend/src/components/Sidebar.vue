@@ -145,18 +145,19 @@
           </el-tooltip>
         </div>
       </div>
+      <div class="footer-section-label">工作台</div>
       <div class="admin-actions">
-        <el-button v-if="userStore.isAdmin" @click="$emit('openScenarioManager')">
-          <el-icon><Star /></el-icon> 场景
+        <el-button class="workbench-action" @click="$emit('openWorkbench')">
+          <el-icon><Share /></el-icon> 编排与治理
+        </el-button>
+        <el-button @click="$emit('openDataSource')">
+          <el-icon><DataLine /></el-icon> 数据源
         </el-button>
         <el-button @click="$emit('openPromptManager')">
           <el-icon><EditPen /></el-icon> 提示词
         </el-button>
-        <el-button @click="$emit('openMining')">
-          <el-icon><TrendCharts /></el-icon> 挖掘
-        </el-button>
-        <el-button @click="$emit('openDataSource')">
-          <el-icon><DataLine /></el-icon> 数据源
+        <el-button v-if="userStore.isAdmin" @click="$emit('openScenarioManager')">
+          <el-icon><Star /></el-icon> 场景
         </el-button>
       </div>
       <el-button type="primary" class="new-conv-btn" :loading="creating" @click="handleNewConversation">
@@ -168,7 +169,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
-import { Plus, DataLine, TrendCharts, EditPen, Setting, Delete, SwitchButton, Star } from '@element-plus/icons-vue'
+import { Plus, DataLine, EditPen, SwitchButton, Star, Share } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { fetchConversations, fetchDataSources, createConversation, deleteConversation, renameConversation, batchDeleteConversations } from '../api'
 import { useUserStore } from '../stores/user'
@@ -237,7 +238,7 @@ watch(() => convStore.getCurrentScenario(), (code) => {
 const batchMode = ref(false)
 const selectedConversations = ref({})
 
-const emit = defineEmits(['selectConversation', 'conversationCreated', 'conversationDeleted', 'dataSourceChanged', 'openMining', 'openDataSource', 'openPromptManager', 'openScenarioManager', 'logout'])
+const emit = defineEmits(['selectConversation', 'conversationCreated', 'conversationDeleted', 'dataSourceChanged', 'openWorkbench', 'openDataSource', 'openPromptManager', 'openScenarioManager', 'logout'])
 
 const filteredConversations = computed(() => {
   if (!searchQuery.value.trim()) return conversations.value
@@ -667,6 +668,26 @@ defineExpose({ setCurrentConversation, getSelectedDataSourceId, conversations, r
 .admin-actions :deep(.el-button .el-icon) {
   font-size: 14px;
   margin-right: 2px;
+}
+.footer-section-label {
+  margin: 1px 2px -2px;
+  color: var(--sidebar-fg-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.admin-actions :deep(.workbench-action) {
+  grid-column: 1 / -1;
+  justify-content: flex-start;
+  height: 36px;
+  padding-inline: 12px;
+  border-color: var(--sidebar-brand-border);
+  background: rgba(37, 99, 235, .16);
+  color: var(--sidebar-fg-strong);
+}
+.admin-actions :deep(.workbench-action:hover) {
+  background: rgba(37, 99, 235, .26);
 }
 .new-conv-btn {
   width: 100%;

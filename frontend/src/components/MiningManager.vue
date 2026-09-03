@@ -1,18 +1,49 @@
 <template>
-  <div class="page-container mining-manager">
+  <div :class="['page-container', 'mining-manager', { embedded: props.embedded }]">
     <!-- Header -->
     <div class="page-header">
-      <button class="back-btn" @click="$emit('close')">
+      <button v-if="!props.embedded" class="back-btn" @click="$emit('close')">
         <span class="back-arrow">&larr;</span> 返回问数
       </button>
-      <h2 class="page-title">数据挖掘管理</h2>
+      <div class="mining-heading">
+        <h2 class="page-title">{{ repositoryTitle }}</h2>
+        <p v-if="props.embedded">{{ repositorySubtitle }}</p>
+      </div>
       <el-select v-model="filterDsId" placeholder="数据源" size="small" clearable style="width: 160px; margin-left: auto">
         <el-option v-for="ds in dataSources" :key="ds.id" :label="ds.name" :value="ds.id" />
       </el-select>
     </div>
 
+    <div v-if="props.repositoryMode && props.repositorySection === 'schedule'" class="repository-summary">
+      <div><strong>{{ models.length }}</strong><span>模型总数</span></div>
+      <div><strong>{{ artifactCount }}</strong><span>已固化制品</span></div>
+      <div><strong>{{ publishedCount }}</strong><span>流程可用</span></div>
+      <div><strong>{{ scheduledCount }}</strong><span>启用调度</span></div>
+    </div>
+
     <el-tabs v-model="activeTab" class="mining-tabs">
-      <el-tab-pane label="模型管理" name="models">
+      <el-tab-pane v-if="props.repositoryMode && props.repositorySection === 'schedule'" label="模型成品" name="schedule">
+        <ModelScheduleCenter
+          :models="models"
+          :loading="loading"
+          :data-sources="dataSources"
+          :catalog-items="mlOperatorCatalog"
+          :is-admin="userStore.isAdmin"
+          :algorithm-label="algorithmLabel"
+          :model-type-label="modelTypeLabel"
+          :primary-metric-label="primaryMetricLabel"
+          :primary-metric-value="primaryMetricValue"
+          :schedule-interval-label="scheduleIntervalLabel"
+          :format-date="formatDate"
+          @configure="openSchedule"
+          @open-dag="openModelDag"
+        />
+      </el-tab-pane>
+      <el-tab-pane v-if="props.repositoryMode && props.repositorySection === 'pipeline'" label="流水线草稿" name="pipeline">
+        <PipelineEditor ref="pipelineEditorRef" :dataSources="dataSources" repository-mode unified-dag
+          @goToModel="goToModel" @openDag="openPipelineDag" />
+      </el-tab-pane>
+      <el-tab-pane v-if="!props.repositoryMode" label="模型管理" name="models">
         <div class="tab-toolbar">
           <div class="toolbar-left">
             <el-input v-model="modelSearch" placeholder="搜索模型名称、算法、表名..." size="small" clearable style="width:260px" prefix-icon="Search" />
@@ -64,10 +95,10 @@
           @updateSelection="handleUpdateSelection"
         />
       </el-tab-pane>
-      <el-tab-pane label="流程编排" name="pipeline">
+      <el-tab-pane v-if="!props.repositoryMode" label="训练流水线" name="pipeline">
         <PipelineEditor ref="pipelineEditorRef" :dataSources="dataSources" @goToModel="goToModel" />
       </el-tab-pane>
-      <el-tab-pane label="算法库管理" name="algorithms">
+      <el-tab-pane v-if="!props.repositoryMode" label="算法库管理" name="algorithms">
         <div class="algorithm-admin-page">
           <div class="tab-toolbar">
             <div>
@@ -348,6 +379,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import PipelineEditor from './PipelineEditor.vue'
 import AlgorithmLibraryDialog from './pipeline/AlgorithmLibraryDialog.vue'
 import ModelList from './mining/ModelList.vue'
+import ModelScheduleCenter from './mining/ModelScheduleCenter.vue'
 import ModelCreateDialog from './mining/ModelCreateDialog.vue'
 import ModelScheduleDialog from './mining/ModelScheduleDialog.vue'
 import ModelPredictDialog from './mining/ModelPredictDialog.vue'
@@ -370,12 +402,29 @@ import { TRAINING_SAFETY_TIMEOUT_MS, DEFAULT_MODEL_TYPE, DEFAULT_ALGORITHM, PREV
 import { useModelDetail, pipelineNodeIcon, pipelineNodeTitle, pipelineNodeSummary, isNodeConfigured, parsedMetrics, formatMetricName, formatMetricValue, metricQuality, overfittingWarning } from '../composables/useModelDetail'
 import { useModelActions } from '../composables/useModelActions'
 import { isGhostModel } from '../utils/modelGhost'
+import { fetchPublishedOperatorCatalog } from '../api/orchestration.js'
 
-const emit = defineEmits(['close'])
+const props = defineProps({
+  embedded: { type: Boolean, default: false },
+  autoCreate: { type: Boolean, default: false },
+  repositoryMode: { type: Boolean, default: false },
+  repositorySection: { type: String, default: 'schedule' }
+})
+const emit = defineEmits(['close', 'openDag'])
 
 const mining = useMiningStore()
 const ui = useUIStore()
 const userStore = useUserStore()
+const repositoryTitle = computed(() => {
+  if (!props.repositoryMode) return '数据挖掘'
+  return props.repositorySection === 'pipeline' ? '模型流水线' : '调度中心'
+})
+const repositorySubtitle = computed(() => {
+  if (!props.repositoryMode) return '在这里完成机器学习算子的模型创建、训练、评估与发布。'
+  return props.repositorySection === 'pipeline'
+    ? '保存模型训练草稿，并将业务流程交给统一 DAG 编排。'
+    : '管理已发布模型成品、调度策略和生产编排入口。'
+})
 
 const {
   algorithms, modelTypes, categories, loadAlgorithms,
@@ -409,13 +458,17 @@ const {
 
 // Shared state from Pinia store
 const models = computed(() => mining.models)
+const artifactCount = computed(() => models.value.filter(model => model.modelPath && model.artifactSha256).length)
+const publishedCount = computed(() => models.value.filter(model => model.status === MODEL_STATUS.PUBLISHED).length)
+const scheduledCount = computed(() => models.value.filter(model => model.status === MODEL_STATUS.PUBLISHED && model.scheduleEnabled).length)
 const dataSources = computed(() => mining.dataSources)
 const loading = computed(() => mining.loading)
+const mlOperatorCatalog = ref([])
 const filterDsId = computed({
   get: () => mining.filterDsId,
   set: (v) => { mining.filterDsId = v }
 })
-const activeTab = ref('models')
+const activeTab = ref(props.repositoryMode ? props.repositorySection : 'models')
 const modelSearch = ref('')
 const selectedModels = ref(new Set())
 const saving = ref(false)
@@ -569,6 +622,12 @@ async function loadModels() {
   await mining.loadModels()
 }
 
+async function loadMlOperatorCatalog() {
+  if (!props.repositoryMode) return
+  try { mlOperatorCatalog.value = await fetchPublishedOperatorCatalog('ML') }
+  catch { mlOperatorCatalog.value = [] }
+}
+
 function algorithmParams(algo) {
   return getAlgorithmParams(algo)
 }
@@ -627,6 +686,10 @@ function onFormUpdate(newForm) {
 }
 
 watch(filterDsId, () => loadModels())
+watch(activeTab, tab => { if (tab === 'schedule') loadMlOperatorCatalog() })
+watch(() => props.repositorySection, section => {
+  if (props.repositoryMode) activeTab.value = section === 'pipeline' ? 'pipeline' : 'schedule'
+})
 watch(() => mining.models, () => {
   if (detailModel.value) {
     const fresh = mining.models.find(m => m.id === detailModel.value.id)
@@ -647,12 +710,15 @@ watch(() => form.value.algorithm, (algo) => {
     form.value.hyperparameters = defaults
   }
 })
-onMounted(() => {
-  loadAlgorithms()
-  loadModels()
+onMounted(async () => {
+  await Promise.allSettled([loadAlgorithms(), loadModels(), loadMlOperatorCatalog()])
   const initialId = ui.consumeMiningInitialModel()
   if (initialId) {
     nextTick(() => mining.selectModel(initialId))
+  }
+  if (props.autoCreate) {
+    activeTab.value = 'models'
+    showCreateDialog.value = true
   }
 })
 
@@ -690,7 +756,11 @@ function handleTrainingError(error) {
 }
 
 async function doPublish(id) { return handlePublish(id, models, detailModel) }
-async function doConfirmPublish() { return confirmPublish(detailModel) }
+async function doConfirmPublish() {
+  const result = await confirmPublish(detailModel)
+  await loadMlOperatorCatalog()
+  return result
+}
 async function doOffline(id) { return handleOffline(id, detailModel) }
 async function doDelete(id, name) { return handleDelete(id, name, showDetail, detailModel) }
 
@@ -1044,7 +1114,45 @@ function onActionCmd(cmd, model) {
   else if (cmd === 'delete') doDelete(model.id, model.name)
 }
 
+async function openModelDag(model) {
+  try {
+    const authorizedModel = await fetchMiningModel(model.id)
+    if (authorizedModel.status !== MODEL_STATUS.PUBLISHED) {
+      ElMessage.warning('只有已发布的模型成品可以进入流程编排')
+      return
+    }
+    await loadMlOperatorCatalog()
+    const catalogItem = mlOperatorCatalog.value.find(item => item.code === `ml_model_${authorizedModel.id}`)
+    if (!catalogItem) {
+      ElMessage.warning('该模型对应的机器学习算子版本尚未通过审批，暂不能进入流程编排')
+      return
+    }
+    emit('openDag', {
+      operatorVersionId: catalogItem.operatorVersionId,
+      sourceType: 'MODEL_ARTIFACT',
+      sourceId: authorizedModel.id,
+      sourceName: `${authorizedModel.name} v${authorizedModel.version}`
+    })
+  } catch (error) {
+    const message = error?.response?.data?.message || error?.message || '无权访问该模型成品'
+    ElMessage.error(message)
+  }
+}
+
+function openPipelineDag(pipeline) {
+  emit('openDag', {
+    operatorVersionId: null,
+    sourceType: 'PIPELINE_DRAFT',
+    sourceId: pipeline.id,
+    sourceName: `${pipeline.name}（草稿 #${pipeline.id}）`
+  })
+}
+
 function goToPipeline(pipelineId) {
+  if (props.repositoryMode) {
+    openPipelineDag({ id: pipelineId, name: '模型流水线' })
+    return
+  }
   showDetail.value = false
   activeTab.value = 'pipeline'
   nextTick(() => {
@@ -1053,6 +1161,10 @@ function goToPipeline(pipelineId) {
 }
 
 function goToModel(modelId) {
+  if (props.repositoryMode) {
+    ElMessage.info('模型成品统一在调度中心管理')
+    return
+  }
   activeTab.value = 'models'
   nextTick(() => {
     const model = mining.models.find(m => m.id === modelId)
@@ -1129,6 +1241,14 @@ function onDetailTuneParams(model) {
   flex: 1; min-width: 0;
   background: var(--bg); display: flex; flex-direction: column;
 }
+.mining-manager.embedded { max-width: none; margin: 0; padding: 0; }
+.embedded .page-header { min-height: 70px; margin: 0; padding: 12px 22px; background: var(--surface); }
+.mining-heading { min-width: 0; }
+.mining-heading p { margin: 4px 0 0; color: var(--text-muted); font-size: var(--font-sm); }
+.repository-summary { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 10px; padding: 14px var(--space-xl) 4px; }
+.repository-summary > div { display: flex; align-items: baseline; gap: 8px; padding: 12px 15px; border: 1px solid #dfe7f1; border-radius: 10px; background: white; }
+.repository-summary strong { color: #1559b7; font-size: 22px; }
+.repository-summary span { color: #758197; font-size: 12px; }
 .mining-tabs {
   flex: 1; display: flex; flex-direction: column; overflow: hidden;
   padding: 0 var(--space-xl);

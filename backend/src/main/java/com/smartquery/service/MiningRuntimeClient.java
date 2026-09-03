@@ -55,6 +55,22 @@ public class MiningRuntimeClient {
                                  Long dataSourceId, int timeoutMs, Long executionId,
                                  Consumer<ProgressUpdate> progressConsumer,
                                  Consumer<String> logConsumer) {
+        return executeInternal(action, input, dataSourceId, timeoutMs, executionId,
+            progressConsumer, logConsumer, null);
+    }
+
+    /** Executes orchestration prediction in the immutable image bound to its operator version. */
+    public RuntimeResult executeWithRuntime(String action, Map<String, Object> input,
+                                            Long dataSourceId, int timeoutMs,
+                                            String runtimeImage) {
+        return executeInternal(action, input, dataSourceId, timeoutMs, null,
+            null, null, runtimeImage);
+    }
+
+    private RuntimeResult executeInternal(String action, Map<String, Object> input,
+                                          Long dataSourceId, int timeoutMs, Long executionId,
+                                          Consumer<ProgressUpdate> progressConsumer,
+                                          Consumer<String> logConsumer, String runtimeImage) {
         Path requestFile = null;
         Path resultFile = null;
         Path progressFile = null;
@@ -94,10 +110,16 @@ public class MiningRuntimeClient {
                     0, 500, TimeUnit.MILLISECONDS);
             }
 
-            PythonResult process = executionId == null
-                ? pythonExecutor.executeResource(RUNTIME_RESOURCE, arguments, dataSourceId, timeoutMs)
-                : pythonExecutor.executeResource(RUNTIME_RESOURCE, arguments, dataSourceId, timeoutMs,
+            PythonResult process;
+            if (runtimeImage != null) {
+                process = pythonExecutor.executeResource(RUNTIME_RESOURCE, arguments, dataSourceId,
+                    timeoutMs, executionKey(executionId), logConsumer, runtimeImage);
+            } else if (executionId == null) {
+                process = pythonExecutor.executeResource(RUNTIME_RESOURCE, arguments, dataSourceId, timeoutMs);
+            } else {
+                process = pythonExecutor.executeResource(RUNTIME_RESOURCE, arguments, dataSourceId, timeoutMs,
                     executionKey(executionId), logConsumer);
+            }
             if (progressFile != null && progressConsumer != null) {
                 publishProgress(progressFile, new AtomicReference<>(), progressConsumer);
             }

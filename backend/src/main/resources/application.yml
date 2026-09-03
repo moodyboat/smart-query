@@ -206,6 +206,45 @@ smart-query:
       max-size: 4
       queue-capacity: 20
 
+  # V2 DAG 编排：数据库租约是跨实例唯一执行权
+  orchestration:
+    instance-id: ${ORCHESTRATION_INSTANCE_ID:}
+    lease:
+      duration-seconds: ${ORCHESTRATION_LEASE_SECONDS:30}
+      heartbeat-interval-ms: 5000
+      scan-interval-ms: 5000
+      recovery-batch-size: 50
+    node:
+      default-timeout-seconds: 300
+      replay-snapshot-max-bytes: 16777216
+      replay-detail-record-limit: 20
+    output-query:
+      cursor-secret: ${OUTPUT_QUERY_CURSOR_SECRET:${JWT_SECRET:smart-query-default-jwt-secret-key-change-me-in-production-min-32-bytes}}
+      cursor-max-age-seconds: 86400
+      max-filters: 10
+      max-in-values: 50
+      max-value-length: 1000
+      max-indexed-fields-per-row: 300
+    storage:
+      scan-interval-ms: ${STORAGE_RETENTION_SCAN_INTERVAL_MS:3600000}
+      retention-batch-size: ${STORAGE_RETENTION_BATCH_SIZE:25}
+      max-restore-bytes: ${STORAGE_MAX_RESTORE_BYTES:536870912}
+    output-preview:
+      max-records: 100
+      max-input-bytes: 524288
+    policy-preview:
+      max-sql-rows: 50
+      max-agent-records: 10
+      max-input-bytes: 524288
+    agent:
+      llm-timeout-seconds: 60
+    thread-pool:
+      run-core-size: 2
+      run-max-size: 4
+      node-core-size: 4
+      node-max-size: 8
+      queue-capacity: 50
+
   # Pipeline 流程编排
   pipeline:
     execution-timeout-ms: 600000
@@ -311,6 +350,13 @@ smart-query:
       core-size: 8
       max-size: 16
       queue-capacity: 100
+
+  # 外部不可变运行时构建器。密钥为空时 worker API 保持关闭；生产环境必须由密钥管理系统注入。
+  runtime-builder:
+    hmac-secret: ${RUNTIME_BUILDER_HMAC_SECRET:}
+    signature-max-skew-seconds: 300
+    lease-seconds: 1800
+    max-attempts: 3
 
 logging:
   level:

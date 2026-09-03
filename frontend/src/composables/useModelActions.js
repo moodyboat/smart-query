@@ -180,8 +180,8 @@ export function useModelActions(mining) {
       if (detailModel?.value?.id === publishModel_ref.value.id) detailModel.value = model
       showPublishDialog.value = false
       ElMessage.success(publishConfig.value.scheduleEnabled
-        ? '模型已发布，定时调度已启用'
-        : '模型已发布')
+        ? '模型已发布，机器学习算子版本已提交审批，定时调度已启用'
+        : '模型已发布，机器学习算子版本已提交审批')
     } catch (e) {
       if (e.message && e.message.includes('过拟合')) {
         try {
@@ -194,7 +194,7 @@ export function useModelActions(mining) {
           mining.updateModelInList(model)
           if (detailModel?.value?.id === publishModel_ref.value.id) detailModel.value = model
           showPublishDialog.value = false
-          ElMessage.success('模型已强制发布')
+          ElMessage.success('模型已发布，机器学习算子版本已提交审批')
         } catch { /* user cancelled */ }
       } else {
         ElMessage.error('发布失败: ' + (e.message || '未知错误'))

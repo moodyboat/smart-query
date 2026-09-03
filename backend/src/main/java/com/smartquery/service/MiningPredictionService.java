@@ -74,6 +74,41 @@ public class MiningPredictionService {
         return parsed;
     }
 
+    /**
+     * Executes row prediction without writing prediction history or result tables.
+     * Orchestration uses this boundary so a failed DAG cannot leave partial business output behind.
+     */
+    public Map<String, Object> predictTransient(Long modelId, List<Map<String, Object>> inputRows) {
+        return predictTransient(modelId, inputRows, null);
+    }
+
+    public Map<String, Object> predictTransient(Long modelId, List<Map<String, Object>> inputRows,
+                                                String runtimeImage) {
+        if (inputRows == null || inputRows.isEmpty()) {
+            throw new IllegalArgumentException("预测输入数据不能为空");
+        }
+        MiningModel model = miningModelMapper.selectById(modelId);
+        validateForPrediction(model);
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("mode", "rows");
+        request.put("modelPath", model.getModelPath());
+        request.put("inputRows", inputRows);
+        request.put("resultTable", null);
+        MiningRuntimeClient.RuntimeResult runtime = runtimeImage == null
+            ? miningRuntimeClient.execute("predict", request, model.getDataSourceId(), predictTimeoutMs)
+            : miningRuntimeClient.executeWithRuntime(
+                "predict", request, model.getDataSourceId(), predictTimeoutMs, runtimeImage);
+        if (!runtime.successful()) {
+            throw new RuntimeException("预测执行失败: "
+                + truncateLog(runtime.errorMessage(), predictErrorTruncation));
+        }
+        Map<String, Object> parsed = runtime.payload();
+        if (!(parsed.get("predictions") instanceof List<?>)) {
+            throw new IllegalStateException("Python 预测结果缺少 predictions");
+        }
+        return parsed;
+    }
+
     @SuppressWarnings("unchecked")
     public Map<String, Object> batchPredict(Long modelId) {
         return batchPredict(modelId, null);

@@ -32,6 +32,9 @@
           <div class="model-meta">
             <span class="meta-item secondary">表: {{ model.sourceTable || '-' }}</span>
             <span class="meta-item secondary">v{{ model.version }}</span>
+            <el-tag size="small" effect="plain" :type="model.modelPath && model.artifactSha256 ? 'success' : 'info'">{{ model.modelPath && model.artifactSha256 ? '制品已固化' : '暂无制品' }}</el-tag>
+            <el-tag v-if="model.status === MODEL_STATUS.PUBLISHED" size="small" effect="plain" type="primary">流程可用</el-tag>
+            <el-tag v-else-if="model.status === MODEL_STATUS.OFFLINE" size="small" effect="plain" type="info">已停用</el-tag>
             <el-tag v-if="model.conversationId" size="small" effect="plain" type="info">对话构建</el-tag>
             <el-tag v-else-if="model.pipelineId" size="small" effect="plain" type="success">流程编排</el-tag>
             <span v-if="model.pipelineId" class="meta-item secondary" style="cursor:pointer;color:var(--el-color-primary)" @click.stop="$emit('goToPipeline', model.pipelineId)">流程 #{{ model.pipelineId }}</span>
@@ -171,7 +174,7 @@ function summaryMetrics(model) {
   font-size: var(--font-sm); color: var(--text-muted); margin-top: var(--space-xs);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
 }
-.model-meta { display: flex; gap: var(--space-sm); margin-bottom: var(--space-xs); }
+.model-meta { display: flex; flex-wrap: wrap; gap: var(--space-sm); margin-bottom: var(--space-xs); }
 .meta-item { font-size: var(--font-sm); color: var(--text-secondary); }
 .meta-item.secondary { color: var(--text-muted); font-size: var(--font-xs); }
 .model-metrics { display: flex; flex-wrap: wrap; gap: var(--space-xs); margin-top: var(--space-sm); align-items: center; }

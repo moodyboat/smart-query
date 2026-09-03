@@ -11,6 +11,7 @@
 
 ## 🏗️ 架构与设计
 - [建模运行时架构](mining-runtime.md) — 固定 Python Runtime、Pipeline、异步训练和评估协议
+- [算子编排 V2 架构](orchestration-v2.md) — 统一算子、不可变版本、规则能力、真实 DAG 与标准线索
 - [协调器 Coordinator](COORDINATOR.md)
 
 ## 🗄️ 历史归档（docs/archive/）

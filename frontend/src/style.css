@@ -40,7 +40,7 @@
 
   /* ===== Element Plus 主题色覆盖（统一为品牌色）===== */
   --el-color-primary: var(--brand-primary);
-  --el-color-primary-light-3: #6366f1;
+  --el-color-primary-light-3: #60a5fa;
   --el-color-primary-light-5: #93c5fd;
   --el-color-primary-light-7: #bfdbfe;
   --el-color-primary-light-8: #dbeafe;
@@ -53,20 +53,20 @@
   --primary-light: var(--brand-primary-light);
 
   /* Surfaces */
-  --bg: #faf9fb;
+  --bg: #f5f7fb;
   --surface: #ffffff;
   --surface-raised: #ffffff;
 
   /* Borders */
-  --border: #e8e8e8;
-  --border-light: #f0f0f0;
-  --border-lighter: #f5f5f5;
+  --border: #dfe5ed;
+  --border-light: #e7ecf3;
+  --border-lighter: #f0f3f7;
 
   /* Text */
-  --text-primary: #303133;
-  --text-regular: #333333;
-  --text-secondary: #666666;
-  --text-muted: #999999;
+  --text-primary: #172b4d;
+  --text-regular: #334155;
+  --text-secondary: #5f6f85;
+  --text-muted: #8491a5;
 
   /* States */
   --color-success: #67c23a;
@@ -307,22 +307,22 @@ body {
 }
 
 /* ===== 管理页统一的 el-card / el-table 风格（所有 .page-container 内自动生效）===== */
-.page-container :deep(.el-card) {
+.page-container .el-card {
   border: 1px solid var(--border-light);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-sm);
 }
-.page-container :deep(.el-card__header) {
+.page-container .el-card__header {
   padding: var(--space-md) var(--space-lg);
   border-bottom: 1px solid var(--border-lighter);
 }
-.page-container :deep(.el-table) {
+.page-container .el-table {
   --el-table-border-color: var(--border-lighter);
   --el-table-header-bg-color: transparent;
   --el-table-tr-bg-color: transparent;
   --el-table-row-hover-bg-color: var(--brand-primary-lighter);
 }
-.page-container :deep(.el-table th.el-table__cell) {
+.page-container .el-table th.el-table__cell {
   background: transparent;
   font-weight: 600;
   font-size: var(--font-sm);
@@ -331,11 +331,11 @@ body {
   border-bottom: 1px solid var(--border);
   padding: 10px 0;
 }
-.page-container :deep(.el-table td.el-table__cell) {
+.page-container .el-table td.el-table__cell {
   border-bottom: 1px solid var(--border-lighter);
   padding: 12px 0;
 }
-.page-container :deep(.el-table .cell) {
+.page-container .el-table .cell {
   padding: 0 12px;
 }
 

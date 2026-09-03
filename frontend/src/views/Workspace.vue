@@ -6,14 +6,14 @@
     @conversationCreated="onConversationCreated"
     @conversationDeleted="onConversationDeleted"
     @dataSourceChanged="(dsId) => conv.setDataSource(dsId)"
-    @openMining="ui.openMining()"
+    @openWorkbench="ui.openWorkbench('schedule')"
     @openDataSource="ui.openDataSource()"
     @openPromptManager="ui.openPromptManager()"
     @openScenarioManager="ui.openScenarioManager()"
     @logout="onLogout"
   />
   <ChatPanel
-    v-show="!ui.miningVisible"
+    v-show="!ui.orchestrationHubVisible"
     ref="chatPanel"
     :conversationId="conv.currentConvId"
     :dataSourceId="conv.currentDsId"
@@ -29,9 +29,12 @@
     :dashboardId="ui.dashboardId"
     @close="ui.closeDashboard()"
   />
-  <MiningManager
-    v-if="ui.miningVisible"
-    @close="ui.closeMining()"
+  <OrchestrationGovernanceHub
+    v-if="ui.orchestrationHubVisible"
+    :conversation-id="conv.currentConvId"
+    :initial-section="ui.orchestrationHubSection"
+    :initial-operator-version-id="ui.dagInitialOperatorVersionId"
+    @close="ui.closeWorkbench()"
   />
   <DataSourceManager
     v-if="ui.dataSourceVisible"
@@ -53,7 +56,7 @@ import { useRouter } from 'vue-router'
 import Sidebar from '../components/Sidebar.vue'
 import ChatPanel from '../components/ChatPanel.vue'
 import DashboardView from '../components/DashboardView.vue'
-import MiningManager from '../components/MiningManager.vue'
+import OrchestrationGovernanceHub from '../components/OrchestrationGovernanceHub.vue'
 import DataSourceManager from '../components/DataSourceManager.vue'
 import PromptManager from '../components/PromptManager.vue'
 import ScenarioManager from '../components/ScenarioManager.vue'

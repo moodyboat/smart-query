@@ -1,0 +1,8 @@
+package com.smartquery.mapper;
+
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.smartquery.entity.DraftDependency;
+import org.apache.ibatis.annotations.Mapper;
+
+@Mapper
+public interface DraftDependencyMapper extends BaseMapper<DraftDependency> {}

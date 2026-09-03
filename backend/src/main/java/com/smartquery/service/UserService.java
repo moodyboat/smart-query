@@ -15,6 +15,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Locale;
 
 @Service
 @RequiredArgsConstructor
@@ -46,6 +47,7 @@ public class UserService {
         if (request.getRole() == null || request.getRole().isBlank()) {
             request.setRole(UserRoles.USER);
         }
+        request.setRole(supportedRole(request.getRole()));
         Long existing = userMapper.selectCount(new LambdaQueryWrapper<User>()
             .eq(User::getUsername, request.getUsername()));
         if (existing != null && existing > 0) {
@@ -68,18 +70,22 @@ public class UserService {
         if (user == null) {
             throw new BusinessException(404, "用户不存在");
         }
+        String nextRole = request.getRole() == null || request.getRole().isBlank()
+            ? user.getRole() : supportedRole(request.getRole());
+        int nextEnabled = request.getEnabled() == null
+            ? (user.getEnabled() == null ? 1 : user.getEnabled()) : request.getEnabled();
+        if (UserRoles.ADMIN.equals(user.getRole())
+                && (!UserRoles.ADMIN.equals(nextRole) || nextEnabled == 0)) {
+            Long adminCount = userMapper.selectCount(new LambdaQueryWrapper<User>()
+                .eq(User::getRole, UserRoles.ADMIN).eq(User::getEnabled, 1));
+            if (adminCount != null && adminCount <= 1) {
+                throw new BusinessException(400, "不能禁用或降级最后一个管理员");
+            }
+        }
         if (request.getDisplayName() != null) user.setDisplayName(request.getDisplayName());
         if (request.getEmail() != null) user.setEmail(request.getEmail());
-        if (request.getRole() != null && !request.getRole().isBlank()) user.setRole(request.getRole());
+        user.setRole(nextRole);
         if (request.getEnabled() != null) {
-            // 禁止禁用/降级最后一个管理员
-            if (UserRoles.ADMIN.equals(user.getRole()) && (request.getEnabled() == 0 || !UserRoles.ADMIN.equals(request.getRole()))) {
-                Long adminCount = userMapper.selectCount(new LambdaQueryWrapper<User>()
-                    .eq(User::getRole, UserRoles.ADMIN).eq(User::getEnabled, 1));
-                if (adminCount != null && adminCount <= 1) {
-                    throw new BusinessException(400, "不能禁用或降级最后一个管理员");
-                }
-            }
             user.setEnabled(request.getEnabled());
         }
         userMapper.updateById(user);
@@ -138,5 +144,11 @@ public class UserService {
 
     private UserInfo toUserInfo(User user) {
         return new UserInfo(user.getId(), user.getUsername(), user.getDisplayName(), user.getEmail(), user.getRole());
+    }
+
+    private String supportedRole(String raw) {
+        String role = raw == null ? UserRoles.USER : raw.trim().toLowerCase(Locale.ROOT);
+        if (!UserRoles.isSupported(role)) throw new BusinessException(422, "不支持的用户角色: " + role);
+        return role;
     }
 }

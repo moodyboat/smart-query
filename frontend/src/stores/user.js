@@ -24,6 +24,7 @@ export const useUserStore = defineStore('user', {
     displayName: (state) => state.userInfo?.displayName || state.userInfo?.username || '用户',
     role: (state) => state.userInfo?.role || '',
     isAdmin: (state) => state.userInfo?.role === 'admin',
+    canReviewOperators: (state) => ['admin', 'operator_reviewer'].includes(state.userInfo?.role),
   },
   actions: {
     async login(username, password) {

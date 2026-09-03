@@ -27,8 +27,8 @@
         <el-table-column prop="email" label="邮箱" min-width="160" />
         <el-table-column label="角色" width="110">
           <template #default="{ row }">
-            <el-tag :type="row.role === 'admin' ? 'danger' : 'info'" effect="light">
-              {{ row.role === 'admin' ? '管理员' : '普通用户' }}
+            <el-tag :type="roleTagType(row.role)" effect="light">
+              {{ roleLabel(row.role) }}
             </el-tag>
           </template>
         </el-table-column>
@@ -80,6 +80,7 @@
         <el-form-item label="角色" prop="role">
           <el-select v-model="form.role" style="width: 100%">
             <el-option label="普通用户" value="user" />
+            <el-option label="算子审批员" value="operator_reviewer" />
             <el-option label="管理员" value="admin" />
           </el-select>
         </el-form-item>
@@ -132,6 +133,9 @@ const formRules = {
 const resetVisible = ref(false)
 const resetTarget = ref(null)
 const newPassword = ref('')
+
+function roleLabel(role) { return ({ admin: '管理员', operator_reviewer: '算子审批员', user: '普通用户' }[role] || role) }
+function roleTagType(role) { return ({ admin: 'danger', operator_reviewer: 'warning', user: 'info' }[role] || 'info') }
 
 async function loadUsers() {
   loading.value = true

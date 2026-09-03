@@ -5,10 +5,14 @@
       v-if="!editingPipeline"
       :pipelines="pipelines"
       :data-sources="props.dataSources"
+      :repository-mode="props.repositoryMode"
+      :unified-dag="props.unifiedDag"
+      :is-admin="userStore.isAdmin"
       @create="createPipeline"
       @open="openPipeline"
       @run-from-card="runFromCard"
       @delete="handleDelete"
+      @open-dag="emit('openDag', $event)"
     />
 
     <!-- Pipeline Editor View -->
@@ -219,7 +223,9 @@ import ScriptTabs from './pipeline/ScriptTabs.vue'
 import AlgorithmLibraryDialog from './pipeline/AlgorithmLibraryDialog.vue'
 
 const props = defineProps({
-  dataSources: { type: Array, default: () => [] }
+  dataSources: { type: Array, default: () => [] },
+  repositoryMode: { type: Boolean, default: false },
+  unifiedDag: { type: Boolean, default: false }
 })
 
 const {
@@ -228,7 +234,7 @@ const {
   getAlgorithmParams, getDefaultHyperparams, getModelTypeLabel, modelTypeNames
 } = useAlgorithms()
 
-const emit = defineEmits(['close', 'goToModel'])
+const emit = defineEmits(['close', 'goToModel', 'openDag'])
 const miningStore = useMiningStore()
 const userStore = useUserStore()
 const showAlgorithmLibrary = ref(false)

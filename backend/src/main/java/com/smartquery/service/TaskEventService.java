@@ -59,6 +59,10 @@ public class TaskEventService {
         return "pipeline:" + pipelineId + ":" + runId;
     }
 
+    public static String orchestrationTopic(Long runId) {
+        return "orchestration:" + runId;
+    }
+
     public TaskEvent publish(String topic, String ownerUserId, String eventName,
                              Map<String, Object> payload, boolean terminal) {
         try {
