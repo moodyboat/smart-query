@@ -2,8 +2,8 @@ package com.smartquery.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.smartquery.common.BusinessException;
+import com.smartquery.common.PermissionCodes;
 import com.smartquery.common.UserContextHolder;
-import com.smartquery.common.UserRoles;
 import com.smartquery.entity.Conversation;
 import com.smartquery.entity.MiningModel;
 import com.smartquery.entity.MiningPipeline;
@@ -30,17 +30,26 @@ public class ResourceAccessService {
     private final MiningModelMapper miningModelMapper;
     private final MiningPipelineMapper miningPipelineMapper;
     private final ModelExecutionMapper modelExecutionMapper;
+    private final RoleService roleService;
 
     public String currentUserId() {
         return UserContextHolder.require().userId().toString();
     }
 
     public boolean isAdmin() {
-        return UserRoles.ADMIN.equals(UserContextHolder.require().role());
+        return roleService.currentUserHas(PermissionCodes.RESOURCE_ACCESS_ALL);
     }
 
     public void requireAdmin() {
-        if (!isAdmin()) throw new BusinessException(403, "仅管理员可执行该操作");
+        roleService.requireCurrentUser(PermissionCodes.RESOURCE_ACCESS_ALL, "无权限执行全局管理操作");
+    }
+
+    public void requirePermission(String permissionCode, String message) {
+        roleService.requireCurrentUser(permissionCode, message);
+    }
+
+    public boolean hasPermission(String permissionCode) {
+        return roleService.currentUserHas(permissionCode);
     }
 
     public Conversation requireConversation(Long id) {
@@ -72,7 +81,9 @@ public class ResourceAccessService {
         LambdaQueryWrapper<MiningModel> query = new LambdaQueryWrapper<MiningModel>()
             .eq(MiningModel::getDeleted, 0)
             .orderByDesc(MiningModel::getCreatedAt);
-        if (!isAdmin()) query.eq(MiningModel::getUserId, currentUserId());
+        if (!isAdmin() && !hasPermission(PermissionCodes.MODEL_REVIEW)) {
+            query.eq(MiningModel::getUserId, currentUserId());
+        }
         if (dataSourceId != null) query.eq(MiningModel::getDataSourceId, dataSourceId);
         if (status != null && !status.isBlank()) query.eq(MiningModel::getStatus, status);
         return miningModelMapper.selectList(query);

@@ -68,11 +68,11 @@ public class RunOutputCommitService {
             artifact.setArchiveStatus(StorageGovernanceService.ACTIVE);
             artifact.setPayloadBytes(payloadBytes);
             artifact.setUsageAccounted(1);
-            artifact.setRetentionUntil(storageGovernanceService.retentionUntil(StorageGovernanceService.OUTPUT));
+            artifact.setRetentionUntil(retentionUntil(input.outputKind(), input.contentSpec()));
             artifact.setContentSpec(contentSpec);
             artifact.setArtifactData(artifactData);
             artifact.setFilePath(null);
-            artifact.setMimeType("application/vnd.smart-query.visualization+json");
+            artifact.setMimeType(mimeType(input.outputKind()));
             outputArtifactMapper.insert(artifact);
             insertViewRows(artifact.getId(), input.records());
             outputArtifactIndexService.index(artifact.getId(), input.records());
@@ -150,6 +150,30 @@ public class RunOutputCommitService {
     private String json(Object value) {
         try { return objectMapper.writeValueAsString(value == null ? Map.of() : value); }
         catch (Exception e) { throw new BusinessException("输出产物序列化失败: " + e.getMessage()); }
+    }
+
+    private LocalDateTime retentionUntil(String outputKind, Object rawSpec) {
+        if ("TEMP_RESULT".equalsIgnoreCase(outputKind) && rawSpec instanceof Map<?, ?> spec) {
+            Object rawDays = spec.get("retentionDays");
+            try {
+                int days = Math.max(1, Math.min(30, Integer.parseInt(String.valueOf(rawDays))));
+                return LocalDateTime.now().plusDays(days);
+            } catch (Exception ignored) {
+                return LocalDateTime.now().plusDays(7);
+            }
+        }
+        return storageGovernanceService.retentionUntil(StorageGovernanceService.OUTPUT);
+    }
+
+    private String mimeType(String outputKind) {
+        return switch (String.valueOf(outputKind).toUpperCase(java.util.Locale.ROOT)) {
+            case "EXPORT_XLSX" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+            case "EXPORT_CSV" -> "text/csv;charset=UTF-8";
+            case "EXPORT_PDF" -> "application/pdf";
+            case "EXPORT_JSON" -> "application/json";
+            case "EXPORT_PNG" -> "image/png";
+            default -> "application/vnd.smart-query.output+json";
+        };
     }
 
     public record ArtifactInput(Long runId, Long nodeRunId, String ownerUserId,

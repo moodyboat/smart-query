@@ -3,13 +3,14 @@
   --font-family-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
   --font-family-mono: 'JetBrains Mono', 'Menlo', 'Monaco', 'Courier New', monospace;
 
-  /* ===== 品牌色（Tailwind blue 色阶，主色 blue-600 #2563eb）===== */
-  --brand-primary: #2563eb;
-  --brand-primary-hover: #1d4ed8;       /* blue-700 */
-  --brand-primary-active: #1e40af;      /* blue-800 */
-  --brand-primary-light: #dbeafe;       /* blue-100 */
-  --brand-primary-lighter: #eff6ff;     /* blue-50 */
-  --brand-gradient: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%);  /* blue-900 → blue-600 */
+  /* ===== 统建系统蓝色主题：主色遵循 PC 端设计规范 ===== */
+  --brand-primary: #2468f2;
+  --brand-primary-hover: #1f5fdc;
+  --brand-primary-active: #1b55c8;
+  --brand-primary-light: #cdddfd;
+  --brand-primary-lighter: #edf3ff;
+  --brand-gradient: linear-gradient(145deg, #3b7af5 0%, #2468f2 100%);
+  --app-background: #eef2f6;
 
   /* ===== Transition ===== */
   --transition-fast: 0.15s ease;
@@ -40,10 +41,10 @@
 
   /* ===== Element Plus 主题色覆盖（统一为品牌色）===== */
   --el-color-primary: var(--brand-primary);
-  --el-color-primary-light-3: #60a5fa;
-  --el-color-primary-light-5: #93c5fd;
-  --el-color-primary-light-7: #bfdbfe;
-  --el-color-primary-light-8: #dbeafe;
+  --el-color-primary-light-3: #6195f7;
+  --el-color-primary-light-5: #91b4f9;
+  --el-color-primary-light-7: #c2d4fc;
+  --el-color-primary-light-8: #d9e5fe;
   --el-color-primary-light-9: var(--brand-primary-lighter);
   --el-color-primary-dark-2: var(--brand-primary-active);
 
@@ -53,20 +54,20 @@
   --primary-light: var(--brand-primary-light);
 
   /* Surfaces */
-  --bg: #f5f7fb;
+  --bg: #f5f7fa;
   --surface: #ffffff;
   --surface-raised: #ffffff;
 
   /* Borders */
-  --border: #dfe5ed;
-  --border-light: #e7ecf3;
-  --border-lighter: #f0f3f7;
+  --border: #d9dee7;
+  --border-light: #e4e8ef;
+  --border-lighter: #edf0f5;
 
   /* Text */
-  --text-primary: #172b4d;
-  --text-regular: #334155;
-  --text-secondary: #5f6f85;
-  --text-muted: #8491a5;
+  --text-primary: #1d1d1f;
+  --text-regular: #333336;
+  --text-secondary: #6e6e73;
+  --text-muted: #8e8e93;
 
   /* States */
   --color-success: #67c23a;
@@ -90,49 +91,47 @@
   --space-2xl: 24px;
 
   /* Radius */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  --radius-xl: 10px;
+  --radius-sm: 7px;
+  --radius-md: 9px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
   --radius-pill: 999px;
 
   /* Shadows */
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.04);
-  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.08);
-  --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.12);
-  --shadow-xl: 0 8px 32px rgba(15, 23, 42, 0.10);
-  --shadow-brand: 0 4px 14px rgba(37, 99, 235, 0.18);
+  --shadow-sm: 0 2px 8px rgba(31,35,41,.035);
+  --shadow-md: 0 6px 18px rgba(31,35,41,.06);
+  --shadow-lg: 0 10px 28px rgba(31,35,41,.09);
+  --shadow-xl: 0 22px 60px rgba(26, 48, 78, .14);
+  --shadow-brand: 0 7px 20px rgba(36, 104, 242, .18);
 
-  /* ===== 深色 Sidebar 色板（现代企业 SaaS 风）===== */
-  --sidebar-bg: #0f172a;              /* slate-900 */
-  --sidebar-bg-soft: #1e293b;         /* slate-800 */
-  --sidebar-fg: #cbd5e1;              /* slate-300 */
-  --sidebar-fg-strong: #f1f5f9;       /* slate-100 */
-  --sidebar-fg-muted: #64748b;        /* slate-500 */
-  --sidebar-border: rgba(255, 255, 255, 0.06);
-  --sidebar-hover: rgba(255, 255, 255, 0.05);
-  --sidebar-active: rgba(99, 102, 241, 0.18);
-  --sidebar-active-bar: linear-gradient(180deg, #6366f1 0%, #2563eb 100%);
-  /* Sidebar 内的品牌色叠加（避免在组件里硬编码 rgba） */
-  --sidebar-brand-glow: rgba(99, 102, 241, 0.08);
-  --sidebar-brand-border: rgba(99, 102, 241, 0.4);
-  --sidebar-icon-bg: rgba(99, 102, 241, 0.15);
-  /* Sidebar 内 danger hover（删除会话按钮） */
-  --sidebar-danger-hover-bg: rgba(239, 68, 68, 0.2);
-  --sidebar-danger-hover-fg: #fca5a5;
+  /* ===== 兼容旧组件的浅色侧栏 token ===== */
+  --sidebar-bg: rgba(251, 252, 255, .92);
+  --sidebar-bg-soft: rgba(118, 118, 128, .08);
+  --sidebar-fg: #56565c;
+  --sidebar-fg-strong: #1d1d1f;
+  --sidebar-fg-muted: #8e8e93;
+  --sidebar-border: rgba(60, 60, 67, .1);
+  --sidebar-hover: rgba(118, 118, 128, .08);
+  --sidebar-active: rgba(36, 104, 242, .1);
+  --sidebar-active-bar: #2468f2;
+  --sidebar-brand-glow: rgba(36, 104, 242, .08);
+  --sidebar-brand-border: rgba(36, 104, 242, .25);
+  --sidebar-icon-bg: rgba(36, 104, 242, .1);
+  --sidebar-danger-hover-bg: rgba(215, 0, 21, .08);
+  --sidebar-danger-hover-fg: #d70015;
 
-  /* ===== 深色填充背景上的前景色（ChatPanel header / 场景 banner 等）===== */
+  /* 深色内容（代码区、强调按钮）上的前景色 */
   --on-dark-text: #ffffff;
-  --on-dark-fill: rgba(255, 255, 255, 0.18);
-  --on-dark-fill-hover: rgba(255, 255, 255, 0.28);
-  --on-dark-border: rgba(255, 255, 255, 0.4);
-  --on-dark-border-strong: rgba(255, 255, 255, 0.6);
-  --on-dark-muted: rgba(255, 255, 255, 0.7);
+  --on-dark-fill: rgba(255, 255, 255, .18);
+  --on-dark-fill-hover: rgba(255, 255, 255, .28);
+  --on-dark-border: rgba(255, 255, 255, .4);
+  --on-dark-border-strong: rgba(255, 255, 255, .6);
+  --on-dark-muted: rgba(255, 255, 255, .7);
 
-  /* ===== 玻璃态 / 胶囊按钮 ===== */
-  --glass-bg: rgba(255, 255, 255, 0.72);
-  --glass-border: rgba(255, 255, 255, 0.5);
-  --glass-blur: 16px;
+  /* 玻璃材质 */
+  --glass-bg: rgba(255, 255, 255, .78);
+  --glass-border: rgba(255, 255, 255, .88);
+  --glass-blur: 24px;
 
   --chip-bg: #f1f5f9;                /* slate-100 */
   --chip-bg-hover: var(--brand-primary-lighter);
@@ -196,7 +195,8 @@
 
 body {
   font-family: var(--font-family-sans);
-  background: var(--bg);
+  background: var(--app-background);
+  color: var(--text-primary);
   height: 100vh;
   overflow: hidden;
 }
@@ -287,23 +287,17 @@ body {
   background: var(--chip-bg-hover);
   color: var(--chip-fg-hover);
   border-color: var(--chip-border-hover);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-brand);
 }
 
 /* ===== 玻璃卡片（欢迎区/能力卡）===== */
 .glass-card {
-  background: var(--glass-bg);
-  backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-sm);
-  transition: transform var(--transition-base), box-shadow var(--transition-base);
+  background: #fff;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  box-shadow: none;
 }
 .glass-card:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-md);
+  border-color: var(--border);
 }
 
 /* ===== 管理页统一的 el-card / el-table 风格（所有 .page-container 内自动生效）===== */
@@ -318,12 +312,12 @@ body {
 }
 .page-container .el-table {
   --el-table-border-color: var(--border-lighter);
-  --el-table-header-bg-color: transparent;
+  --el-table-header-bg-color: #fafbfc;
   --el-table-tr-bg-color: transparent;
   --el-table-row-hover-bg-color: var(--brand-primary-lighter);
 }
 .page-container .el-table th.el-table__cell {
-  background: transparent;
+  background: #fafbfc;
   font-weight: 600;
   font-size: var(--font-sm);
   color: var(--text-muted);
@@ -350,7 +344,7 @@ body {
   padding: var(--space-lg) var(--space-xl) var(--space-md) !important;
   margin-right: 0 !important;
   border-bottom: 1px solid var(--border-lighter);
-  background: linear-gradient(180deg, var(--brand-primary-lighter) 0%, transparent 100%);
+  background: #fafbfc;
 }
 .el-dialog__title {
   font-size: var(--font-xl) !important;
@@ -420,7 +414,8 @@ body {
 .el-textarea__inner,
 .el-input-number .el-input__wrapper {
   border-radius: var(--radius-md) !important;
-  transition: box-shadow var(--transition-base) !important;
+  background: #fff;
+  transition: box-shadow var(--transition-base), background var(--transition-base) !important;
 }
 .el-input__wrapper:hover {
   box-shadow: 0 0 0 1px var(--brand-primary-light) inset !important;
@@ -432,26 +427,38 @@ body {
 .el-select .el-select__wrapper {
   border-radius: var(--radius-md) !important;
   min-height: 32px;
+  background: #fff;
 }
 .el-button {
-  border-radius: var(--radius-md);
+  border-radius: 10px;
   font-weight: 500;
+  letter-spacing: .01em;
   transition: all var(--transition-base) !important;
 }
-.el-button--small { border-radius: var(--radius-sm); }
+.el-button:not(.is-link):not(.is-text) { min-height: 34px; }
+.el-button--small { border-radius: 8px; }
 .el-button--primary {
-  background: var(--brand-primary);
-  border-color: var(--brand-primary);
+  background: #2468f2;
+  border-color: #2468f2;
+  box-shadow: none;
 }
 .el-button--primary:hover {
   background: var(--brand-primary-hover);
   border-color: var(--brand-primary-hover);
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-brand);
 }
 .el-button--primary:active {
   background: var(--brand-primary-active);
-  transform: translateY(0);
+}
+.el-button--primary.is-plain {
+  color: #2468f2;
+  border-color: #cdddfd;
+  background: #edf3ff;
+}
+.el-button--primary.is-plain:hover,
+.el-button--primary.is-plain:focus {
+  color: #fff;
+  border-color: #2468f2;
+  background: #2468f2;
 }
 .el-button--default {
   border-color: var(--border);
@@ -470,6 +477,61 @@ body {
   height: 22px;
   line-height: 20px;
 }
+.el-form-item__label {
+  padding-bottom: 7px !important;
+  color: #4e5969 !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+}
+.el-table {
+  overflow: hidden;
+  border-radius: 9px;
+  --el-table-header-bg-color: #fafbfc;
+  --el-table-row-hover-bg-color: #f5f8ff;
+}
+.el-table th.el-table__cell {
+  background: #fafbfc !important;
+  color: #647084;
+  font-size: 11.5px;
+  font-weight: 650;
+}
+.el-table td.el-table__cell { transition: background var(--transition-fast); }
+.el-tabs__nav-wrap::after { height: 1px !important; background: var(--border-lighter) !important; }
+.el-tabs__item { color: #6d7685; font-size: 12px; transition: color var(--transition-fast); }
+.el-tabs__item.is-active { color: var(--brand-primary); font-weight: 650; }
+.el-tabs__active-bar { height: 2px !important; border-radius: 2px; }
+.el-segmented {
+  padding: 3px !important;
+  border: 1px solid #e4e8ef;
+  box-shadow: none;
+}
+.el-popper.is-light,
+.el-select__popper,
+.el-dropdown__popper {
+  border: 1px solid var(--border-light) !important;
+  border-radius: 10px !important;
+  box-shadow: var(--shadow-md) !important;
+}
+.el-select-dropdown__item,
+.el-dropdown-menu__item { border-radius: 8px; margin: 2px 5px; }
+.el-drawer {
+  background: #fff !important;
+  box-shadow: var(--shadow-lg) !important;
+}
+.el-empty__description p { color: #99a3b2 !important; font-size: 12px; }
+.el-alert { border-radius: 12px !important; }
+.el-collapse {
+  --el-collapse-border-color: var(--border-lighter);
+  --el-collapse-header-bg-color: transparent;
+  --el-collapse-content-bg-color: transparent;
+}
+.el-collapse-item__header { color: #506078; font-weight: 550; }
+.el-tooltip__trigger:focus-visible,
+button:focus-visible,
+[role='button']:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px rgba(36,104,242,.15) !important;
+}
 .el-switch.is-checked .el-switch__core {
   background-color: var(--brand-primary) !important;
   border-color: var(--brand-primary) !important;
@@ -487,7 +549,6 @@ body {
 }
 .el-loading-mask {
   background: rgba(15, 23, 42, 0.55) !important;
-  backdrop-filter: blur(4px);
 }
 .el-loading-spinner .path { stroke: var(--brand-primary) !important; }
 .el-loading-text { color: var(--on-dark-text) !important; }
@@ -501,4 +562,13 @@ body {
 .el-pagination .el-pager li.is-active {
   background: var(--brand-primary) !important;
   color: var(--on-dark-text) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
 }

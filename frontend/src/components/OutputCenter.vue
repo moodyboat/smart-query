@@ -9,13 +9,22 @@
         <el-radio-button value="authoring">输出设计</el-radio-button>
         <el-radio-button value="policy">SQL / 智能体</el-radio-button>
         <el-radio-button value="approval">版本审批</el-radio-button>
-        <el-radio-button v-if="user.isAdmin" value="storage">存储与运行</el-radio-button>
+        <el-radio-button v-if="user.canManageRuntime" value="storage">存储与运行</el-radio-button>
+        <el-radio-button v-if="user.canManageRuntime" value="capabilities">能力目录</el-radio-button>
       </el-radio-group>
       <el-select v-if="activeMode === 'results'" v-model="kindFilter" clearable placeholder="全部输出" size="small" style="width: 150px" @change="loadOutputs">
         <el-option label="线索" value="LEAD" />
         <el-option label="图表" value="CHART" />
         <el-option label="数据表" value="TABLE" />
         <el-option label="Excel 表格视图" value="EXCEL" />
+        <el-option label="组合页面" value="DASHBOARD" />
+        <el-option label="平台运行制品" value="ARTIFACT" />
+        <el-option label="临时结果" value="TEMP_RESULT" />
+        <el-option label="XLSX 导出" value="EXPORT_XLSX" />
+        <el-option label="CSV 导出" value="EXPORT_CSV" />
+        <el-option label="PDF 导出" value="EXPORT_PDF" />
+        <el-option label="JSON 导出" value="EXPORT_JSON" />
+        <el-option label="PNG 导出" value="EXPORT_PNG" />
       </el-select>
       <el-button v-if="activeMode === 'results'" size="small" :loading="loadingList" @click="loadOutputs">刷新</el-button>
     </div>
@@ -74,7 +83,8 @@
     <OutputAuthoringWorkbench v-else-if="activeMode === 'authoring'" :conversation-id="props.conversationId" @openDag="versionId => emit('openDag', versionId)" />
     <PolicyAuthoringWorkbench v-else-if="activeMode === 'policy'" :conversation-id="props.conversationId" @openDag="versionId => emit('openDag', versionId)" />
     <OperatorApprovalCenter v-else-if="activeMode === 'approval'" @openDag="versionId => emit('openDag', versionId)" />
-    <StorageGovernanceCenter v-else />
+    <StorageGovernanceCenter v-else-if="activeMode === 'storage'" />
+    <OutputCapabilityGovernance v-else />
   </div>
 </template>
 
@@ -87,6 +97,7 @@ import PolicyAuthoringWorkbench from './PolicyAuthoringWorkbench.vue'
 import RuleAuthoringWorkbench from './RuleAuthoringWorkbench.vue'
 import OperatorApprovalCenter from './OperatorApprovalCenter.vue'
 import StorageGovernanceCenter from './StorageGovernanceCenter.vue'
+import OutputCapabilityGovernance from './OutputCapabilityGovernance.vue'
 import { fetchRecentOutputs, queryOutputView } from '../api/orchestration.js'
 import { useUserStore } from '../stores/user.js'
 
@@ -133,7 +144,10 @@ function json(value) {
 
 function artifactTitle(artifact) {
   const spec = json(artifact.contentSpec)
-  return spec.title || spec.sheetName || ({ LEAD: '流程线索', CHART: '分析图表', TABLE: '结果表', EXCEL: 'Excel 表格视图' }[artifact.outputKind] || '流程输出')
+  return spec.title || spec.sheetName || ({ LEAD: '流程线索', CHART: '分析图表', TABLE: '结果表', EXCEL: 'Excel 表格视图',
+    DASHBOARD: '组合分析页面', ARTIFACT: '平台运行制品', TEMP_RESULT: '临时结果', EXPORT_XLSX: 'XLSX 文件',
+    EXPORT_CSV: 'CSV 文件', EXPORT_PDF: 'PDF 文件', EXPORT_JSON: 'JSON 文件', EXPORT_PNG: 'PNG 图片'
+  }[artifact.outputKind] || '流程输出')
 }
 
 function artifactRowCount(artifact) {
@@ -141,7 +155,9 @@ function artifactRowCount(artifact) {
   return data.recordCount == null ? '' : `${data.recordCount} 条`
 }
 
-function kindIcon(kind) { return ({ LEAD: '◎', CHART: '▥', TABLE: '▦', EXCEL: 'X' }[kind] || '·') }
+function kindIcon(kind) { return ({ LEAD: '◎', CHART: '▥', TABLE: '▦', EXCEL: 'X', DASHBOARD: '▤',
+  ARTIFACT: '◇', TEMP_RESULT: '◷', EXPORT_XLSX: 'X', EXPORT_CSV: 'C', EXPORT_PDF: 'P',
+  EXPORT_JSON: '{ }', EXPORT_PNG: '▣' }[kind] || '·') }
 function formatTime(value) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '' }
 
 async function loadOutputs() {

@@ -69,17 +69,17 @@ smart-query:
     models:
       glm-5.1:
         api-url: https://open.bigmodel.cn/api/coding/paas/v4/chat/completions
-        api-key: ${GLM_API_KEY:9c82f455ae15490ca9372df1a707fbdb.4oDb1blqKcUWMVXr}
+        api-key: ${GLM_API_KEY:}
         max-tokens: 8192
         temperature: 0.1
       glm-4.5:
         api-url: https://open.bigmodel.cn/api/coding/paas/v4/chat/completions
-        api-key: ${GLM_API_KEY:9c82f455ae15490ca9372df1a707fbdb.4oDb1blqKcUWMVXr}
+        api-key: ${GLM_API_KEY:}
         max-tokens: 4096
         temperature: 0.1
       glm-4:
         api-url: https://open.bigmodel.cn/api/coding/paas/v4/chat/completions
-        api-key: ${GLM_API_KEY:9c82f455ae15490ca9372df1a707fbdb.4oDb1blqKcUWMVXr}
+        api-key: ${GLM_API_KEY:}
         max-tokens: 4096
         temperature: 0.1
       gpt-4o:

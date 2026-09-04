@@ -1,7 +1,7 @@
 <template>
   <el-dialog
     v-model="visible"
-    :title="`训练中 - ${model?.name || ''}`"
+    :title="`训练机器学习算子 - ${model?.name || ''}`"
     width="90%"
     :close-on-click-modal="false"
     :close-on-press-escape="false"
@@ -13,7 +13,7 @@
       <!-- 训练进度头部 -->
       <div class="training-header">
         <div class="training-info">
-          <span class="algorithm-badge">{{ algorithmLabel(model?.algorithm) }}</span>
+          <span class="algorithm-badge">{{ algorithmLabel(model?.algorithm) }}<template v-if="model?.algorithmVersion"> · 版本 {{ model.algorithmVersion }}</template></span>
           <span class="training-status">{{ trainingStatus }}</span>
         </div>
         <div class="training-progress">
@@ -267,8 +267,8 @@ function formatStepLabel(stepId) {
     data_preprocessing: '数据预处理',
     feature_engineering: '特征工程',
     train_test_split: '数据分割',
-    model_training: '模型训练',
-    model_evaluation: '模型评估'
+    model_training: '训练制品',
+    model_evaluation: '效果评估'
   }
   return labels[stepId] || stepId
 }
@@ -279,7 +279,7 @@ function formatStepDescription(stepId) {
     data_preprocessing: '处理缺失值、异常值',
     feature_engineering: '特征选择和转换',
     train_test_split: '训练集和测试集划分',
-    model_training: '训练模型',
+    model_training: '生成训练制品',
     model_evaluation: '计算评估指标'
   }
   return descriptions[stepId] || ''
@@ -300,7 +300,7 @@ function startTraining() {
   logs.value = []
   lastStreamLog.value = ''
 
-  addLog('info', `开始训练模型: ${props.model.name}`)
+  addLog('info', `开始训练算子: ${props.model.name}`)
   addLog('info', `算法类型: ${props.model.algorithm}`)
 
   startRealTraining()

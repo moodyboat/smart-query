@@ -13,11 +13,18 @@ public class ModelExecution {
 
     private Long id;
     private Long modelId;
+    /** Persistent schedule definition that created this execution, null for manual runs. */
+    private Long scheduleTaskId;
     /** User who triggered this run; null is reserved for scheduler/system runs. */
     private String triggeredByUserId;
     private String triggerType;
+    /** TRAIN or PREDICT. Existing historical rows default to TRAIN. */
+    private String executionKind;
     private String status;
     private String hyperparameters;
+    private String algorithmId;
+    private Integer algorithmVersion;
+    private String algorithmSnapshot;
     private String metrics;
     private String executionLog;
     private Integer executionTimeMs;
@@ -28,6 +35,8 @@ public class ModelExecution {
     private String artifactPath;
     private String artifactSha256;
     private Integer artifactSchemaVersion;
+    /** Structured summary for non-training executions, such as scheduled prediction output. */
+    private String outputSummary;
     private LocalDateTime startedAt;
     private LocalDateTime finishedAt;
 

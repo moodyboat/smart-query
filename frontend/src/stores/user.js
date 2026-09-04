@@ -18,19 +18,31 @@ export const useUserStore = defineStore('user', {
   state: () => ({
     token: localStorage.getItem(AUTH_STORAGE_KEYS.TOKEN) || '',
     userInfo: readUser(),
+    permissionsHydrated: false,
   }),
   getters: {
     isLoggedIn: (state) => !!state.token,
     displayName: (state) => state.userInfo?.displayName || state.userInfo?.username || '用户',
     role: (state) => state.userInfo?.role || '',
-    isAdmin: (state) => state.userInfo?.role === 'admin',
-    canReviewOperators: (state) => ['admin', 'operator_reviewer'].includes(state.userInfo?.role),
+    roleLabel: (state) => state.userInfo?.roleLabel || state.userInfo?.role || '未分配角色',
+    hasPermission: (state) => (code) => (state.userInfo?.permissions || []).includes(code),
+    isAdmin: (state) => (state.userInfo?.permissions || []).includes('resource.access.all'),
+    canManageUsers: (state) => (state.userInfo?.permissions || []).includes('platform.user.manage'),
+    canManageRoles: (state) => (state.userInfo?.permissions || []).includes('platform.role.manage'),
+    canManageScenarios: (state) => (state.userInfo?.permissions || []).includes('platform.scenario.manage'),
+    canManageDataSources: (state) => (state.userInfo?.permissions || []).includes('platform.datasource.manage'),
+    canManageAlgorithms: (state) => (state.userInfo?.permissions || []).includes('model.algorithm.manage'),
+    canReviewModels: (state) => (state.userInfo?.permissions || []).includes('model.version.review'),
+    canReviewOperators: (state) => (state.userInfo?.permissions || []).includes('operator.version.review'),
+    canManageRuntime: (state) => (state.userInfo?.permissions || []).includes('governance.runtime.manage'),
+    canViewMonitor: (state) => (state.userInfo?.permissions || []).includes('platform.monitor.view'),
   },
   actions: {
     async login(username, password) {
       const data = await loginApi(username, password)
       this.token = data.token
       this.userInfo = data.userInfo
+      this.permissionsHydrated = true
       localStorage.setItem(AUTH_STORAGE_KEYS.TOKEN, data.token)
       localStorage.setItem(AUTH_STORAGE_KEYS.USER, JSON.stringify(data.userInfo))
       return data
@@ -40,6 +52,7 @@ export const useUserStore = defineStore('user', {
       try {
         const user = await fetchCurrentUser()
         this.userInfo = user
+        this.permissionsHydrated = true
         localStorage.setItem(AUTH_STORAGE_KEYS.USER, JSON.stringify(user))
         return user
       } catch {
@@ -58,6 +71,7 @@ export const useUserStore = defineStore('user', {
     clear() {
       this.token = ''
       this.userInfo = null
+      this.permissionsHydrated = false
       localStorage.removeItem(AUTH_STORAGE_KEYS.TOKEN)
       localStorage.removeItem(AUTH_STORAGE_KEYS.USER)
       // 重置场景缓存，避免下一个账号看到上一账号的角色授权场景

@@ -1,16 +1,17 @@
 <template>
   <el-drawer :model-value="show" @update:model-value="$emit('update:show', $event)"
-    :title="model?.name || '模型详情'" size="480px" direction="rtl">
+    :title="model?.name || '机器学习算子详情'" size="480px" direction="rtl">
     <template v-if="model">
       <el-descriptions :column="1" border size="small">
         <el-descriptions-item label="状态">
-          <span :class="['status-badge', 'status-' + model.status]">{{ statusLabel(model.status) }}</span>
+          <span :class="['status-badge', 'status-' + model.status]">{{ operatorStatusLabel(model) }}</span>
         </el-descriptions-item>
         <el-descriptions-item label="算法">{{ algorithmLabel(model.algorithm) }}</el-descriptions-item>
-        <el-descriptions-item label="类型">{{ modelTypeLabel(model.modelType) }}</el-descriptions-item>
+        <el-descriptions-item label="算法快照">{{ model.algorithmVersion ? `v${model.algorithmVersion}（已固化）` : '待首次训练固化' }}</el-descriptions-item>
+        <el-descriptions-item label="任务类型">{{ modelTypeLabel(model.modelType) }}</el-descriptions-item>
         <el-descriptions-item label="源表">{{ model.sourceTable }}</el-descriptions-item>
         <el-descriptions-item label="目标列">{{ model.targetColumn || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="版本">v{{ model.version }}</el-descriptions-item>
+        <el-descriptions-item label="制品版本">版本 {{ model.version }}</el-descriptions-item>
         <el-descriptions-item v-if="model.pipelineId" label="来源">
           <div style="display: flex; align-items: center; gap: 8px">
             <el-button size="small" link type="primary" @click="$emit('goToPipeline', model.pipelineId)">
@@ -121,7 +122,7 @@
           {{ model.status === MODEL_STATUS.TRAINING ? '训练中...' : '训练' }}
         </el-button>
         <el-button v-if="model.status === MODEL_STATUS.TRAINED || model.status === MODEL_STATUS.OFFLINE" size="small" type="success"
-          @click="$emit('publish', model.id)">发布</el-button>
+          @click="$emit('publish', model.id)">提交审批</el-button>
         <el-button v-if="model.status === MODEL_STATUS.PUBLISHED" size="small" type="warning"
           @click="$emit('offline', model.id)">下线</el-button>
         <el-button v-if="model.status === MODEL_STATUS.PUBLISHED || model.status === MODEL_STATUS.TRAINED" size="small" type="primary"
@@ -158,6 +159,7 @@ const props = defineProps({
   algorithmLabel: { type: Function, required: true },
   modelTypeLabel: { type: Function, required: true },
   statusLabel: { type: Function, required: true },
+  isOperatorPublished: { type: Function, default: () => false },
   formatDate: { type: Function, required: true },
   execStatusLabel: { type: Function, required: true },
   execTriggerLabel: { type: Function, required: true },
@@ -171,6 +173,11 @@ const emit = defineEmits([
   'tuneParams', 'rollback', 'goToPipeline', 'syncPipeline',
   'expandNode', 'syncNodeChanges', 'nodeParamUpdate'
 ])
+
+function operatorStatusLabel(model) {
+  if (model.status === MODEL_STATUS.PUBLISHED && !props.isOperatorPublished(model)) return '版本审批中'
+  return props.statusLabel(model.status)
+}
 
 // Re-exported helpers from composable
 const isNodeConfiguredFn = isNodeConfigured

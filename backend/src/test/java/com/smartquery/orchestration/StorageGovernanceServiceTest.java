@@ -51,7 +51,8 @@ class StorageGovernanceServiceTest {
     private final ResourceAccessService access = mock(ResourceAccessService.class);
     private final StorageGovernanceService service = new StorageGovernanceService(
         policies, usages, archives, archiveChunks, artifacts, rows, cells, replays,
-        replayChunks, runs, new ArchivePayloadCodec(new ObjectMapper()), new ObjectMapper(), access);
+        replayChunks, runs, new ArchivePayloadCodec(new ObjectMapper()), new ObjectMapper(), access,
+        mock(StorageHotDataViewService.class));
 
     @Test
     void reservationUpdatesTypedAndTotalCountersUnderQuota() {

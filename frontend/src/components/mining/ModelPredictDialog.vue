@@ -1,7 +1,7 @@
 <template>
   <!-- Single Predict Dialog -->
   <el-dialog :model-value="showPredict" @update:model-value="$emit('update:showPredict', $event)"
-    title="模型预测" width="660px" destroy-on-close>
+    title="算子预测" width="min(660px, 94vw)" destroy-on-close>
     <div v-if="predictModel">
       <p style="color: var(--text-secondary); margin-bottom: 12px">
         使用「{{ predictModel.name }}」进行预测，输入数据格式为 JSON 数组
@@ -33,14 +33,14 @@
 
   <!-- Batch Predict Dialog -->
   <el-dialog :model-value="showBatch" @update:model-value="$emit('update:showBatch', $event)"
-    title="批量预测" width="560px" destroy-on-close>
+    title="批量预测" width="min(560px, 94vw)" destroy-on-close>
     <div v-if="batchPredictModel">
       <p style="color: var(--text-secondary); margin-bottom: 12px">
         使用已发布的「{{ batchPredictModel.name }}」对整张表的数据进行批量预测
       </p>
       <el-form label-width="100px" size="default">
-        <el-form-item label="模型信息">
-          <span>{{ algorithmLabel(batchPredictModel.algorithm) }} · v{{ batchPredictModel.version }}</span>
+        <el-form-item label="算子信息">
+          <span>{{ algorithmLabel(batchPredictModel.algorithm) }} · 制品版本 {{ batchPredictModel.version }}</span>
         </el-form-item>
         <el-form-item label="特征列">
           <div style="display: flex; flex-wrap: wrap; gap: 4px">
@@ -54,7 +54,7 @@
               <span style="float: right; color: var(--text-muted); font-size: var(--font-sm)">{{ t.rows }}行</span>
             </el-option>
           </el-select>
-          <div style="font-size: var(--font-sm); color: var(--text-muted); margin-top: 4px">该表必须包含模型训练时的特征列</div>
+          <div style="font-size: var(--font-sm); color: var(--text-muted); margin-top: 4px">该表必须包含算子训练时使用的特征列</div>
         </el-form-item>
         <el-form-item label="结果表">
           <el-input :model-value="batchResultTable" @update:model-value="$emit('update:batchResultTable', $event)" placeholder="留空则自动生成表名" />
@@ -94,7 +94,7 @@
 
   <!-- Prediction Results Dialog -->
   <el-dialog :model-value="showResults" @update:model-value="$emit('update:showResults', $event)"
-    title="预测记录" width="700px" destroy-on-close>
+    title="预测记录" width="min(700px, 94vw)" destroy-on-close>
     <div v-if="predictResultsModel">
       <el-table :data="predictionResults" size="small" stripe border max-height="400" v-loading="loadingPredictions">
         <el-table-column type="index" label="#" width="50" />

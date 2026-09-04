@@ -1,8 +1,9 @@
 package com.smartquery.orchestration;
 
 import com.smartquery.common.BusinessException;
+import com.smartquery.common.PermissionCodes;
 import com.smartquery.common.UserContextHolder;
-import com.smartquery.common.UserRoles;
+import com.smartquery.support.TestRoles;
 import com.smartquery.entity.OperatorDefinition;
 import com.smartquery.entity.OperatorVersion;
 import com.smartquery.entity.OperatorVersionApproval;
@@ -14,6 +15,7 @@ import com.smartquery.mapper.OutputDraftMapper;
 import com.smartquery.mapper.PolicyDraftMapper;
 import com.smartquery.mapper.RuleDraftMapper;
 import com.smartquery.mapper.UserMapper;
+import com.smartquery.service.RoleService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -34,8 +36,10 @@ class OperatorApprovalServiceTest {
     private final OutputDraftMapper outputDraftMapper = mock(OutputDraftMapper.class);
     private final PolicyDraftMapper policyDraftMapper = mock(PolicyDraftMapper.class);
     private final VersionCatalogService versionCatalog = mock(VersionCatalogService.class);
+    private final RoleService roleService = mock(RoleService.class);
     private final OperatorApprovalService service = new OperatorApprovalService(approvalMapper, operatorMapper,
-        versionMapper, ruleDraftMapper, outputDraftMapper, policyDraftMapper, mock(UserMapper.class), versionCatalog);
+        versionMapper, ruleDraftMapper, outputDraftMapper, policyDraftMapper, mock(UserMapper.class), versionCatalog,
+        roleService);
 
     @AfterEach
     void tearDown() {
@@ -44,7 +48,7 @@ class OperatorApprovalServiceTest {
 
     @Test
     void validatedDraftSubmissionMovesVersionToPendingApproval() {
-        UserContextHolder.set(new UserContextHolder.UserContext(9L, "author", UserRoles.USER));
+        UserContextHolder.set(new UserContextHolder.UserContext(9L, "author", TestRoles.USER));
         OperatorDefinition operator = operator();
         OperatorVersion version = version(VersionStatus.CANDIDATE);
         OutputDraft draft = new OutputDraft();
@@ -66,7 +70,8 @@ class OperatorApprovalServiceTest {
 
     @Test
     void independentReviewerCanApprovePendingVersion() {
-        UserContextHolder.set(new UserContextHolder.UserContext(10L, "reviewer", UserRoles.OPERATOR_REVIEWER));
+        UserContextHolder.set(new UserContextHolder.UserContext(10L, "reviewer", TestRoles.OPERATOR_REVIEWER));
+        when(roleService.currentUserHas(PermissionCodes.OPERATOR_REVIEW)).thenReturn(true);
         OperatorVersionApproval approval = approval();
         OperatorVersion version = version(VersionStatus.PENDING_APPROVAL);
         OperatorDefinition operator = operator();
@@ -86,17 +91,28 @@ class OperatorApprovalServiceTest {
     }
 
     @Test
-    void authorCannotSelfApproveEvenWhenAlsoAdmin() {
-        UserContextHolder.set(new UserContextHolder.UserContext(9L, "author", UserRoles.ADMIN));
-        when(approvalMapper.selectById(20L)).thenReturn(approval());
+    void systemAdministratorCanSelfApproveWithAuditTrail() {
+        UserContextHolder.set(new UserContextHolder.UserContext(9L, "author", TestRoles.ADMIN));
+        when(roleService.currentUserHas(PermissionCodes.OPERATOR_REVIEW)).thenReturn(true);
+        when(roleService.currentUserHas(PermissionCodes.RESOURCE_ACCESS_ALL)).thenReturn(true);
+        OperatorVersionApproval approval = approval();
+        OperatorVersion version = version(VersionStatus.PENDING_APPROVAL);
+        when(approvalMapper.selectById(20L)).thenReturn(approval);
+        when(approvalMapper.update(any(OperatorVersionApproval.class), any())).thenReturn(1);
+        when(versionMapper.selectById(12L)).thenReturn(version);
+        when(operatorMapper.selectById(5L)).thenReturn(operator());
 
-        assertThrows(BusinessException.class, () -> service.review(20L,
-            Map.of("decision", "APPROVE")));
+        OperatorApprovalService.ApprovalView result = service.review(20L,
+            Map.of("decision", "APPROVE", "comment", "管理员应急审批"));
+
+        assertEquals("APPROVED", result.approval().getStatus());
+        assertEquals("9", result.approval().getReviewerUserId());
+        assertEquals(VersionStatus.PUBLISHED, version.getStatus());
     }
 
     @Test
     void ordinaryUserCannotReadAnotherAuthorsVersionPayload() {
-        UserContextHolder.set(new UserContextHolder.UserContext(11L, "other", UserRoles.USER));
+        UserContextHolder.set(new UserContextHolder.UserContext(11L, "other", TestRoles.USER));
         when(approvalMapper.selectById(20L)).thenReturn(approval());
 
         assertThrows(BusinessException.class, () -> service.detail(20L));

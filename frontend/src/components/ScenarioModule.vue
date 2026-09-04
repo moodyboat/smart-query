@@ -75,71 +75,73 @@ const expandAllModules = () => {
 
 <style scoped>
 .scenario-modules-panel {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  border-radius: 12px;
-  padding: var(--space-xl);
-  margin: 0 20px 20px 20px;
-  color: white;
-  box-shadow: 0 8px 16px rgba(0,0,0,0.2);
+  margin: 18px 0 4px;
+  padding: 15px;
+  border: 1px solid #e4e8ef;
+  border-radius: 9px;
+  color: var(--text-primary);
+  background: #fafbfc;
 }
 
 .modules-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 16px;
+  margin-bottom: 11px;
 }
 
 .modules-title {
-  font-size: var(--font-2xl);
-  font-weight: 600;
+  color: #235f99;
+  font-size: 11px;
+  font-weight: 650;
 }
 
 .modules-container {
-  max-height: 400px;
+  max-height: 250px;
   overflow-y: auto;
-  margin-bottom: 16px;
+  margin-bottom: 11px;
 }
 
 .module-card {
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: var(--radius-lg);
-  padding: var(--space-md);
-  margin-bottom: 12px;
+  margin-bottom: 8px;
+  padding: 10px;
+  border: 1px solid #e4e8ef;
+  border-radius: 8px;
+  background: #fff;
 }
 
 .module-title {
-  font-size: var(--font-xl);
-  font-weight: 600;
-  margin-bottom: 8px;
-  color: var(--surface);
+  margin-bottom: 7px;
+  color: #333336;
+  font-size: 10px;
+  font-weight: 620;
 }
 
 .module-items {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .module-item {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  padding: 6px 8px;
-  border-radius: var(--radius-md);
+  gap: 7px;
+  padding: 5px 7px;
+  border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s;
-  background: rgba(255, 255, 255, 0.05);
+  color: #66666b;
+  background: transparent;
 }
 
 .module-item:hover {
-  background: rgba(255, 255, 255, 0.15);
-  transform: translateX(4px);
+  color: #1d1d1f;
+  background: rgba(0,113,227,.065);
 }
 
 .instruction-item:hover {
-  border-left: 2px solid var(--color-success);
+  border-left: 2px solid #0071e3;
 }
 
 .concept-item {
@@ -147,7 +149,7 @@ const expandAllModules = () => {
 }
 
 .item-bullet {
-  color: var(--color-success);
+  color: #0071e3;
   font-weight: bold;
 }
 
@@ -158,13 +160,13 @@ const expandAllModules = () => {
 
 .item-text {
   flex: 1;
-  font-size: var(--font-base);
-  line-height: 1.4;
+  font-size: 10px;
+  line-height: 1.45;
 }
 
 .modules-footer {
   display: flex;
   gap: 8px;
-  justify-content: center;
+  justify-content: flex-end;
 }
 </style>

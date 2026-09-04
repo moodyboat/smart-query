@@ -16,11 +16,15 @@ import com.smartquery.mapper.DraftDependencyMapper;
 import com.smartquery.service.ResourceAccessService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.mockito.ArgumentCaptor;
 
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -111,6 +115,43 @@ class RuntimeBuildJobServiceTest {
         Map<String, Object> spec = objectMapper.readValue(result.getBuildSpec(), new TypeReference<>() {});
         assertEquals(List.of(7, 8), spec.get("requestIds"));
         assertEquals(2, ((List<?>) spec.get("dependencies")).size());
+    }
+
+    @ParameterizedTest(name = "{0} builds in {1}")
+    @MethodSource("operatorRuntimeFamilies")
+    void buildsImmutableSpecsForEveryOperatorRuntime(String dependencyType, String runtimeType)
+            throws Exception {
+        RuntimeBuildJobMapper localJobs = mock(RuntimeBuildJobMapper.class);
+        RuntimeProfileMapper localProfiles = mock(RuntimeProfileMapper.class);
+        DependencyRequestMapper localRequests = mock(DependencyRequestMapper.class);
+        DraftDependencyMapper localLinks = mock(DraftDependencyMapper.class);
+        RuntimeBuildJobService localService = new RuntimeBuildJobService(localJobs, localProfiles,
+            localRequests, localLinks, access, objectMapper);
+        when(localJobs.selectOne(any())).thenReturn(null);
+        when(localProfiles.selectOne(any())).thenReturn(null);
+        DependencyRequest request = request();
+        request.setDependencyType(dependencyType);
+        request.setRuntimeType(runtimeType);
+        request.setDependencyName("test-" + dependencyType.toLowerCase());
+
+        RuntimeBuildJob result = localService.enqueue(request);
+
+        Map<String, Object> spec = objectMapper.readValue(result.getBuildSpec(), new TypeReference<>() {});
+        assertEquals(runtimeType, spec.get("runtimeType"));
+        assertEquals(false, ((Map<?, ?>) spec.get("policy")).get("runtimeInstall"));
+        assertEquals(true, ((Map<?, ?>) spec.get("policy")).get("requireSbom"));
+        assertEquals(dependencyType,
+            ((Map<?, ?>) ((List<?>) spec.get("dependencies")).get(0)).get("type"));
+    }
+
+    static Stream<Arguments> operatorRuntimeFamilies() {
+        return Stream.of(
+            Arguments.of("JDBC_DRIVER", "DATA_CONNECTOR"),
+            Arguments.of("PYTHON_PACKAGE", "RULE_PYTHON"),
+            Arguments.of("ML_ALGORITHM", "ML_MODEL"),
+            Arguments.of("AGENT_TOOL", "AGENT_GATEWAY"),
+            Arguments.of("FRONTEND_RENDERER", "OUTPUT_RENDERER")
+        );
     }
 
     private DependencyRequest request() {

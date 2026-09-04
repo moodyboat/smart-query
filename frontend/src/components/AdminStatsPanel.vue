@@ -43,7 +43,7 @@
       </div>
 
       <el-alert
-        title="权限范围：仅系统管理员可查看全局对话、操作、执行和资源监控数据"
+        title="权限范围：仅具备系统监控权限的用户可查看全局对话、操作、执行和资源监控数据"
         type="info" :closable="false" show-icon class="scope-alert"
       />
 

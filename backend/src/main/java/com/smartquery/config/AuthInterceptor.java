@@ -3,6 +3,8 @@ package com.smartquery.config;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartquery.common.Result;
 import com.smartquery.common.UserContextHolder;
+import com.smartquery.entity.User;
+import com.smartquery.mapper.UserMapper;
 import io.jsonwebtoken.Claims;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -22,6 +24,7 @@ import org.springframework.web.servlet.HandlerInterceptor;
 public class AuthInterceptor implements HandlerInterceptor {
 
     private final JwtUtil jwtUtil;
+    private final UserMapper userMapper;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Override
@@ -49,8 +52,11 @@ public class AuthInterceptor implements HandlerInterceptor {
             Claims claims = jwtUtil.parse(token);
             Long userId = Long.valueOf(claims.getSubject());
             String username = claims.get("username", String.class);
-            String role = claims.get("role", String.class);
-            UserContextHolder.set(new UserContextHolder.UserContext(userId, username, role));
+            User user = userMapper.selectById(userId);
+            if (user == null || user.getEnabled() == null || user.getEnabled() != 1) {
+                return writeUnauthorized(response, "账号不存在或已被禁用");
+            }
+            UserContextHolder.set(new UserContextHolder.UserContext(userId, username, user.getRole()));
             return true;
         } catch (Exception e) {
             log.debug("[AUTH] token 校验失败: {}", e.getMessage());

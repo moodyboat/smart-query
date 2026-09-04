@@ -105,6 +105,11 @@ export async function fetchRunNodes(runId) {
   return data.data || []
 }
 
+export async function fetchNodeRunSnapshot(runId, nodeRunId) {
+  const { data } = await orchestrationApi.get(`/runs/${runId}/nodes/${nodeRunId}/snapshot`)
+  return data.data
+}
+
 export async function createNodeReplay(runId, nodeRunId) {
   const { data } = await orchestrationApi.post(`/runs/${runId}/nodes/${nodeRunId}/replays`)
   return data.data
@@ -194,6 +199,33 @@ export async function fetchOperatorApprovalDetail(approvalId) {
   return data.data
 }
 
+export async function fetchModelVersionApprovals(status = '') {
+  const { data } = await orchestrationApi.get('/model-version-approvals', {
+    params: status ? { status } : {}
+  })
+  return data.data
+}
+
+export async function fetchModelApprovalCapability() {
+  const { data } = await orchestrationApi.get('/model-version-approvals/capability')
+  return data.data
+}
+
+export async function fetchModelVersionApprovalDetail(approvalId) {
+  const { data } = await orchestrationApi.get(`/model-version-approvals/${approvalId}`)
+  return data.data
+}
+
+export async function submitModelVersionApproval(flowId, versionId, comment = '') {
+  const { data } = await orchestrationApi.post(`/flows/${flowId}/versions/${versionId}/submit-approval`, { comment })
+  return data.data
+}
+
+export async function reviewModelVersionApproval(approvalId, decision, comment = '') {
+  const { data } = await orchestrationApi.post(`/model-version-approvals/${approvalId}/review`, { decision, comment })
+  return data.data
+}
+
 export async function submitOperatorVersionApproval(operatorId, versionId, comment) {
   const { data } = await orchestrationApi.post(`/operators/${operatorId}/versions/${versionId}/submit-approval`, { comment })
   return data.data
@@ -211,6 +243,11 @@ export async function fetchOutputView(artifactId, page = 1, pageSize = 50) {
   return data.data
 }
 
+export async function downloadOutputArtifact(artifactId) {
+  const response = await orchestrationApi.get(`/outputs/${artifactId}/download`, { responseType: 'blob' })
+  return { blob: response.data, contentDisposition: response.headers['content-disposition'] || '' }
+}
+
 export async function queryOutputView(artifactId, request = {}) {
   const { data } = await orchestrationApi.post(`/outputs/${artifactId}/query`, request)
   return data.data
@@ -218,6 +255,11 @@ export async function queryOutputView(artifactId, request = {}) {
 
 export async function fetchStorageGovernance() {
   const { data } = await orchestrationApi.get('/storage-governance/dashboard')
+  return data.data
+}
+
+export async function fetchFormalTaskMonitor() {
+  const { data } = await orchestrationApi.get('/formal-task-monitor/dashboard')
   return data.data
 }
 
@@ -249,6 +291,36 @@ export async function runStorageRetention() {
 export async function fetchOutputDrafts(operatorId) {
   const { data } = await orchestrationApi.get(`/operators/${operatorId}/output-drafts`)
   return data.data || []
+}
+
+export async function fetchOutputCapabilities(includeInactive = false) {
+  const { data } = await orchestrationApi.get('/output-capabilities', { params: { includeInactive } })
+  return data.data || []
+}
+
+export async function createOutputCapability(request) {
+  const { data } = await orchestrationApi.post('/output-capabilities', request)
+  return data.data
+}
+
+export async function createOutputCapabilityVersion(capabilityId, request) {
+  const { data } = await orchestrationApi.post(`/output-capabilities/${capabilityId}/versions`, request)
+  return data.data
+}
+
+export async function fetchOutputCapabilityVersions(capabilityId) {
+  const { data } = await orchestrationApi.get(`/output-capabilities/${capabilityId}/versions`)
+  return data.data || []
+}
+
+export async function reviewOutputCapabilityVersion(versionId, request) {
+  const { data } = await orchestrationApi.post(`/output-capability-versions/${versionId}/review`, request)
+  return data.data
+}
+
+export async function changeOutputCapabilityStatus(capabilityId, status) {
+  const { data } = await orchestrationApi.post(`/output-capabilities/${capabilityId}/status`, { status })
+  return data.data
 }
 
 export async function generateOutputDraft(operatorId, request) {
@@ -362,4 +434,33 @@ export async function deprecateRuntimeProfile(profileId) {
 export async function fetchDraftDependencies(draftType, draftId) {
   const { data } = await orchestrationApi.get(`/drafts/${draftType}/${draftId}/dependencies`)
   return data.data || []
+}
+
+export async function fetchScheduleTasks() {
+  const { data } = await orchestrationApi.get('/schedule-tasks')
+  return data.data || []
+}
+
+export async function createScheduleTask(payload) {
+  const { data } = await orchestrationApi.post('/schedule-tasks', payload)
+  return data.data
+}
+
+export async function updateScheduleTask(taskId, payload) {
+  const { data } = await orchestrationApi.put(`/schedule-tasks/${taskId}`, payload)
+  return data.data
+}
+
+export async function changeScheduleTaskStatus(taskId, status) {
+  const { data } = await orchestrationApi.put(`/schedule-tasks/${taskId}/status`, { status })
+  return data.data
+}
+
+export async function runScheduleTaskNow(taskId) {
+  const { data } = await orchestrationApi.post(`/schedule-tasks/${taskId}/run-now`)
+  return data.data
+}
+
+export async function deleteScheduleTask(taskId) {
+  await orchestrationApi.delete(`/schedule-tasks/${taskId}`)
 }

@@ -13,6 +13,7 @@ import com.smartquery.service.ResourceAccessService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -26,6 +27,8 @@ class OutputAuthoringServiceTest {
     private final OutputDraftMapper draftMapper = mock(OutputDraftMapper.class);
     private final VersionCatalogService versionCatalog = mock(VersionCatalogService.class);
     private final OperatorApprovalService approvalService = mock(OperatorApprovalService.class);
+    private final RuntimeProfileService runtimeProfileService = mock(RuntimeProfileService.class);
+    private final com.smartquery.llm.LlmService llmService = mock(com.smartquery.llm.LlmService.class);
     private OutputAuthoringService service;
 
     @BeforeEach
@@ -33,18 +36,20 @@ class OutputAuthoringServiceTest {
         ObjectMapper objectMapper = new ObjectMapper();
         LeadOutputPolicyService leadPolicy = new LeadOutputPolicyService(objectMapper);
         ContentHashService hashes = new ContentHashService(objectMapper);
+        OutputCapabilityRegistryService capabilityRegistry = mock(OutputCapabilityRegistryService.class);
         service = new OutputAuthoringService(
             draftMapper,
             mock(ChatMessageMapper.class),
             mock(ResourceAccessService.class),
             versionCatalog,
             hashes,
-            new OutputSpecSandbox(hashes, leadPolicy),
-            new OutputOperatorExecutor(leadPolicy),
-            mock(RuntimeProfileService.class),
+            new OutputSpecSandbox(hashes, leadPolicy, capabilityRegistry),
+            capabilityRegistry,
+            new OutputOperatorExecutor(leadPolicy, capabilityRegistry),
+            runtimeProfileService,
             mock(DependencyCenterService.class),
             approvalService,
-            mock(com.smartquery.llm.LlmService.class),
+            llmService,
             objectMapper);
         OperatorDefinition definition = new OperatorDefinition();
         definition.setId(5L);
@@ -83,6 +88,22 @@ class OutputAuthoringServiceTest {
         verify(approvalService).submitFromDraft(5L, 12L, "OUTPUT", 8L,
             "输出草稿已通过声明式整形和可视化预览");
         verify(draftMapper).updateById(draft);
+    }
+
+    @Test
+    void generatedBuiltinOutputIgnoresLlmDependencyClaims() throws Exception {
+        when(llmService.chat(any(), any())).thenReturn("""
+            {"outputKind":"EXCEL","contentSpec":{"columns":[{"field":"risk","title":"风险"}]},
+             "dependencies":[{"type":"FRONTEND_RENDERER","name":"excel-grid-renderer","version":"1.0.0"}]}
+            """);
+
+        service.generate(5L, java.util.Map.of("instruction", "输出风险结果表"));
+
+        ArgumentCaptor<OutputDraft> captor = ArgumentCaptor.forClass(OutputDraft.class);
+        verify(draftMapper).insert(captor.capture());
+        java.util.Map<String, Object> raw = new ObjectMapper().readValue(
+            captor.getValue().getRawSpec(), new com.fasterxml.jackson.core.type.TypeReference<>() {});
+        assertEquals(java.util.List.of(), raw.get("dependencies"));
     }
 
     private OutputDraft draft(String status) {

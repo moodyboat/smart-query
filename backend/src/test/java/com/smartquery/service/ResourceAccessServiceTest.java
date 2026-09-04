@@ -1,6 +1,7 @@
 package com.smartquery.service;
 
 import com.smartquery.common.BusinessException;
+import com.smartquery.common.PermissionCodes;
 import com.smartquery.common.UserContextHolder;
 import com.smartquery.entity.Conversation;
 import com.smartquery.entity.MiningModel;
@@ -22,6 +23,7 @@ class ResourceAccessServiceTest {
     private MiningModelMapper modelMapper;
     private MiningPipelineMapper pipelineMapper;
     private ModelExecutionMapper executionMapper;
+    private RoleService roleService;
     private ResourceAccessService access;
 
     @BeforeEach
@@ -30,7 +32,9 @@ class ResourceAccessServiceTest {
         modelMapper = mock(MiningModelMapper.class);
         pipelineMapper = mock(MiningPipelineMapper.class);
         executionMapper = mock(ModelExecutionMapper.class);
-        access = new ResourceAccessService(conversationMapper, modelMapper, pipelineMapper, executionMapper);
+        roleService = mock(RoleService.class);
+        access = new ResourceAccessService(conversationMapper, modelMapper, pipelineMapper, executionMapper,
+            roleService);
         UserContextHolder.set(new UserContextHolder.UserContext(10L, "alice", "user"));
     }
 
@@ -84,6 +88,7 @@ class ResourceAccessServiceTest {
         assertThrows(BusinessException.class, () -> access.requireModel(4L));
 
         UserContextHolder.set(new UserContextHolder.UserContext(1L, "admin", "admin"));
+        when(roleService.currentUserHas(PermissionCodes.RESOURCE_ACCESS_ALL)).thenReturn(true);
         assertSame(model, access.requireModel(4L));
     }
 
@@ -119,6 +124,7 @@ class ResourceAccessServiceTest {
         pipeline.setDeleted(0);
         when(pipelineMapper.selectById(6L)).thenReturn(pipeline);
         UserContextHolder.set(new UserContextHolder.UserContext(1L, "admin", "admin"));
+        when(roleService.currentUserHas(PermissionCodes.RESOURCE_ACCESS_ALL)).thenReturn(true);
 
         assertSame(pipeline, access.requirePipeline(6L));
     }

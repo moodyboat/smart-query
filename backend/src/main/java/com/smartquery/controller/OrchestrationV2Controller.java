@@ -31,6 +31,8 @@ import com.smartquery.orchestration.NodeReplayService;
 import com.smartquery.orchestration.OutputArtifactService;
 import com.smartquery.orchestration.OutputArtifactQueryService;
 import com.smartquery.orchestration.OutputAuthoringService;
+import com.smartquery.orchestration.OutputCapabilityRegistryService;
+import com.smartquery.orchestration.OutputExportService;
 import com.smartquery.orchestration.OperatorApprovalService;
 import com.smartquery.orchestration.PolicyAuthoringService;
 import com.smartquery.orchestration.RuleCompositionService;
@@ -42,10 +44,15 @@ import com.smartquery.orchestration.RuntimeBuildWorkerService;
 import com.smartquery.orchestration.AgentPolicyService;
 import com.smartquery.orchestration.VersionCatalogService;
 import com.smartquery.orchestration.StorageGovernanceService;
+import com.smartquery.orchestration.FormalTaskMonitorService;
+import com.smartquery.orchestration.ModelVersionApprovalService;
 import com.smartquery.orchestration.StorageRetentionScheduler;
 import com.smartquery.orchestration.execution.OperatorExecutorRegistry;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -59,6 +66,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.nio.charset.StandardCharsets;
 
 /** Additive V2 control-plane API. Existing V1 mining APIs remain unchanged. */
 @RestController
@@ -75,6 +83,8 @@ public class OrchestrationV2Controller {
     private final OutputArtifactService outputArtifactService;
     private final OutputArtifactQueryService outputArtifactQueryService;
     private final OutputAuthoringService outputAuthoringService;
+    private final OutputCapabilityRegistryService outputCapabilityRegistryService;
+    private final OutputExportService outputExportService;
     private final OperatorApprovalService operatorApprovalService;
     private final PolicyAuthoringService policyAuthoringService;
     private final AgentPolicyService agentPolicyService;
@@ -84,6 +94,8 @@ public class OrchestrationV2Controller {
     private final RuntimeBuildWorkerAuthService runtimeBuildWorkerAuthService;
     private final RuntimeBuildWorkerService runtimeBuildWorkerService;
     private final StorageGovernanceService storageGovernanceService;
+    private final FormalTaskMonitorService formalTaskMonitorService;
+    private final ModelVersionApprovalService modelVersionApprovalService;
     private final StorageRetentionScheduler storageRetentionScheduler;
     private final OperatorExecutorRegistry executorRegistry;
     private final ObjectMapper objectMapper;
@@ -134,6 +146,37 @@ public class OrchestrationV2Controller {
         return Result.ok(versionCatalogService.listOperatorVersions(operatorId));
     }
 
+    @GetMapping("/model-version-approvals")
+    public Result<List<ModelVersionApprovalService.ApprovalView>> modelVersionApprovals(
+            @RequestParam(required = false) String status) {
+        return Result.ok(modelVersionApprovalService.list(status));
+    }
+
+    @GetMapping("/model-version-approvals/capability")
+    public Result<Map<String, Object>> modelVersionApprovalCapability() {
+        return Result.ok(Map.of("canReview", modelVersionApprovalService.currentUserCanReview()));
+    }
+
+    @GetMapping("/model-version-approvals/{approvalId}")
+    public Result<ModelVersionApprovalService.ApprovalDetail> modelVersionApprovalDetail(
+            @PathVariable Long approvalId) {
+        return Result.ok(modelVersionApprovalService.detail(approvalId));
+    }
+
+    @PostMapping("/flows/{flowId}/versions/{versionId}/submit-approval")
+    public Result<com.smartquery.entity.ModelVersionApproval> submitModelVersionApproval(
+            @PathVariable Long flowId, @PathVariable Long versionId,
+            @RequestBody(required = false) Map<String, Object> body) {
+        String comment = body == null ? null : String.valueOf(body.getOrDefault("comment", ""));
+        return Result.ok(modelVersionApprovalService.submit(flowId, versionId, comment));
+    }
+
+    @PostMapping("/model-version-approvals/{approvalId}/review")
+    public Result<ModelVersionApprovalService.ApprovalView> reviewModelVersionApproval(
+            @PathVariable Long approvalId, @RequestBody Map<String, Object> body) {
+        return Result.ok(modelVersionApprovalService.review(approvalId, body));
+    }
+
     @PostMapping("/operators/{operatorId}/versions")
     public Result<OperatorVersion> createOperatorVersion(@PathVariable Long operatorId,
                                                           @RequestBody Map<String, Object> body) {
@@ -178,6 +221,41 @@ public class OrchestrationV2Controller {
     @GetMapping("/operators/{operatorId}/output-drafts")
     public Result<List<OutputDraft>> outputDrafts(@PathVariable Long operatorId) {
         return Result.ok(outputAuthoringService.list(operatorId));
+    }
+
+    @GetMapping("/output-capabilities")
+    public Result<List<OutputCapabilityRegistryService.CapabilityView>> outputCapabilities(
+            @RequestParam(defaultValue = "false") boolean includeInactive) {
+        return Result.ok(outputCapabilityRegistryService.list(includeInactive));
+    }
+
+    @PostMapping("/output-capabilities")
+    public Result<Map<String, Object>> createOutputCapability(@RequestBody Map<String, Object> body) {
+        return Result.ok(outputCapabilityRegistryService.createDefinition(body));
+    }
+
+    @PostMapping("/output-capabilities/{capabilityId}/versions")
+    public Result<Map<String, Object>> createOutputCapabilityVersion(
+            @PathVariable Long capabilityId, @RequestBody Map<String, Object> body) {
+        return Result.ok(outputCapabilityRegistryService.createVersion(capabilityId, body));
+    }
+
+    @GetMapping("/output-capabilities/{capabilityId}/versions")
+    public Result<List<OutputCapabilityRegistryService.CapabilityVersionView>> outputCapabilityVersions(
+            @PathVariable Long capabilityId) {
+        return Result.ok(outputCapabilityRegistryService.versions(capabilityId));
+    }
+
+    @PostMapping("/output-capability-versions/{versionId}/review")
+    public Result<Map<String, Object>> reviewOutputCapabilityVersion(
+            @PathVariable Long versionId, @RequestBody Map<String, Object> body) {
+        return Result.ok(outputCapabilityRegistryService.reviewVersion(versionId, body));
+    }
+
+    @PostMapping("/output-capabilities/{capabilityId}/status")
+    public Result<Map<String, Object>> changeOutputCapabilityStatus(
+            @PathVariable Long capabilityId, @RequestBody Map<String, Object> body) {
+        return Result.ok(outputCapabilityRegistryService.changeStatus(capabilityId, body));
     }
 
     @PostMapping("/operators/{operatorId}/output-drafts/from-dialogue")
@@ -402,6 +480,12 @@ public class OrchestrationV2Controller {
         return Result.ok(orchestrationRunService.listNodeRuns(runId));
     }
 
+    @GetMapping("/runs/{runId}/nodes/{nodeRunId}/snapshot")
+    public Result<OrchestrationRunService.NodeSnapshotView> nodeSnapshot(
+            @PathVariable Long runId, @PathVariable Long nodeRunId) {
+        return Result.ok(orchestrationRunService.nodeSnapshot(runId, nodeRunId));
+    }
+
     @PostMapping("/runs/{runId}/nodes/{nodeRunId}/replays")
     public Result<NodeReplay> createNodeReplay(@PathVariable Long runId,
                                                @PathVariable Long nodeRunId) {
@@ -449,6 +533,17 @@ public class OrchestrationV2Controller {
         return Result.ok(outputArtifactService.view(artifactId, page, pageSize));
     }
 
+    @GetMapping("/outputs/{artifactId}/download")
+    public ResponseEntity<byte[]> downloadOutput(@PathVariable Long artifactId) {
+        OutputExportService.ExportFile file = outputExportService.export(artifactId);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.parseMediaType(file.mimeType()));
+        headers.setContentDisposition(ContentDisposition.attachment()
+            .filename(file.fileName(), StandardCharsets.UTF_8).build());
+        headers.setContentLength(file.bytes().length);
+        return ResponseEntity.ok().headers(headers).body(file.bytes());
+    }
+
     @PostMapping("/outputs/{artifactId}/query")
     public Result<OutputArtifactQueryService.QueryResult> queryOutput(
             @PathVariable Long artifactId,
@@ -459,6 +554,11 @@ public class OrchestrationV2Controller {
     @GetMapping("/storage-governance/dashboard")
     public Result<StorageGovernanceService.GovernanceDashboard> storageGovernanceDashboard() {
         return Result.ok(storageGovernanceService.dashboard());
+    }
+
+    @GetMapping("/formal-task-monitor/dashboard")
+    public Result<FormalTaskMonitorService.MonitorDashboard> formalTaskMonitorDashboard() {
+        return Result.ok(formalTaskMonitorService.dashboard());
     }
 
     @PostMapping("/storage-governance/policy")

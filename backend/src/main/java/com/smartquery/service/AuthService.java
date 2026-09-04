@@ -23,6 +23,7 @@ public class AuthService {
     private final UserMapper userMapper;
     private final JwtUtil jwtUtil;
     private final PasswordEncoder passwordEncoder;
+    private final RoleService roleService;
 
     public LoginResponse login(LoginRequest request) {
         User user = userMapper.selectOne(new LambdaQueryWrapper<User>()
@@ -33,6 +34,11 @@ public class AuthService {
         }
         if (user.getEnabled() == null || user.getEnabled() != 1) {
             throw new AuthenticationException("账号已被禁用，请联系管理员");
+        }
+        try {
+            roleService.validateEnabledRole(user.getRole());
+        } catch (Exception e) {
+            throw new AuthenticationException("账号角色不存在或已停用，请联系管理员");
         }
 
         User update = new User();
@@ -54,6 +60,8 @@ public class AuthService {
     }
 
     private UserInfo toUserInfo(User user) {
-        return new UserInfo(user.getId(), user.getUsername(), user.getDisplayName(), user.getEmail(), user.getRole());
+        return new UserInfo(user.getId(), user.getUsername(), user.getDisplayName(), user.getEmail(),
+            user.getRole(), roleService.roleLabel(user.getRole()),
+            roleService.permissionCodes(user.getRole()), user.getEnabled());
     }
 }

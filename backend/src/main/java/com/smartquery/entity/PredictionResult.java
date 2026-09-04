@@ -15,6 +15,9 @@ public class PredictionResult {
     private Long modelId;
     private String modelName;
     private String batchId;
+    /** manual or schedule; preview/transient inference is never persisted here. */
+    private String triggerType;
+    private Long modelExecutionId;
     private String inputData;
     private String prediction;
     private Double probability;

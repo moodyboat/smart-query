@@ -4,8 +4,9 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartquery.common.BusinessException;
+import com.smartquery.common.PermissionCodes;
 import com.smartquery.common.UserContextHolder;
-import com.smartquery.common.UserRoles;
+import com.smartquery.service.RoleService;
 import com.smartquery.entity.OrchestrationRun;
 import com.smartquery.entity.OutputArtifact;
 import com.smartquery.entity.OutputArtifactRow;
@@ -30,12 +31,13 @@ public class OutputArtifactService {
     private final OutputArtifactRowMapper outputArtifactRowMapper;
     private final OrchestrationRunMapper runMapper;
     private final ObjectMapper objectMapper;
+    private final RoleService roleService;
 
     public List<OutputArtifact> list(Long runId) {
         OrchestrationRun run = runId == null ? null : runMapper.selectById(runId);
         if (run == null) throw new BusinessException(404, "编排运行不存在: " + runId);
         String userId = UserContextHolder.require().userId().toString();
-        if (!UserRoles.ADMIN.equals(UserContextHolder.require().role())
+        if (!roleService.currentUserHas(PermissionCodes.RESOURCE_ACCESS_ALL)
                 && !userId.equals(run.getOwnerUserId())) {
             throw new BusinessException(403, "无权访问该运行输出");
         }
@@ -88,7 +90,7 @@ public class OutputArtifactService {
             throw new BusinessException(403, "无权访问该输出结果");
         }
         if (StorageGovernanceService.ARCHIVED.equals(artifact.getArchiveStatus())) {
-            throw new BusinessException(409, "输出结果已归档，请由管理员恢复后查看");
+            throw new BusinessException(409, "输出结果已归档，请由具备运行治理权限的人员恢复后查看");
         }
         return artifact;
     }
@@ -154,7 +156,7 @@ public class OutputArtifactService {
     }
 
     private String currentUserId() { return UserContextHolder.require().userId().toString(); }
-    private boolean isAdmin() { return UserRoles.ADMIN.equals(UserContextHolder.require().role()); }
+    private boolean isAdmin() { return roleService.currentUserHas(PermissionCodes.RESOURCE_ACCESS_ALL); }
 
     public record OutputView(OutputArtifact artifact, Map<String, Object> contentSpec,
                              Map<String, Object> summary, int page, int pageSize, long totalRows,

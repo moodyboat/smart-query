@@ -1,12 +1,8 @@
 <template>
-  <div class="page-container prompt-manager">
-    <!-- Header -->
-    <div class="page-header">
-      <button class="back-btn" @click="$emit('close')">
-        <span class="back-arrow">&larr;</span> 返回问数
-      </button>
-      <h2 class="page-title">提示词管理</h2>
-    </div>
+  <section class="prompt-manager">
+    <button v-if="props.showSidebarToggle" type="button" class="module-menu-floating" aria-label="打开导航" @click="emit('toggleSidebar')">☰</button>
+
+    <div class="prompt-body">
 
     <!-- 场景选择 -->
     <el-card shadow="hover" class="scenario-selector-card">
@@ -33,7 +29,6 @@
           </div>
           <div class="scenario-details">
             <h3>{{ currentScenario?.name }}</h3>
-            <p class="description">{{ currentScenario?.description }}</p>
             <div class="scenario-tags">
               <el-tag :type="currentScenario?.category === 'business' ? 'success' : 'primary'" size="small">
                 {{ getCategoryLabel(currentScenario?.category) }}
@@ -63,7 +58,7 @@
           </div>
         </template>
 
-        <el-table :data="prompts" v-loading="loadingPrompts" stripe>
+        <el-table class="prompts-table" :data="prompts" v-loading="loadingPrompts" stripe>
           <el-table-column prop="name" label="名称" width="180" />
           <el-table-column prop="code" label="编码" width="150" />
           <el-table-column prop="type" label="类型" width="100">
@@ -99,27 +94,62 @@
             </template>
           </el-table-column>
         </el-table>
+
+        <div v-loading="loadingPrompts" class="prompt-card-list">
+          <article v-for="row in prompts" :key="row.id" class="prompt-item">
+            <div class="prompt-item-head">
+              <div>
+                <strong>{{ row.name }}</strong>
+                <span>{{ row.code }}</span>
+              </div>
+              <el-tag :type="getTypeColor(row.type)" size="small">{{ getTypeLabel(row.type) }}</el-tag>
+            </div>
+            <p>{{ row.description || '暂无描述' }}</p>
+            <div class="prompt-item-meta">
+              <span>版本 {{ row.version || '-' }}</span>
+              <el-tag v-if="row.isDefault" type="success" size="small">默认</el-tag>
+              <el-tag v-if="row.isSystem" type="info" size="small">系统</el-tag>
+              <el-tag v-if="!row.isEnabled" type="danger" size="small">禁用</el-tag>
+            </div>
+            <div v-if="row.variables?.length" class="prompt-variables">
+              <el-tag v-for="variable in row.variables.slice(0, 3)" :key="variable.name" size="small">{{ variable.name }}</el-tag>
+              <span v-if="row.variables.length > 3">+{{ row.variables.length - 3 }}</span>
+            </div>
+            <div class="prompt-item-actions">
+              <el-button link type="primary" :icon="View" @click="handleViewPrompt(row)">查看</el-button>
+              <el-button link type="primary" :icon="Edit" :disabled="row.isSystem" @click="handleEditPrompt(row)">编辑</el-button>
+              <el-button link type="primary" :disabled="row.isDefault || row.isSystem" @click="handleSetDefault(row)">设为默认</el-button>
+              <el-button link type="danger" :icon="Delete" :disabled="row.isSystem" @click="handleDeletePrompt(row)">删除</el-button>
+            </div>
+          </article>
+          <el-empty v-if="!loadingPrompts && prompts.length === 0" description="当前场景暂无提示词" />
+        </div>
       </el-card>
+    </div>
     </div>
 
     <!-- 提示词编辑对话框 -->
-    <el-dialog v-model="editDialogVisible" :title="editDialogTitle" width="900px" top="5vh">
-      <el-form :model="editForm" label-width="120px">
-        <el-row :gutter="20">
-          <el-col :span="12">
+    <el-dialog v-model="editDialogVisible" :title="editDialogTitle" width="min(900px, 95vw)" top="5vh">
+      <el-form
+        :model="editForm"
+        :label-position="props.showSidebarToggle ? 'top' : 'right'"
+        :label-width="props.showSidebarToggle ? 'auto' : '120px'"
+      >
+        <el-row :gutter="props.showSidebarToggle ? 0 : 20">
+          <el-col :span="12" :xs="24">
             <el-form-item label="名称">
               <el-input v-model="editForm.name" placeholder="请输入提示词名称" />
             </el-form-item>
           </el-col>
-          <el-col :span="12">
+          <el-col :span="12" :xs="24">
             <el-form-item label="编码">
               <el-input v-model="editForm.code" placeholder="请输入提示词编码" :disabled="isEditMode" />
             </el-form-item>
           </el-col>
         </el-row>
 
-        <el-row :gutter="20">
-          <el-col :span="12">
+        <el-row :gutter="props.showSidebarToggle ? 0 : 20">
+          <el-col :span="12" :xs="24">
             <el-form-item label="类型">
               <el-select v-model="editForm.type" placeholder="请选择类型" :disabled="isEditMode">
                 <el-option label="系统提示词" value="system" />
@@ -128,7 +158,7 @@
               </el-select>
             </el-form-item>
           </el-col>
-          <el-col :span="12">
+          <el-col :span="12" :xs="24">
             <el-form-item label="版本">
               <el-input v-model="editForm.version" placeholder="请输入版本号" />
             </el-form-item>
@@ -182,8 +212,8 @@
 
         <el-divider content-position="left">模型配置</el-divider>
 
-        <el-row :gutter="20">
-          <el-col :span="12">
+        <el-row :gutter="props.showSidebarToggle ? 0 : 20">
+          <el-col :span="12" :xs="24">
             <el-form-item label="模型">
               <el-select v-model="editForm.modelConfig.model" placeholder="请选择模型">
                 <el-option label="GLM-5.1" value="glm-5.1" />
@@ -192,14 +222,14 @@
               </el-select>
             </el-form-item>
           </el-col>
-          <el-col :span="6">
+          <el-col :span="6" :xs="24">
             <el-form-item label="温度">
-              <el-input-number v-model="editForm.modelConfig.temperature" :min="0" :max="2" :step="0.1" :precision="1" />
+              <el-input-number v-model="editForm.modelConfig.temperature" :min="0" :max="2" :step="0.1" :precision="1" style="width: 100%" />
             </el-form-item>
           </el-col>
-          <el-col :span="6">
+          <el-col :span="6" :xs="24">
             <el-form-item label="最大Token">
-              <el-input-number v-model="editForm.modelConfig.maxTokens" :min="100" :max="8000" :step="100" />
+              <el-input-number v-model="editForm.modelConfig.maxTokens" :min="100" :max="8000" :step="100" style="width: 100%" />
             </el-form-item>
           </el-col>
         </el-row>
@@ -217,7 +247,7 @@
     </el-dialog>
 
     <!-- 查看提示词对话框 -->
-    <el-dialog v-model="viewDialogVisible" title="提示词详情" width="800px">
+    <el-dialog v-model="viewDialogVisible" title="提示词详情" width="min(800px, 94vw)">
       <div v-if="currentPrompt" class="prompt-detail">
         <div class="detail-header">
           <h3>{{ currentPrompt.name }}</h3>
@@ -259,7 +289,7 @@
         </div>
       </div>
     </el-dialog>
-  </div>
+  </section>
 </template>
 
 <script setup>
@@ -269,7 +299,10 @@ import { Plus, Edit, Delete, View, Document, ChatDotRound } from '@element-plus/
 import api from '../api'
 import { useConversationStore } from '../stores/conversation'
 
-const emit = defineEmits(['close'])
+const props = defineProps({
+  showSidebarToggle: { type: Boolean, default: false },
+})
+const emit = defineEmits(['close', 'toggleSidebar'])
 
 // 引入对话存储
 const convStore = useConversationStore()
@@ -621,15 +654,111 @@ onMounted(() => {
 }
 
 .prompt-manager {
-  padding: var(--space-xl);
-  max-width: 1400px;
-  margin: 0 auto;
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #f5f7fa;
+}
+.module-menu-floating { position:absolute; z-index:5; top:10px; left:10px; width:34px; height:34px; display:grid; place-items:center; padding:0; border:1px solid #d8e1ee; border-radius:8px; color:var(--text-regular); background:#fff; cursor:pointer; }
+
+.prompt-header {
+  flex: 0 0 72px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px clamp(16px, 2vw, 28px);
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 255, 255, .96);
 }
 
-/* .prompt-header / .back-btn / .back-arrow / .page-title 复用全局公共类（style.css）*/
+.module-mark {
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: #2468f2;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: .06em;
+}
+
+.module-menu,
+.return-button {
+  border: 1px solid #d8e1ee;
+  background: #fff;
+  color: var(--text-regular);
+  cursor: pointer;
+}
+
+.module-menu {
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  font-size: 18px;
+}
+
+.return-button {
+  margin-left: auto;
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.return-button:hover,
+.module-menu:hover {
+  border-color: #2468f2;
+  color: #2468f2;
+}
+
+.header-copy {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  column-gap: 10px;
+}
+
+.header-copy small {
+  color: #2468f2;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .12em;
+}
+
+.header-copy strong {
+  color: var(--text-primary);
+  font-size: 18px;
+}
+
+.header-copy p {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.prompt-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: clamp(14px, 1.6vw, 24px);
+}
 
 .scenario-selector-card {
-  margin-bottom: 20px;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
 }
 
 .selector-content {
@@ -652,16 +781,17 @@ onMounted(() => {
 .content-area {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 14px;
 }
 
 .scenario-info-card {
   background: var(--surface);
   border: 1px solid var(--border);
+  border-radius: 10px;
 }
 
 .scenario-info-card :deep(.el-card__body) {
-  padding: var(--space-2xl);
+  padding: clamp(18px, 2vw, 28px);
 }
 
 .scenario-info {
@@ -673,7 +803,7 @@ onMounted(() => {
 .scenario-icon {
   background: var(--color-primary-light);
   color: var(--color-primary);
-  border-radius: 12px;
+  border-radius: 10px;
   padding: var(--space-lg);
   display: flex;
   align-items: center;
@@ -730,6 +860,73 @@ onMounted(() => {
   font-size: var(--font-xl);
 }
 
+.prompts-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.prompt-card-list {
+  display: none;
+  gap: 10px;
+}
+
+.prompt-item {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #dce4ef;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.prompt-item-head,
+.prompt-item-meta,
+.prompt-variables,
+.prompt-item-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.prompt-item-head {
+  justify-content: space-between;
+}
+
+.prompt-item-head > div {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.prompt-item-head strong {
+  color: var(--text-primary);
+}
+
+.prompt-item-head span,
+.prompt-item-meta,
+.prompt-variables > span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.prompt-item > p {
+  margin: 10px 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.prompt-variables,
+.prompt-item-actions {
+  margin-top: 10px;
+}
+
+.prompt-item-actions {
+  padding-top: 8px;
+  border-top: 1px solid #edf1f6;
+}
+
 .prompt-detail {
   display: flex;
   flex-direction: column;
@@ -781,5 +978,84 @@ onMounted(() => {
 
 .model-config p {
   margin: 0;
+}
+
+@media (max-width: 1180px) {
+  .prompts-table { display: none; }
+  .prompt-card-list { display: grid; }
+}
+
+@media (max-width: 767px) {
+  .prompt-manager {
+    border: 0;
+    border-radius: 0;
+  }
+
+  .prompt-header {
+    flex-basis: 64px;
+    gap: 9px;
+    padding: 8px 12px;
+  }
+
+  .module-mark {
+    width: 34px;
+    height: 34px;
+  }
+
+  .header-copy {
+    display: block;
+  }
+
+  .header-copy small,
+  .header-copy p {
+    display: none;
+  }
+
+  .header-copy strong {
+    font-size: 16px;
+  }
+
+  .return-button {
+    padding: 0 9px;
+    font-size: 12px;
+  }
+
+  .prompt-body {
+    padding: 54px 10px 10px;
+  }
+
+  .selector-content,
+  .scenario-info,
+  .detail-header,
+  .model-config {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .selector-content :deep(.el-select) {
+    width: 100% !important;
+  }
+
+  .scenario-icon {
+    align-self: flex-start;
+    padding: 12px;
+  }
+
+  .scenario-actions {
+    flex-direction: column;
+  }
+
+  .scenario-actions .el-button {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .card-header {
+    gap: 12px;
+  }
+
+  .prompt-item-actions :deep(.el-button) {
+    margin-left: 0;
+  }
 }
 </style>

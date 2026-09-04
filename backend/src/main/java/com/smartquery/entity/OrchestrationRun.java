@@ -16,6 +16,7 @@ public class OrchestrationRun {
     @TableId(type = IdType.AUTO)
     private Long id;
     private Long flowVersionId;
+    private Long scheduleTaskId;
     private String ownerUserId;
     private String actorRole;
     private String triggerType;

@@ -16,6 +16,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 import java.util.Map;
@@ -45,6 +46,7 @@ class PolicyAuthoringServiceTest {
             mock(SqlAstPolicyService.class), agentPolicy,
             dataSourcePolicy, mock(SqlAstOperatorExecutor.class), mock(AgentPolicyOperatorExecutor.class),
             mock(OperatorApprovalService.class), llm, objectMapper);
+        ReflectionTestUtils.setField(service, "defaultModel", "chat-default-model");
         UserContextHolder.set(new UserContextHolder.UserContext(9L, "tester", "USER"));
     }
 
@@ -83,15 +85,25 @@ class PolicyAuthoringServiceTest {
             """);
 
         service.generate(5L, Map.of("instruction", "判断风险", "allowedTools", List.of("read_orders"),
-            "runtimeModel", "approved-model"));
+            "runtimeModel", "untrusted-client-model"));
 
         ArgumentCaptor<PolicyDraft> captor = ArgumentCaptor.forClass(PolicyDraft.class);
         verify(draftMapper).insert(captor.capture());
         Map<String, Object> raw = objectMapper.readValue(captor.getValue().getRawSpec(), new TypeReference<>() {});
         assertEquals(List.of("read_orders"), raw.get("allowedTools"));
-        assertEquals("approved-model", raw.get("model"));
+        assertEquals("chat-default-model", raw.get("model"));
+        assertFalse(String.valueOf(raw).contains("untrusted-client-model"));
         assertFalse(String.valueOf(raw).contains("delete_orders"));
         assertFalse(String.valueOf(raw).contains("untrusted-model"));
+        Map<String, Object> output = objectMapper.readValue(
+            captor.getValue().getOutputSchema(), new TypeReference<>() {});
+        Map<String, Object> properties = cast(output.get("properties"));
+        Map<String, Object> records = cast(properties.get("records"));
+        Map<String, Object> items = cast(records.get("items"));
+        Map<String, Object> itemProperties = cast(items.get("properties"));
+        assertEquals("string", cast(itemProperties.get("decision")).get("type"));
+        assertEquals("array", cast(itemProperties.get("trace")).get("type"));
+        assertEquals(List.of("decision", "trace"), items.get("required"));
     }
 
     @Test
@@ -113,5 +125,10 @@ class PolicyAuthoringServiceTest {
         definition.setId(5L);
         definition.setOperatorType(type);
         when(versionCatalog.requireOperator(5L)).thenReturn(definition);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> cast(Object value) {
+        return (Map<String, Object>) value;
     }
 }

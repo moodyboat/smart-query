@@ -1,6 +1,6 @@
 package com.smartquery.service;
 
-import com.smartquery.common.UserRoles;
+import com.smartquery.common.PermissionCodes;
 import com.smartquery.entity.Scenario;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -13,7 +13,7 @@ import java.util.List;
  *
  * <p>规则：
  * <ul>
- *   <li>role == admin：直通，可访问所有场景（{@link UserRoles#ADMIN}）</li>
+ *   <li>具备场景管理权限：可访问所有场景</li>
  *   <li>其他角色：必须在 sq_role_scenario 表中有授权记录</li>
  * </ul>
  */
@@ -24,6 +24,7 @@ public class ScenarioAuthService {
 
     private final RoleScenarioService roleScenarioService;
     private final ScenarioService scenarioService;
+    private final RoleService roleService;
 
     /**
      * 校验角色是否有权访问某场景编码
@@ -32,7 +33,7 @@ public class ScenarioAuthService {
         if (scenarioCode == null || scenarioCode.isBlank()) {
             return true; // 未指定场景视为通用对话，放行
         }
-        if (UserRoles.ADMIN.equals(role)) {
+        if (roleService.hasPermission(role, PermissionCodes.SCENARIO_MANAGE)) {
             return true;
         }
         Scenario scenario = scenarioService.getByCode(scenarioCode);
@@ -51,7 +52,7 @@ public class ScenarioAuthService {
         if (scenarioId == null) {
             return true;
         }
-        if (UserRoles.ADMIN.equals(role)) {
+        if (roleService.hasPermission(role, PermissionCodes.SCENARIO_MANAGE)) {
             return true;
         }
         List<Long> allowedIds = roleScenarioService.getScenarioIdsByRole(role);

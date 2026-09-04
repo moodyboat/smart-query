@@ -5,8 +5,9 @@ import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartquery.common.BusinessException;
+import com.smartquery.common.PermissionCodes;
 import com.smartquery.common.UserContextHolder;
-import com.smartquery.common.UserRoles;
+import com.smartquery.service.RoleService;
 import com.smartquery.entity.FlowVersion;
 import com.smartquery.entity.NodeReplay;
 import com.smartquery.entity.NodeReplayChunk;
@@ -81,6 +82,7 @@ public class NodeReplayService {
     private final NodeReplayDiffService diffService;
     private final ReplayOutputCommitService replayOutputCommitService;
     private final ObjectMapper objectMapper;
+    private final RoleService roleService;
     private final Executor orchestrationExecutor;
     private final Executor orchestrationNodeExecutor;
     private final ScheduledExecutorService orchestrationWatchdog;
@@ -104,6 +106,7 @@ public class NodeReplayService {
                              NodeReplayDiffService diffService,
                              ReplayOutputCommitService replayOutputCommitService,
                              ObjectMapper objectMapper,
+                             RoleService roleService,
                              @Qualifier("orchestrationExecutor") Executor orchestrationExecutor,
                              @Qualifier("orchestrationNodeExecutor") Executor orchestrationNodeExecutor,
                              @Qualifier("orchestrationWatchdog") ScheduledExecutorService orchestrationWatchdog) {
@@ -120,6 +123,7 @@ public class NodeReplayService {
         this.diffService = diffService;
         this.replayOutputCommitService = replayOutputCommitService;
         this.objectMapper = objectMapper;
+        this.roleService = roleService;
         this.orchestrationExecutor = orchestrationExecutor;
         this.orchestrationNodeExecutor = orchestrationNodeExecutor;
         this.orchestrationWatchdog = orchestrationWatchdog;
@@ -157,7 +161,7 @@ public class NodeReplayService {
         replay.setTimeoutSeconds(nodeRun.getTimeoutSeconds() == null ? 300 : nodeRun.getTimeoutSeconds());
         replay.setOwnerUserId(run.getOwnerUserId());
         replay.setActorRole(run.getActorRole() == null || run.getActorRole().isBlank()
-            ? UserRoles.USER : run.getActorRole());
+            ? roleService.defaultRoleCode() : run.getActorRole());
         replay.setArchiveStatus(StorageGovernanceService.ACTIVE);
         replay.setPayloadBytes(0L);
         replay.setUsageAccounted(0);
@@ -178,7 +182,7 @@ public class NodeReplayService {
     public ReplayDetail detail(Long replayId) {
         NodeReplay replay = requireReplay(replayId);
         if (StorageGovernanceService.ARCHIVED.equals(replay.getArchiveStatus())) {
-            throw new BusinessException(409, "节点回放结果已归档，请由管理员恢复后查看");
+            throw new BusinessException(409, "节点回放结果已归档，请由具备运行治理权限的人员恢复后查看");
         }
         NodeRun source = requireSourceNode(replay.getSourceRunId(), replay.getSourceNodeRunId());
         NodeRunSnapshot snapshot = snapshotService.require(replay.getSnapshotId());
@@ -599,7 +603,8 @@ public class NodeReplayService {
 
     private void authorize(String ownerUserId) {
         UserContextHolder.UserContext user = UserContextHolder.require();
-        if (!UserRoles.ADMIN.equals(user.role()) && !Objects.equals(user.userId().toString(), ownerUserId)) {
+        if (!roleService.hasPermission(user.role(), PermissionCodes.RESOURCE_ACCESS_ALL)
+                && !Objects.equals(user.userId().toString(), ownerUserId)) {
             throw new BusinessException(403, "无权访问该节点回放");
         }
     }
@@ -608,7 +613,7 @@ public class NodeReplayService {
         try {
             return new UserContextHolder.UserContext(Long.parseLong(replay.getOwnerUserId()),
                 "node-replay-" + replay.getId(),
-                replay.getActorRole() == null ? UserRoles.USER : replay.getActorRole());
+                replay.getActorRole() == null ? roleService.defaultRoleCode() : replay.getActorRole());
         } catch (NumberFormatException error) {
             throw new BusinessException(422, "节点回放所有者标识无效");
         }

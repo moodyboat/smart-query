@@ -81,6 +81,47 @@ public class OrchestrationV2SchemaSeeder implements CommandLineRunner {
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS sq_model_version_approval (
+            id BIGINT NOT NULL AUTO_INCREMENT,
+            flow_id BIGINT NOT NULL,
+            flow_version_id BIGINT NOT NULL,
+            status VARCHAR(30) NOT NULL,
+            request_comment TEXT,
+            requested_by_user_id VARCHAR(64) NOT NULL,
+            reviewer_user_id VARCHAR(64),
+            review_comment TEXT,
+            reviewed_at DATETIME,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            CONSTRAINT uk_model_approval_version UNIQUE (flow_version_id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS sq_schedule_task (
+            id BIGINT NOT NULL AUTO_INCREMENT,
+            name VARCHAR(200) NOT NULL,
+            task_type VARCHAR(30) NOT NULL DEFAULT 'MODEL',
+            model_id BIGINT,
+            flow_version_id BIGINT,
+            schedule_mode VARCHAR(20) NOT NULL,
+            cron_expression VARCHAR(100) NOT NULL,
+            input_table VARCHAR(255),
+            input_filter TEXT,
+            output_table VARCHAR(255),
+            input_payload TEXT,
+            status VARCHAR(20) NOT NULL DEFAULT 'PAUSED',
+            owner_user_id VARCHAR(64) NOT NULL,
+            last_run_at DATETIME,
+            next_run_at DATETIME,
+            last_status VARCHAR(30),
+            last_error TEXT,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            deleted TINYINT NOT NULL DEFAULT 0,
+            PRIMARY KEY (id)
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS sq_rule_primitive (
             id BIGINT NOT NULL AUTO_INCREMENT,
             code VARCHAR(80) NOT NULL,
@@ -118,6 +159,53 @@ public class OrchestrationV2SchemaSeeder implements CommandLineRunner {
             created_by_user_id VARCHAR(64) NOT NULL,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS sq_output_capability (
+            id BIGINT NOT NULL AUTO_INCREMENT,
+            code VARCHAR(120) NOT NULL,
+            name VARCHAR(200) NOT NULL,
+            capability_type VARCHAR(30) NOT NULL,
+            description TEXT,
+            status VARCHAR(30) NOT NULL DEFAULT 'DISABLED',
+            required_permission VARCHAR(120),
+            system_managed TINYINT NOT NULL DEFAULT 0,
+            created_by_user_id VARCHAR(64) NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            CONSTRAINT uk_output_capability_code UNIQUE (code)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS sq_output_capability_version (
+            id BIGINT NOT NULL AUTO_INCREMENT,
+            capability_id BIGINT NOT NULL,
+            version_no INT NOT NULL,
+            status VARCHAR(30) NOT NULL DEFAULT 'CANDIDATE',
+            content_hash VARCHAR(64) NOT NULL,
+            config_schema TEXT NOT NULL,
+            input_schema TEXT NOT NULL,
+            output_schema TEXT NOT NULL,
+            implementation_type VARCHAR(60) NOT NULL,
+            implementation_ref VARCHAR(1000) NOT NULL,
+            artifact_sha256 VARCHAR(80) NOT NULL,
+            dependencies TEXT NOT NULL,
+            runtime_type VARCHAR(60) NOT NULL,
+            interaction_events TEXT NOT NULL,
+            security_policy TEXT NOT NULL,
+            source_code TEXT,
+            test_report TEXT,
+            build_log TEXT,
+            created_by_user_id VARCHAR(64) NOT NULL,
+            approved_by_user_id VARCHAR(64),
+            review_comment TEXT,
+            reviewed_at DATETIME,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            CONSTRAINT uk_output_capability_version UNIQUE (capability_id, version_no),
+            CONSTRAINT uk_output_capability_hash UNIQUE (capability_id, content_hash)
         )
         """,
         """
@@ -683,6 +771,9 @@ public class OrchestrationV2SchemaSeeder implements CommandLineRunner {
         "ALTER TABLE sq_output_artifact ADD COLUMN usage_accounted TINYINT DEFAULT 0 NOT NULL",
         "ALTER TABLE sq_output_artifact ADD COLUMN retention_until DATETIME",
         "ALTER TABLE sq_output_artifact ADD COLUMN archived_at DATETIME",
+        "ALTER TABLE sq_output_capability_version ADD COLUMN source_code TEXT",
+        "ALTER TABLE sq_output_capability_version ADD COLUMN test_report TEXT",
+        "ALTER TABLE sq_output_capability_version ADD COLUMN build_log TEXT",
         "ALTER TABLE sq_node_replay ADD COLUMN archive_status VARCHAR(30) DEFAULT 'ACTIVE' NOT NULL",
         "ALTER TABLE sq_node_replay ADD COLUMN payload_bytes BIGINT DEFAULT 0 NOT NULL",
         "ALTER TABLE sq_node_replay ADD COLUMN usage_accounted TINYINT DEFAULT 0 NOT NULL",
@@ -690,7 +781,12 @@ public class OrchestrationV2SchemaSeeder implements CommandLineRunner {
         "ALTER TABLE sq_node_replay ADD COLUMN archived_at DATETIME",
         "ALTER TABLE sq_rule_draft ADD COLUMN candidate_version_id BIGINT",
         "ALTER TABLE sq_output_draft ADD COLUMN candidate_version_id BIGINT",
-        "ALTER TABLE sq_policy_draft ADD COLUMN candidate_version_id BIGINT"
+        "ALTER TABLE sq_policy_draft ADD COLUMN candidate_version_id BIGINT",
+        "ALTER TABLE sq_model_execution ADD COLUMN schedule_task_id BIGINT"
+        ,"ALTER TABLE sq_schedule_task ADD COLUMN flow_version_id BIGINT"
+        ,"ALTER TABLE sq_schedule_task ADD COLUMN input_payload TEXT"
+        ,"ALTER TABLE sq_schedule_task MODIFY model_id NULL"
+        ,"ALTER TABLE sq_orchestration_run ADD COLUMN schedule_task_id BIGINT"
     );
 
     private static final List<String> INDEX_DDLS = List.of(
@@ -698,7 +794,17 @@ public class OrchestrationV2SchemaSeeder implements CommandLineRunner {
         "CREATE INDEX idx_operator_version_operator ON sq_operator_version(operator_id, version_no)",
         "CREATE INDEX idx_operator_approval_status ON sq_operator_version_approval(status, created_at)",
         "CREATE UNIQUE INDEX uk_operator_approval_version ON sq_operator_version_approval(operator_version_id)",
+        "CREATE INDEX idx_model_approval_status ON sq_model_version_approval(status, created_at)",
+        "CREATE UNIQUE INDEX uk_model_approval_version ON sq_model_version_approval(flow_version_id)",
+        "CREATE INDEX idx_schedule_task_due ON sq_schedule_task(status, next_run_at, deleted)",
+        "CREATE INDEX idx_schedule_task_owner ON sq_schedule_task(owner_user_id, deleted, created_at)",
+        "CREATE INDEX idx_schedule_task_model ON sq_schedule_task(model_id, schedule_mode, deleted)",
+        "CREATE INDEX idx_schedule_task_flow ON sq_schedule_task(flow_version_id, deleted)",
+        "CREATE INDEX idx_execution_schedule_task ON sq_model_execution(schedule_task_id, created_at)",
+        "CREATE INDEX idx_run_schedule_task ON sq_orchestration_run(schedule_task_id, created_at)",
         "CREATE INDEX idx_rule_draft_operator ON sq_rule_draft(operator_id, created_at)",
+        "CREATE INDEX idx_output_capability_type ON sq_output_capability(capability_type, status)",
+        "CREATE INDEX idx_output_capability_version_status ON sq_output_capability_version(capability_id, status, version_no)",
         "CREATE INDEX idx_output_draft_operator ON sq_output_draft(operator_id, created_at)",
         "CREATE INDEX idx_policy_draft_operator ON sq_policy_draft(operator_id, created_at)",
         "CREATE INDEX idx_dependency_owner_status ON sq_dependency_request(owner_user_id, status, created_at)",
@@ -752,11 +858,83 @@ public class OrchestrationV2SchemaSeeder implements CommandLineRunner {
                 // Index already exists. Both supported databases report this differently.
             }
         }
+        backfillModelVersionApprovals();
+        backfillScheduleTasks();
         seedRulePrimitives();
+        seedOutputCapabilities();
         seedSystemOutputOperator();
         seedRuntimeProfiles();
         bindExistingOperatorVersions();
         log.info("[ORCHESTRATION-V2] schema ready; operator, dependency and runtime catalogs initialized");
+    }
+
+    /** Existing validated flow snapshots become model approval requests after the split. */
+    private void backfillModelVersionApprovals() {
+        try {
+            jdbcTemplate.update("""
+                INSERT INTO sq_model_version_approval
+                  (flow_id, flow_version_id, status, request_comment, requested_by_user_id, created_at)
+                SELECT v.flow_id, v.id, 'SUBMITTED',
+                       '历史不可变流程版本迁移至模型版本审批', v.created_by_user_id, v.created_at
+                  FROM sq_flow_version v
+                 WHERE v.status IN ('CANDIDATE', 'VALIDATED')
+                   AND NOT EXISTS (
+                       SELECT 1 FROM sq_model_version_approval a WHERE a.flow_version_id = v.id
+                   )
+                """);
+            jdbcTemplate.update("""
+                UPDATE sq_flow_version
+                   SET status = 'PENDING_APPROVAL'
+                 WHERE status IN ('CANDIDATE', 'VALIDATED')
+                   AND id IN (
+                       SELECT a.flow_version_id FROM sq_model_version_approval a
+                        WHERE a.status = 'SUBMITTED'
+                   )
+                """);
+        } catch (Exception e) {
+            log.warn("[V2-SCHEMA] 历史模型版本审批迁移失败，将在下次启动重试: {}", e.getMessage());
+        }
+    }
+
+    /** Convert legacy per-model schedule fields into independently manageable task definitions. */
+    private void backfillScheduleTasks() {
+        try {
+            List<java.util.Map<String, Object>> models = jdbcTemplate.queryForList("""
+                SELECT id, name, user_id, schedule_mode, schedule_cron, schedule_enabled,
+                       predict_input_table, predict_input_filter, predict_result_table,
+                       last_run_at, next_run_at
+                  FROM sq_mining_model
+                 WHERE deleted = 0 AND schedule_cron IS NOT NULL
+                """);
+            for (java.util.Map<String, Object> model : models) {
+                Long modelId = ((Number) value(model, "id")).longValue();
+                String mode = String.valueOf(value(model, "schedule_mode"));
+                if (mode == null || mode.isBlank() || "null".equalsIgnoreCase(mode)) mode = "predict";
+                Integer count = jdbcTemplate.queryForObject("""
+                    SELECT COUNT(*) FROM sq_schedule_task
+                     WHERE model_id = ? AND schedule_mode = ? AND deleted = 0
+                    """, Integer.class, modelId, mode.toUpperCase(java.util.Locale.ROOT));
+                if (count != null && count > 0) continue;
+                Object enabled = value(model, "schedule_enabled");
+                boolean active = enabled instanceof Boolean b ? b
+                    : enabled instanceof Number number && number.intValue() != 0;
+                String modelName = String.valueOf(value(model, "name"));
+                String label = "train".equalsIgnoreCase(mode) ? "-定期重训" : "-定期预测";
+                jdbcTemplate.update("""
+                    INSERT INTO sq_schedule_task
+                      (name, task_type, model_id, schedule_mode, cron_expression,
+                       input_table, input_filter, output_table, status, owner_user_id,
+                       last_run_at, next_run_at, created_at, updated_at, deleted)
+                    VALUES (?, 'MODEL', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)
+                    """, modelName + label, modelId, mode.toUpperCase(java.util.Locale.ROOT),
+                    value(model, "schedule_cron"), value(model, "predict_input_table"),
+                    value(model, "predict_input_filter"), value(model, "predict_result_table"),
+                    active ? "ACTIVE" : "PAUSED", String.valueOf(value(model, "user_id")),
+                    value(model, "last_run_at"), active ? value(model, "next_run_at") : null);
+            }
+        } catch (Exception e) {
+            log.warn("[V2-SCHEMA] 历史模型调度迁移失败，将在下次启动重试: {}", e.getMessage());
+        }
     }
 
     private void seedRulePrimitives() {
@@ -790,6 +968,98 @@ public class OrchestrationV2SchemaSeeder implements CommandLineRunner {
     private static String schema(String... required) {
         return "{\"type\":\"object\",\"required\":[\""
             + String.join("\",\"", required) + "\"]}";
+    }
+
+    private void seedOutputCapabilities() {
+        String anyObject = "{\"type\":\"object\"}";
+        String governed = "{\"network\":\"DENY\",\"filesystem\":\"DENY\",\"lineage\":\"REQUIRED\",\"audit\":\"REQUIRED\"}";
+        List<OutputCapabilitySeed> seeds = List.of(
+            new OutputCapabilitySeed("transform.project", "字段投影与排序", "TRANSFORM", "ENABLED",
+                "PROJECT", "builtin://output/transform/project", "[]", governed),
+            new OutputCapabilitySeed("persist.run-artifact", "平台运行制品", "PERSIST", "ENABLED",
+                "RUN_ARTIFACT", "builtin://output/persist/run-artifact", "[]", governed),
+            new OutputCapabilitySeed("persist.temporary", "临时结果", "PERSIST", "ENABLED",
+                "TEMP_ARTIFACT", "builtin://output/persist/temporary", "[]", governed),
+            new OutputCapabilitySeed("view.table", "可信数据表", "VIEW", "ENABLED",
+                "TABLE", "builtin://output/view/table", "[\"ROW_EXPAND\",\"SORT\",\"FILTER\"]", governed),
+            new OutputCapabilitySeed("view.echarts", "ECharts 通用图表", "VIEW", "ENABLED",
+                "ECHARTS", "builtin://output/view/echarts", "[\"CLICK\",\"ZOOM\",\"DRILL_DOWN\",\"LINKAGE\"]", governed),
+            new OutputCapabilitySeed("view.composed", "可信组件组合页面", "VIEW", "ENABLED",
+                "COMPOSED_PAGE", "builtin://output/view/composed", "[\"CLICK\",\"FILTER\",\"DRILL_DOWN\",\"LINKAGE\"]", governed),
+            new OutputCapabilitySeed("export.xlsx", "XLSX 导出", "EXPORT", "ENABLED",
+                "XLSX", "builtin://output/export/xlsx", "[]", governed),
+            new OutputCapabilitySeed("export.csv", "CSV 导出", "EXPORT", "ENABLED",
+                "CSV", "builtin://output/export/csv", "[]", governed),
+            new OutputCapabilitySeed("export.pdf", "PDF 导出", "EXPORT", "ENABLED",
+                "PDF", "builtin://output/export/pdf", "[]", governed),
+            new OutputCapabilitySeed("export.json", "JSON 导出", "EXPORT", "ENABLED",
+                "JSON", "builtin://output/export/json", "[]", governed),
+            new OutputCapabilitySeed("export.png", "PNG 导出", "EXPORT", "ENABLED",
+                "PNG", "builtin://output/export/png", "[]", governed),
+            new OutputCapabilitySeed("action.lead", "风险线索入库", "ACTION", "ENABLED",
+                "LEAD", "builtin://output/action/lead", "[]", governed),
+            new OutputCapabilitySeed("persist.database", "数据库或数仓写入", "PERSIST", "DISABLED",
+                "DATABASE", "adapter://output/persist/database", "[]", governed),
+            new OutputCapabilitySeed("persist.object-storage", "对象存储写入", "PERSIST", "DISABLED",
+                "OBJECT_STORAGE", "adapter://output/persist/object-storage", "[]", governed),
+            new OutputCapabilitySeed("action.webhook", "下游系统通知", "ACTION", "DISABLED",
+                "WEBHOOK", "adapter://output/action/webhook", "[]", governed),
+            new OutputCapabilitySeed("view.custom-component", "隔离自定义交互组件", "VIEW", "DISABLED",
+                "CUSTOM_COMPONENT", "sandbox://output/view/custom-component", "[\"CLICK\",\"FILTER\",\"ZOOM\",\"DRILL_DOWN\",\"LINKAGE\"]",
+                "{\"network\":\"DENY\",\"filesystem\":\"DENY\",\"hostPage\":\"DENY\",\"credentials\":\"DENY\",\"iframe\":\"REQUIRED\",\"buildApproval\":\"REQUIRED\",\"lineage\":\"REQUIRED\",\"audit\":\"REQUIRED\"}")
+        );
+        int digestIndex = 10;
+        for (OutputCapabilitySeed seed : seeds) {
+            Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM sq_output_capability WHERE code = ?", Integer.class, seed.code());
+            if (count == null || count == 0) {
+                jdbcTemplate.update("""
+                    INSERT INTO sq_output_capability
+                      (code, name, capability_type, description, status, required_permission,
+                       system_managed, created_by_user_id, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, NULL, 1, 'SYSTEM', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    """, seed.code(), seed.name(), seed.type(),
+                    "平台治理的" + seed.name() + "能力", seed.status());
+            }
+            Long capabilityId = jdbcTemplate.queryForObject(
+                "SELECT id FROM sq_output_capability WHERE code = ?", Long.class, seed.code());
+            Integer versionCount = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM sq_output_capability_version WHERE capability_id = ? AND status = 'PUBLISHED'",
+                Integer.class, capabilityId);
+            if (versionCount != null && versionCount > 0) {
+                digestIndex++;
+                continue;
+            }
+            String hash = String.format("%064x", digestIndex++);
+            jdbcTemplate.update("""
+                INSERT INTO sq_output_capability_version
+                  (capability_id, version_no, status, content_hash, config_schema, input_schema,
+                   output_schema, implementation_type, implementation_ref, artifact_sha256,
+                   dependencies, runtime_type, interaction_events, security_policy,
+                   created_by_user_id, approved_by_user_id, review_comment, reviewed_at, created_at)
+                VALUES (?, 1, 'PUBLISHED', ?, ?, ?, ?, ?, ?, ?, ?, 'OUTPUT_RENDERER', ?, ?,
+                        'SYSTEM', 'SYSTEM', '平台基线能力', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """, capabilityId, hash, capabilitySchema(seed.code()), anyObject, anyObject, seed.implementationType(),
+                seed.implementationRef(), "sha256:" + hash, "[]", seed.events(), seed.securityPolicy());
+        }
+    }
+
+    private static String capabilitySchema(String code) {
+        return switch (code) {
+            case "transform.project" -> "{\"type\":\"object\",\"properties\":{\"columns\":{\"type\":\"array\"},\"sort\":{\"type\":\"array\"},\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100000}}}";
+            case "persist.temporary" -> "{\"type\":\"object\",\"properties\":{\"retentionDays\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":30}}}";
+            case "persist.database" -> "{\"type\":\"object\",\"required\":[\"connectionRef\",\"targetTable\",\"writeMode\"],\"properties\":{\"writeMode\":{\"enum\":[\"APPEND\",\"UPSERT\",\"REPLACE\"]},\"idempotencyKey\":{\"const\":\"RUN_ID\"},\"upsertKeys\":{\"type\":\"array\"}}}";
+            case "persist.object-storage" -> "{\"type\":\"object\",\"required\":[\"storageRef\",\"objectPath\"],\"properties\":{\"storageRef\":{\"type\":\"string\"},\"objectPath\":{\"type\":\"string\"}}}";
+            case "view.echarts" -> "{\"type\":\"object\",\"required\":[\"chartType\",\"dimensions\",\"measures\"],\"properties\":{\"chartType\":{\"enum\":[\"bar\",\"line\",\"pie\",\"scatter\",\"radar\",\"heatmap\",\"graph\",\"map\",\"sankey\",\"treemap\",\"sunburst\"]}}}";
+            case "export.png" -> "{\"type\":\"object\",\"properties\":{\"fileName\":{\"type\":\"string\",\"maxLength\":160},\"chartType\":{\"type\":\"string\"}}}";
+            case "view.composed" -> "{\"type\":\"object\",\"required\":[\"widgets\"],\"properties\":{\"widgets\":{\"type\":\"array\",\"maxItems\":30},\"layout\":{\"enum\":[\"grid\",\"vertical\"]}}}";
+            case "view.custom-component" -> "{\"type\":\"object\",\"required\":[\"immutableArtifactRef\"],\"properties\":{\"immutableArtifactRef\":{\"type\":\"string\"},\"iframeSandbox\":{\"const\":true}}}";
+            case "view.table" -> "{\"type\":\"object\",\"required\":[\"columns\"],\"properties\":{\"columns\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":100}}}";
+            case "export.xlsx", "export.csv", "export.pdf", "export.json" -> "{\"type\":\"object\",\"properties\":{\"fileName\":{\"type\":\"string\",\"maxLength\":160},\"columns\":{\"type\":\"array\",\"maxItems\":100}}}";
+            case "action.webhook" -> "{\"type\":\"object\",\"required\":[\"endpointRef\"],\"properties\":{\"endpointRef\":{\"type\":\"string\"},\"idempotencyKey\":{\"const\":\"RUN_ID\"}}}";
+            case "action.lead" -> "{\"type\":\"object\",\"properties\":{\"leadPolicy\":{\"type\":\"object\"}}}";
+            default -> "{\"type\":\"object\"}";
+        };
     }
 
     private void seedSystemOutputOperator() {
@@ -924,4 +1194,7 @@ public class OrchestrationV2SchemaSeeder implements CommandLineRunner {
                             String description, String schema) {}
     private record RuntimeSeed(String code, String name, String runtimeType,
                                String imageRef, String imageDigest) {}
+    private record OutputCapabilitySeed(String code, String name, String type, String status,
+                                        String implementationType, String implementationRef,
+                                        String events, String securityPolicy) {}
 }

@@ -6,7 +6,7 @@
     @click.self="$emit('selectNode', null)"
   >
     <div v-if="nodes.length === 0" class="canvas-empty">
-      <p>拖拽左侧算法或节点到此处开始编排</p>
+      <p>从左侧选择训练步骤，按顺序完成配置</p>
     </div>
     <div class="nodes-flow">
       <template v-for="(node, idx) in nodes" :key="node.id">
@@ -45,12 +45,7 @@
               <el-button v-if="isNodeConfigured(node)" size="small" text type="primary"
                 :loading="previewingNodeId === node.id"
                 @click.stop="$emit('previewStep', node.id)">
-                {{ previewingNodeId === node.id ? '运行中...' : '▶ 试运行' }}
-              </el-button>
-              <el-button v-if="isNodeConfigured(node)" size="small" text type="info"
-                :loading="scriptLoading"
-                @click.stop="$emit('viewScript', node.id)">
-                查看脚本
+                {{ previewingNodeId === node.id ? '运行中...' : '试运行' }}
               </el-button>
               <el-button v-if="previewResult?.nodeId === node.id && previewingNodeId !== node.id" size="small" text type="success" @click.stop="$emit('showPreview')">
                 查看结果
@@ -119,8 +114,8 @@ function nodeTitle(type) {
     preprocessing: '数据预处理',
     fill_missing: '填充缺失值',
     feature_engineering: '特征工程',
-    training: '模型训练',
-    evaluation: '模型评估',
+    training: '制品训练',
+    evaluation: '效果评估',
     output: '输出写入'
   }[type] || type
 }

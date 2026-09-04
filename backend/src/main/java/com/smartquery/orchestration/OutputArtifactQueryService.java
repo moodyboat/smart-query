@@ -4,8 +4,9 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartquery.common.BusinessException;
+import com.smartquery.common.PermissionCodes;
 import com.smartquery.common.UserContextHolder;
-import com.smartquery.common.UserRoles;
+import com.smartquery.service.RoleService;
 import com.smartquery.entity.OutputArtifact;
 import com.smartquery.entity.OutputArtifactRow;
 import com.smartquery.mapper.OutputArtifactMapper;
@@ -42,6 +43,7 @@ public class OutputArtifactQueryService {
     private final ObjectMapper objectMapper;
     private final ContentHashService contentHashService;
     private final OutputQueryCursorCodec cursorCodec;
+    private final RoleService roleService;
 
     @Value("${smart-query.orchestration.output-query.max-filters:10}")
     private int maxFilters = 10;
@@ -54,15 +56,17 @@ public class OutputArtifactQueryService {
 
     public OutputArtifactQueryService(OutputArtifactMapper artifactMapper,
                                       OutputArtifactRowMapper rowMapper,
-                                      JdbcTemplate jdbcTemplate, ObjectMapper objectMapper,
-                                      ContentHashService contentHashService,
-                                      OutputQueryCursorCodec cursorCodec) {
+                                       JdbcTemplate jdbcTemplate, ObjectMapper objectMapper,
+                                       ContentHashService contentHashService,
+                                       OutputQueryCursorCodec cursorCodec,
+                                       RoleService roleService) {
         this.artifactMapper = artifactMapper;
         this.rowMapper = rowMapper;
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
         this.contentHashService = contentHashService;
         this.cursorCodec = cursorCodec;
+        this.roleService = roleService;
     }
 
     @Transactional(readOnly = true)
@@ -461,12 +465,12 @@ public class OutputArtifactQueryService {
         OutputArtifact artifact = artifactId == null ? null : artifactMapper.selectById(artifactId);
         if (artifact == null) throw new BusinessException(404, "输出结果不存在: " + artifactId);
         String userId = UserContextHolder.require().userId().toString();
-        if (!UserRoles.ADMIN.equals(UserContextHolder.require().role())
+        if (!roleService.currentUserHas(PermissionCodes.RESOURCE_ACCESS_ALL)
                 && !userId.equals(artifact.getOwnerUserId())) {
             throw new BusinessException(403, "无权访问该输出结果");
         }
         if (StorageGovernanceService.ARCHIVED.equals(artifact.getArchiveStatus())) {
-            throw new BusinessException(409, "输出结果已归档，请由管理员恢复后查询");
+            throw new BusinessException(409, "输出结果已归档，请由具备运行治理权限的人员恢复后查询");
         }
         return artifact;
     }

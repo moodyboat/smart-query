@@ -94,6 +94,16 @@ public class PolicyAuthoringService {
         validateGenerated(operator.getOperatorType(), artifact);
 
         Map<String, Object> rawSpec = buildRawSpec(operator.getOperatorType(), artifact, pinnedScope);
+        Map<String, Object> inputSchema = schema(
+            artifact.get("inputSchema"), defaultInputSchema(operator.getOperatorType()));
+        // AGENT_POLICY always returns the original records enriched with one
+        // decision field and one trace field. The model may describe a
+        // different top-level response shape, but that would make the catalog
+        // contract disagree with the real executor and break downstream DAG
+        // validation. Derive this schema from the pinned runtime contract.
+        Map<String, Object> outputSchema = OperatorTypes.AGENT.equals(operator.getOperatorType())
+            ? agentOutputSchema(inputSchema, rawSpec)
+            : schema(artifact.get("outputSchema"), defaultOutputSchema());
         PolicyDraft draft = new PolicyDraft();
         draft.setOperatorId(operatorId);
         draft.setOperatorType(operator.getOperatorType());
@@ -102,8 +112,8 @@ public class PolicyAuthoringService {
         draft.setInstructionText(instruction);
         draft.setRawSpec(json(rawSpec));
         draft.setShapedSpec(json(Map.of()));
-        draft.setInputSchema(json(schema(artifact.get("inputSchema"), defaultInputSchema(operator.getOperatorType()))));
-        draft.setOutputSchema(json(schema(artifact.get("outputSchema"), defaultOutputSchema())));
+        draft.setInputSchema(json(inputSchema));
+        draft.setOutputSchema(json(outputSchema));
         draft.setParameterSchema(json(schema(artifact.get("parameterSchema"), defaultParameterSchema(operator.getOperatorType()))));
         draft.setExplanation(limit(text(artifact.get("explanation")), 4_000));
         draft.setStatus("GENERATED");
@@ -353,7 +363,9 @@ public class PolicyAuthoringService {
         result.put("allowedTools", allowedTools);
         if (dataSourceId != null) result.put("dataSourceId", dataSourceId);
         result.put("allowedTables", allowedTables);
-        result.put("runtimeModel", text(body.get("runtimeModel")) == null ? defaultModel : text(body.get("runtimeModel")));
+        // AGENT 算子与 AI 工作台共用同一套模型/API 配置。客户端不能另外指定
+        // 未经平台配置的模型；在草稿生成时把当前默认模型固化进不可变版本。
+        result.put("runtimeModel", defaultModel);
         return result;
     }
 
@@ -525,6 +537,30 @@ public class PolicyAuthoringService {
     private Map<String, Object> defaultOutputSchema() {
         return Map.of("type", "object", "required", List.of("records"), "properties",
             Map.of("records", Map.of("type", "array", "items", Map.of("type", "object"))));
+    }
+
+    private Map<String, Object> agentOutputSchema(Map<String, Object> inputSchema,
+                                                   Map<String, Object> rawSpec) {
+        Map<String, Object> inputProperties = map(inputSchema.get("properties"));
+        Map<String, Object> inputRecords = map(inputProperties.get("records"));
+        Map<String, Object> inputItems = map(inputRecords.get("items"));
+        Map<String, Object> itemProperties = new LinkedHashMap<>(map(inputItems.get("properties")));
+        String responseField = required(rawSpec, "responseField");
+        String traceField = required(rawSpec, "traceField");
+        itemProperties.put(responseField, Map.of("type", "string"));
+        itemProperties.put(traceField, Map.of("type", "array", "items", Map.of("type", "object")));
+
+        List<String> requiredFields = new ArrayList<>(stringList(
+            inputItems.get("required"), "inputSchema.records.items.required", 200, false));
+        if (!requiredFields.contains(responseField)) requiredFields.add(responseField);
+        if (!requiredFields.contains(traceField)) requiredFields.add(traceField);
+
+        Map<String, Object> itemSchema = new LinkedHashMap<>();
+        itemSchema.put("type", "object");
+        itemSchema.put("properties", itemProperties);
+        itemSchema.put("required", List.copyOf(requiredFields));
+        return Map.of("type", "object", "required", List.of("records"), "properties",
+            Map.of("records", Map.of("type", "array", "items", itemSchema)));
     }
 
     private Map<String, Object> defaultParameterSchema(String operatorType) {

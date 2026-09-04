@@ -447,7 +447,7 @@
                     <el-option label="季度" value="quarter" />
                   </el-select>
                 </template>
-                <el-button size="small" text type="danger" @click="emit('removeTransform', i)">X</el-button>
+                <el-button size="small" text type="danger" @click="emit('removeTransform', i)">×</el-button>
               </div>
               <el-button size="small" type="primary" link @click="emit('addTransform')">+ 添加变换</el-button>
             </div>
@@ -461,7 +461,7 @@
           <el-form-item label="节点名称">
             <el-input :model-value="selectedNode.config.title" @update:model-value="updateConfig('title', $event)" />
           </el-form-item>
-          <el-form-item label="模型类型">
+          <el-form-item label="任务类型">
             <el-select
               :model-value="selectedNode.config.modelType"
               style="width: 100%"
@@ -755,8 +755,8 @@ const stepTypes = [
   { type: 'preprocessing', icon: '🔧', title: '数据预处理', desc: '缺失值处理(含逐列策略)、编码、缩放' },
   { type: 'fill_missing', icon: '🩹', title: '高级缺失值处理', desc: '按列精细配置缺失值填充' },
   { type: 'feature_engineering', icon: '⚙️', title: '特征工程', desc: '特征选择和目标定义' },
-  { type: 'training', icon: '🧠', title: '模型训练', desc: '选择算法并训练模型' },
-  { type: 'evaluation', icon: '📊', title: '模型评估', desc: '评估指标和验证策略' },
+  { type: 'training', icon: '🧠', title: '制品训练', desc: '选择算法并生成训练制品' },
+  { type: 'evaluation', icon: '📊', title: '效果评估', desc: '评估指标和验证策略' },
   { type: 'output', icon: '💾', title: '输出写入', desc: '将预测结果写入数据库表' }
 ]
 

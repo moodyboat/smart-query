@@ -1,11 +1,6 @@
 <template>
   <div class="page-container scenario-manager">
-    <div class="page-header">
-      <button class="back-btn" @click="$emit('close')">
-        <span class="back-arrow">&larr;</span> 返回问数
-      </button>
-      <h2 class="page-title">场景管理</h2>
-    </div>
+    <button v-if="props.showSidebarToggle" type="button" class="module-menu-floating" aria-label="打开导航" @click="emit('toggleSidebar')">☰</button>
 
     <el-card shadow="hover">
       <template #header>
@@ -25,10 +20,9 @@
           </template>
         </el-table-column>
         <el-table-column prop="name" label="名称" width="140" />
-        <el-table-column prop="code" label="编码" width="170" />
         <el-table-column prop="category" label="分类" width="100">
           <template #default="{ row }">
-            <el-tag size="small">{{ row.category || '-' }}</el-tag>
+            <el-tag size="small">{{ categoryLabel(row.category) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="角色授权" min-width="200">
@@ -37,9 +31,9 @@
               v-for="role in (roleMap[row.id] || [])"
               :key="role"
               size="small"
-              :type="role === 'admin' ? 'danger' : 'primary'"
+              type="primary"
               style="margin: 2px"
-            >{{ role }}</el-tag>
+            >{{ roleLabel(role) }}</el-tag>
             <span v-if="!roleMap[row.id]?.length" class="muted">未授权</span>
           </template>
         </el-table-column>
@@ -181,33 +175,28 @@
       <div v-if="authTarget" class="auth-content">
         <p class="auth-tip">
           为场景 <strong>{{ authTarget.name }}</strong>（{{ authTarget.code }}）授权可访问的角色。
-          <code>admin</code> 默认拥有所有场景权限。
+          具备“业务场景管理”权限的角色可访问全部场景。
         </p>
         <div class="auth-roles-current">
           <el-tag
             v-for="role in authRoles"
             :key="role"
             closable
-            :type="role === 'admin' ? 'danger' : 'primary'"
+            type="primary"
             style="margin: 4px"
             @close="removeRole(role)"
-          >{{ role }}</el-tag>
+          >{{ roleLabel(role) }}</el-tag>
           <span v-if="!authRoles.length" class="muted">未授权任何角色</span>
         </div>
         <el-divider />
-        <div class="auth-add">
-          <el-input
-            v-model="newRole"
-            placeholder="输入角色名（如 user/analyst/finance）"
-            @keyup.enter="addRole"
+        <el-select v-model="authRoles" multiple filterable placeholder="选择数据库角色" style="width: 100%">
+          <el-option
+            v-for="role in roleDefinitions.filter(item => item.enabled === 1)"
+            :key="role.value"
+            :label="role.label"
+            :value="role.value"
           />
-          <el-button type="primary" @click="addRole">添加</el-button>
-        </div>
-        <div class="auth-quick">
-          <span class="muted">快捷：</span>
-          <el-button size="small" @click="quickAddRole('user')">+ user</el-button>
-          <el-button size="small" @click="quickAddRole('analyst')">+ analyst</el-button>
-        </div>
+        </el-select>
       </div>
       <template #footer>
         <el-button @click="authDialogVisible = false">关闭</el-button>
@@ -228,11 +217,13 @@ import {
   deleteScenario,
   fetchScenarioRoles,
   setScenarioRoles,
+  fetchUserRoles,
   fetchDataSources,
   fetchDataSourceTables
 } from '../api'
 
-const emit = defineEmits(['close'])
+const props = defineProps({ showSidebarToggle: { type: Boolean, default: false } })
+const emit = defineEmits(['close', 'toggleSidebar'])
 
 const scenarios = ref([])
 const roleMap = ref({})
@@ -274,8 +265,10 @@ function emptyUiConfig() {
 const authDialogVisible = ref(false)
 const authTarget = ref(null)
 const authRoles = ref([])
-const newRole = ref('')
+const roleDefinitions = ref([])
 const savingAuth = ref(false)
+const categoryLabel = value => ({ query: '查询分析', business: '业务分析', ops: '运维监控', mining: '数据挖掘' }[value] || value || '未分类')
+const roleLabel = value => roleDefinitions.value.find(item => item.value === value)?.label || value
 
 async function loadScenarios() {
   loading.value = true
@@ -430,21 +423,7 @@ async function handleDelete(row) {
 function handleAuth(row) {
   authTarget.value = row
   authRoles.value = [...(roleMap.value[row.id] || [])]
-  newRole.value = ''
   authDialogVisible.value = true
-}
-
-function addRole() {
-  const r = newRole.value.trim()
-  if (!r) return
-  if (!authRoles.value.includes(r)) {
-    authRoles.value.push(r)
-  }
-  newRole.value = ''
-}
-
-function quickAddRole(r) {
-  if (!authRoles.value.includes(r)) authRoles.value.push(r)
 }
 
 function removeRole(r) {
@@ -469,7 +448,16 @@ async function handleSaveAuth() {
 onMounted(() => {
   loadScenarios()
   loadDataSources()
+  loadRoles()
 })
+
+async function loadRoles() {
+  try {
+    roleDefinitions.value = await fetchUserRoles() || []
+  } catch (e) {
+    roleDefinitions.value = []
+  }
+}
 
 async function loadDataSources() {
   try {
@@ -483,8 +471,16 @@ async function loadDataSources() {
 
 <style scoped>
 .scenario-manager {
-  /* 复用全局 .page-container 规则：max-width 1400px + margin auto + padding var(--space-xl) */
+  position: relative;
+  min-width: 0;
+  min-height: 100%;
+  flex: 1 0 100%;
+  max-width: none;
+  margin: 0;
+  overflow: visible;
 }
+.module-menu-floating { position:absolute; z-index:5; top:10px; left:10px; width:34px; height:34px; display:grid; place-items:center; padding:0; border:1px solid #d8e1ee; border-radius:8px; color:var(--text-regular); background:#fff; cursor:pointer; }
+@media (max-width: 767px) { .scenario-manager { padding-top: 54px; } }
 
 /* .prompt-header / .back-btn / .back-arrow / .page-title 复用全局公共类（style.css）*/
 

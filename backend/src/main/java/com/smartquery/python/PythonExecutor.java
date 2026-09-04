@@ -733,18 +733,25 @@ public class PythonExecutor {
             if (relative.isBlank() || relative.startsWith("..") || relative.contains("/../")) {
                 throw new IllegalArgumentException("规则沙箱卷子目录无效");
             }
+            // Docker Desktop/Engine 的部分部署版本不支持 volume-subpath。
+            // 挂载共享卷后把工作目录固定到本次随机沙箱子目录；规则运行器仍然
+            // 无网络、只读根文件系统、无 Linux capabilities，用户代码也没有
+            // 文件/进程相关 builtins。请求和结果文件继续只使用相对子目录路径。
+            String containerArtifactRoot = "/smartquery-artifacts";
+            String containerSandbox = containerArtifactRoot + "/" + relative;
             command.add("--mount");
-            command.add("type=volume,src=" + dockerSharedVolume + ",dst=/sandbox,volume-subpath=" + relative);
+            command.add("type=volume,src=" + dockerSharedVolume + ",dst=" + containerArtifactRoot);
+            command.add("--workdir=" + containerSandbox);
         } else {
             command.add("--mount");
             command.add("type=bind,src=" + sandboxDirectory + ",dst=/sandbox");
+            command.add("--workdir=/sandbox");
         }
-        command.add("--workdir=/sandbox");
         command.add("-e");
         command.add("PYTHONIOENCODING=utf-8");
         command.add(runtimeImage);
         command.add("python");
-        command.add("/sandbox/" + programFile.getFileName());
+        command.add(dood ? programFile.getFileName().toString() : "/sandbox/" + programFile.getFileName());
         command.addAll(arguments);
         return new ProcessBuilder(command);
     }

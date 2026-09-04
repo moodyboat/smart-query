@@ -48,7 +48,7 @@ export MYSQL_PASSWORD=900110   # 业务库示例容器密码（仅 demo）
 关键可覆盖项（compose env → application.yml）：
 | env | 作用 | 默认 |
 |---|---|---|
-| `GLM_API_KEY` | LLM 密钥 | yml 内置（私有化可保留） |
+| `GLM_API_KEY` | LLM 密钥 | 无，必须通过环境变量注入 |
 | `DM_HOST` / `DM_PORT` / `DM_USERNAME` / `DM_PASSWORD` / `DM_SCHEMA` | **DM8 系统库** | host.docker.internal / 5236 / SYSDBA / Dameng123 / SMART_QUERY |
 | `MYSQL_PASSWORD` | 业务库示例容器密码（非系统库） | 900110 |
 | `REDIS_HOST` / `REDIS_PORT` | Redis | redis / 6379 |
@@ -109,7 +109,7 @@ docker compose up -d
    - 实测：`/api/v1/python/execute` 跑 pandas 读 `smart_query_sample.customer` 返回 100 行，exitCode 0。
 2. **`PythonExecutor:375` 已改为读 `docker-image` 配置**（原写死 `python:3.11-slim`），死配置已消除。
 3. **离线/airgap 打包**：甲方无网络，已提供 `scripts/airpack.sh`（联网环境导出镜像 tar）+ `scripts/airload.sh`（现场导入），见「四·二 离线部署」。
-4. **GLM key**：默认值在 `application.yml`（私有化保留即可，用户确认非问题）。
+4. **GLM key**：`application.yml` 不保存默认密钥，部署时必须通过 `GLM_API_KEY` 注入。
 
 ## 六·二、故障排查
 

@@ -1,21 +1,32 @@
 package com.smartquery.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.smartquery.common.ModelStatus;
+import com.smartquery.common.UserContextHolder;
+import com.smartquery.entity.User;
 import com.smartquery.engine.ConversationContextHolder;
 import com.smartquery.entity.MiningModel;
+import com.smartquery.entity.ScheduleTask;
 import com.smartquery.logging.ConversationEventLogger;
 import com.smartquery.mapper.MiningModelMapper;
+import com.smartquery.mapper.ScheduleTaskMapper;
+import com.smartquery.mapper.UserMapper;
+import com.smartquery.orchestration.OrchestrationRunService;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
-import java.time.LocalTime;
-import java.util.*;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+/** Executes persistent schedule definitions; run records are written by MiningService. */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -24,182 +35,153 @@ public class ModelScheduleService {
     @org.springframework.beans.factory.annotation.Value("${mining.schedule.fallback-minutes:1440}")
     private int fallbackMinutes;
 
+    private final ScheduleTaskMapper scheduleTaskMapper;
     private final MiningModelMapper miningModelMapper;
     private final MiningService miningService;
     private final ConversationEventLogger eventLogger;
     private final ConversationContextHolder.SessionManager sessionManager;
 
-    private final ConcurrentHashMap<Long, AtomicBoolean> runningModels = new ConcurrentHashMap<>();
+    /** A model cannot train and predict concurrently even with multiple schedule definitions. */
+    private final ConcurrentHashMap<String, AtomicBoolean> runningTargets = new ConcurrentHashMap<>();
+    private final OrchestrationRunService orchestrationRunService;
+    private final UserMapper userMapper;
+    private final ObjectMapper objectMapper;
+    private final ScheduleTaskService scheduleTaskService;
+
+    public ScheduleRunResult runNow(Long taskId) {
+        ScheduleTask task = scheduleTaskService.requireRunnable(taskId);
+        return executeWithLock(task, LocalDateTime.now(), false);
+    }
 
     @Scheduled(fixedRateString = "${mining.schedule.poll-interval-ms:60000}")
     public void checkScheduledModels() {
-        List<MiningModel> models = miningModelMapper.selectList(
-                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<MiningModel>()
-                        .eq(MiningModel::getDeleted, 0)
-                        .eq(MiningModel::getScheduleEnabled, true)
-                        .isNotNull(MiningModel::getScheduleCron));
+        List<ScheduleTask> tasks = scheduleTaskMapper.selectList(
+            new LambdaQueryWrapper<ScheduleTask>()
+                .eq(ScheduleTask::getDeleted, 0)
+                .eq(ScheduleTask::getStatus, ScheduleTaskService.ACTIVE)
+                .isNotNull(ScheduleTask::getCronExpression)
+                .orderByAsc(ScheduleTask::getNextRunAt));
 
         LocalDateTime now = LocalDateTime.now();
-        for (MiningModel model : models) {
-            Long modelId = model.getId();
-            AtomicBoolean lock = runningModels.computeIfAbsent(modelId, k -> new AtomicBoolean(false));
-            if (!lock.compareAndSet(false, true)) {
-                log.warn("[SCHEDULE] Skipping model {} — previous execution still running", modelId);
-                continue;
-            }
+        for (ScheduleTask task : tasks) {
+            if (!shouldRun(task, now)) continue;
             try {
-                if (!shouldRun(model, now)) {
-                    log.debug("[SCHEDULE] Model {} not due yet (nextRun={})", modelId, model.getNextRunAt());
-                    continue;
-                }
-                String mode = model.getScheduleMode();
-                boolean success = true;
-                String errorMsg = null;
-
-                if ("predict".equals(mode)) {
-                    if (!ModelStatus.PUBLISHED.equals(model.getStatus())) {
-                        log.warn("[SCHEDULE] Skipping predict for non-published model: {} (status={})", model.getName(), model.getStatus());
-                        continue;
-                    }
-                    log.info("[SCHEDULE] Running scheduled PREDICT for model: {} (id={})", model.getName(), model.getId());
-                    try {
-                        miningService.batchPredictForSchedule(model.getId());
-                    } catch (Exception e) {
-                        success = false;
-                        errorMsg = e.getMessage();
-                    }
-                } else {
-                    if (!ModelStatus.PUBLISHED.equals(model.getStatus()) && !ModelStatus.TRAINED.equals(model.getStatus())) {
-                        log.warn("[SCHEDULE] Skipping train for model {} in status: {}", model.getName(), model.getStatus());
-                        continue;
-                    }
-                    log.info("[SCHEDULE] Running scheduled TRAIN for model: {} (id={})", model.getName(), model.getId());
-                    try {
-                        miningService.trainModelForSchedule(model.getId(), model.getPredictInputFilter());
-                    } catch (Exception e) {
-                        success = false;
-                        errorMsg = e.getMessage();
-                    }
-                }
-
-                model.setLastRunAt(now);
-                model.setNextRunAt(estimateNextRun(model.getScheduleCron(), now));
-                // Re-read to get latest version for optimistic lock
-                MiningModel fresh = miningModelMapper.selectById(modelId);
-                if (fresh != null) {
-                    fresh.setLastRunAt(now);
-                    fresh.setNextRunAt(model.getNextRunAt());
-                    miningModelMapper.updateById(fresh);
-                }
-
-                // 记录调度执行事件
-                Map<String, Object> payload = new LinkedHashMap<>();
-                payload.put("modelName", model.getName());
-                payload.put("mode", mode);
-                payload.put("success", success);
-                if (!success) payload.put("error", errorMsg);
-                payload.put("nextRunAt", model.getNextRunAt().toString());
-                eventLogger.logEvent(null, null, success ? "schedule_execution_success" : "schedule_execution_failed", payload);
-
-                if (!success) {
-                    log.error("[SCHEDULE] Execution failed for model {}: {}", model.getId(), errorMsg);
-                }
-            } catch (Exception e) {
-                log.error("[SCHEDULE] Failed to run model {}: {}", model.getId(), e.getMessage());
-            } finally {
-                lock.set(false);
+                executeWithLock(task, now, true);
+            } catch (com.smartquery.common.BusinessException busy) {
+                log.warn("[SCHEDULE] Task {} skipped: {}", task.getId(), busy.getMessage());
             }
         }
-
         sessionManager.cleanupStaleSessions();
     }
 
-    private boolean shouldRun(MiningModel model, LocalDateTime now) {
-        LocalDateTime nextRun = model.getNextRunAt();
-        if (nextRun == null) {
-            return true;
+    private ScheduleRunResult executeWithLock(ScheduleTask task, LocalDateTime startedAt,
+                                              boolean advanceSchedule) {
+        String targetKey = "FLOW".equalsIgnoreCase(task.getTaskType())
+            ? "FLOW:" + task.getFlowVersionId() : "MODEL:" + task.getModelId();
+        AtomicBoolean lock = runningTargets.computeIfAbsent(targetKey, ignored -> new AtomicBoolean(false));
+        if (!lock.compareAndSet(false, true)) {
+            throw new com.smartquery.common.BusinessException("该调度目标正在执行，请稍后再试");
         }
-        return !now.isBefore(nextRun);
-    }
-
-    private LocalDateTime estimateNextRun(String cron, LocalDateTime from) {
-        if (cron == null || cron.isBlank()) return from.plusMinutes(fallbackMinutes);
-        String[] parts = cron.trim().split("\\s+");
-
-        // Simple format: single number or */N
-        if (parts.length == 1) {
-            try {
-                if (parts[0].startsWith("*/")) {
-                    return from.plusMinutes(Long.parseLong(parts[0].substring(2)));
-                }
-                return from.plusMinutes(Long.parseLong(parts[0]));
-            } catch (NumberFormatException e) {
-                return from.plusMinutes(fallbackMinutes);
-            }
-        }
-
-        // Standard 5-field cron: min hour day month dow
-        if (parts.length == 5) {
-            return calculateNextOccurrence(parts, from);
-        }
-
-        return from.plusMinutes(fallbackMinutes);
-    }
-
-    // Calculate next actual occurrence for standard 5-field cron.
-    // Handles fixed time (0 6 * * *), intervals (* slash N * * * *), specific days.
-    private LocalDateTime calculateNextOccurrence(String[] fields, LocalDateTime from) {
         try {
-            int targetMinute = resolveCronValue(fields[0], 0, 59);
-            int targetHour = resolveCronValue(fields[1], 0, 23);
-            String dayField = fields[2];
-            String dowField = fields[4];
-
-            // Interval-based: */N in minute field → repeat every N minutes from now
-            if (fields[0].startsWith("*/")) {
-                long interval = Long.parseLong(fields[0].substring(2));
-                return from.plusMinutes(interval);
-            }
-
-            // Interval-based: */N in hour field, minute is 0 → repeat every N hours
-            if (fields[1].startsWith("*/") && targetMinute == 0) {
-                long interval = Long.parseLong(fields[1].substring(2));
-                return from.plusHours(interval);
-            }
-
-            // Fixed time pattern: specific hour and minute
-            if (targetMinute >= 0 && targetMinute <= 59 && targetHour >= 0 && targetHour <= 23) {
-                LocalDateTime next = from.toLocalDate().atTime(targetHour, targetMinute);
-                // If today's time has passed, schedule for tomorrow
-                if (!next.isAfter(from)) {
-                    next = next.plusDays(1);
-                }
-                // Handle specific day-of-month or day-of-week
-                if (!"*".equals(dayField) && !dayField.startsWith("*/")) {
-                    int targetDay = Integer.parseInt(dayField);
-                    while (next.getDayOfMonth() != targetDay) {
-                        next = next.plusDays(1);
-                    }
-                } else if (!"*".equals(dowField)) {
-                    int targetDow = Integer.parseInt(dowField);
-                    // Java DayOfWeek: Monday=1..Sunday=7, cron: Sunday=0, Monday=1..Saturday=6
-                    int javaDow = targetDow == 0 ? 7 : targetDow;
-                    while (next.getDayOfWeek().getValue() != javaDow) {
-                        next = next.plusDays(1);
-                    }
-                }
-                return next;
-            }
-        } catch (Exception e) {
-            log.warn("[SCHEDULE] Failed to calculate next occurrence for cron '{}': {}", String.join(" ", fields), e.getMessage());
+            return runTask(task, startedAt, advanceSchedule);
+        } finally {
+            lock.set(false);
         }
-        return from.plusMinutes(fallbackMinutes);
     }
 
-    private int resolveCronValue(String field, int min, int max) {
-        if ("*".equals(field)) return -1;
-        if (field.startsWith("*/")) return -1;
-        int val = Integer.parseInt(field);
-        return (val >= min && val <= max) ? val : -1;
+    private ScheduleRunResult runTask(ScheduleTask task, LocalDateTime startedAt,
+                                      boolean advanceSchedule) {
+        MiningModel model = task.getModelId() == null ? null : miningModelMapper.selectById(task.getModelId());
+        boolean success = false;
+        String errorMessage = null;
+        task.setLastStatus("RUNNING");
+        task.setLastError(null);
+        scheduleTaskMapper.updateById(task);
+        try {
+            User owner = userMapper.selectById(Long.parseLong(task.getOwnerUserId()));
+            if (owner == null || Integer.valueOf(1).equals(owner.getDeleted()) || Integer.valueOf(0).equals(owner.getEnabled())) {
+                throw new IllegalStateException("调度任务所有者不存在或已停用");
+            }
+            try (UserContextHolder.Scope ignored = UserContextHolder.open(
+                    new UserContextHolder.UserContext(owner.getId(), owner.getUsername(), owner.getRole()))) {
+                if ("FLOW".equalsIgnoreCase(task.getTaskType())) {
+                    orchestrationRunService.submitScheduled(task.getFlowVersionId(), flowInput(task), task.getId());
+                } else {
+                    if (model == null || Integer.valueOf(1).equals(model.getDeleted())) {
+                        throw new IllegalStateException("调度目标模型不存在");
+                    }
+                    if ("PREDICT".equalsIgnoreCase(task.getScheduleMode())) {
+                        if (!ModelStatus.PUBLISHED.equals(model.getStatus())) {
+                            throw new IllegalStateException("定期预测只允许已发布模型");
+                        }
+                        miningService.batchPredictForScheduleTask(model.getId(), task.getId(),
+                            task.getInputTable(), task.getOutputTable(), task.getInputFilter());
+                    } else {
+                        if (!ModelStatus.PUBLISHED.equals(model.getStatus())
+                                && !ModelStatus.TRAINED.equals(model.getStatus())) {
+                            throw new IllegalStateException("定期重训只允许已训练或已发布模型");
+                        }
+                        miningService.trainModelForScheduleTask(model.getId(), task.getInputFilter(), task.getId());
+                    }
+                }
+            }
+            success = true;
+        } catch (Exception error) {
+            errorMessage = error.getMessage();
+            log.error("[SCHEDULE] Task {} failed for model {}: {}", task.getId(), task.getModelId(), errorMessage);
+        }
+
+        LocalDateTime nextRun;
+        try {
+            nextRun = ScheduleTaskService.next(task.getCronExpression(), startedAt);
+        } catch (Exception ignored) {
+            nextRun = startedAt.plusMinutes(fallbackMinutes);
+        }
+        ScheduleTask fresh = scheduleTaskMapper.selectById(task.getId());
+        if (fresh != null && !Integer.valueOf(1).equals(fresh.getDeleted())) {
+            fresh.setLastRunAt(startedAt);
+            fresh.setLastStatus(success ? "SUCCESS" : "FAILED");
+            fresh.setLastError(errorMessage);
+            if (advanceSchedule) {
+                fresh.setNextRunAt(ScheduleTaskService.ACTIVE.equals(fresh.getStatus()) ? nextRun : null);
+            }
+            scheduleTaskMapper.updateById(fresh);
+        }
+        if (model != null && advanceSchedule) {
+            model.setLastRunAt(startedAt);
+            model.setNextRunAt(nextRun);
+            miningModelMapper.updateById(model);
+        }
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("scheduleTaskId", task.getId());
+        payload.put("scheduleTaskName", task.getName());
+        payload.put("modelId", task.getModelId());
+        payload.put("flowVersionId", task.getFlowVersionId());
+        payload.put("modelName", model == null ? "未知模型" : model.getName());
+        payload.put("mode", task.getScheduleMode());
+        payload.put("success", success);
+        if (errorMessage != null) payload.put("error", errorMessage);
+        payload.put("nextRunAt", nextRun.toString());
+        eventLogger.logEvent(null, null,
+            success ? "schedule_execution_success" : "schedule_execution_failed", payload);
+        return new ScheduleRunResult(task.getId(), success, errorMessage, startedAt,
+            fresh == null ? null : fresh.getNextRunAt());
     }
+
+    private Map<String, Object> flowInput(ScheduleTask task) {
+        try {
+            if (task.getInputPayload() == null || task.getInputPayload().isBlank()) return Map.of("records", List.of());
+            return objectMapper.readValue(task.getInputPayload(), new TypeReference<>() {});
+        } catch (Exception error) {
+            throw new IllegalStateException("流程调度输入不是有效 JSON 对象", error);
+        }
+    }
+
+    private boolean shouldRun(ScheduleTask task, LocalDateTime now) {
+        return task.getNextRunAt() == null || !now.isBefore(task.getNextRunAt());
+    }
+
+    public record ScheduleRunResult(Long scheduleTaskId, boolean success, String errorMessage,
+                                    LocalDateTime startedAt, LocalDateTime nextRunAt) {}
 }

@@ -4,8 +4,9 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartquery.common.BusinessException;
+import com.smartquery.common.PermissionCodes;
 import com.smartquery.common.UserContextHolder;
-import com.smartquery.common.UserRoles;
+import com.smartquery.service.RoleService;
 import com.smartquery.entity.FlowVersion;
 import com.smartquery.entity.Lead;
 import com.smartquery.entity.LeadEvidence;
@@ -36,6 +37,7 @@ public class LeadService {
     private final FlowVersionMapper flowVersionMapper;
     private final ContentHashService contentHashService;
     private final ObjectMapper objectMapper;
+    private final RoleService roleService;
 
     public List<Lead> list(String status, String leadType, int limit) {
         int safeLimit = Math.max(1, Math.min(limit, 200));
@@ -167,7 +169,7 @@ public class LeadService {
     }
 
     private String currentUserId() { return UserContextHolder.require().userId().toString(); }
-    private boolean isAdmin() { return UserRoles.ADMIN.equals(UserContextHolder.require().role()); }
+    private boolean isAdmin() { return roleService.currentUserHas(PermissionCodes.RESOURCE_ACCESS_ALL); }
 
     public record LeadDetail(Lead lead, Map<String, Object> attributes,
                              LeadSourceSnapshot source, Map<String, Object> sourceSnapshot,

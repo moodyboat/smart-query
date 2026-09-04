@@ -2,8 +2,6 @@
   <div :class="['page-container', 'dependency-center', { embedded: props.embedded }]">
     <div class="page-header">
       <button v-if="!props.embedded" class="back-btn" @click="$emit('close')"><span class="back-arrow">&larr;</span> 返回问数</button>
-      <h2 class="page-title">依赖与运行时中心</h2>
-      <el-tag type="info">运行时禁止临时安装</el-tag>
       <span class="spacer" />
       <el-button @click="loadAll" :loading="loading">刷新</el-button>
       <el-button type="primary" @click="requestVisible = true">申请依赖</el-button>
@@ -11,8 +9,8 @@
 
     <el-alert class="policy" :closable="false" :type="buildCapability.workerEnabled ? 'success' : 'warning'" show-icon
       :title="buildCapability.workerEnabled
-        ? '外部构建器已启用：审批通过后自动排队，回传 SBOM、provenance 与镜像摘要后自动重验关联草稿。'
-        : '外部构建器未配置：依赖仍会进入持久队列，但 worker API 将保持关闭。旧算子版本不会被改写。'" />
+        ? '外部构建器已启用：审批通过后自动排队，回传软件物料清单、来源证明与镜像摘要后自动重验关联草稿。'
+        : '外部构建器未配置：依赖仍会进入持久队列，但构建接口保持关闭。旧算子版本不会被改写。'" />
 
     <el-tabs v-model="activeTab" class="tabs">
       <el-tab-pane label="依赖申请" name="requests">
@@ -35,7 +33,7 @@
               <span v-else class="muted">待审批</span>
             </template>
           </el-table-column>
-          <el-table-column v-if="user.isAdmin" label="操作" width="110" fixed="right">
+          <el-table-column v-if="user.canManageRuntime" label="操作" width="110" fixed="right">
             <template #default="{ row }">
               <el-button v-if="['SUBMITTED','UNDER_REVIEW'].includes(row.status)" link type="primary" @click="openReview(row)">审批</el-button>
             </template>
@@ -46,7 +44,7 @@
       <el-tab-pane label="构建任务" name="buildJobs">
         <div class="runtime-toolbar">
           <el-tag :type="buildCapability.workerEnabled ? 'success' : 'danger'">
-            {{ buildCapability.workerEnabled ? 'HMAC 构建器已连接' : '构建器未配置' }}
+            {{ buildCapability.workerEnabled ? '签名构建器已连接' : '构建器未配置' }}
           </el-tag>
           <span class="muted">{{ buildCapability.protocol }}</span>
         </div>
@@ -68,8 +66,8 @@
           <el-table-column label="操作" width="190" fixed="right">
             <template #default="{ row }">
               <el-button link type="primary" @click="inspectBuild(row)">详情</el-button>
-              <el-button v-if="user.isAdmin && row.status === 'FAILED'" link type="warning" @click="retryBuild(row)">重试</el-button>
-              <el-button v-if="user.isAdmin && ['QUEUED','RETRYABLE'].includes(row.status)" link type="danger" @click="cancelBuild(row)">取消</el-button>
+              <el-button v-if="user.canManageRuntime && row.status === 'FAILED'" link type="warning" @click="retryBuild(row)">重试</el-button>
+              <el-button v-if="user.canManageRuntime && ['QUEUED','RETRYABLE'].includes(row.status)" link type="danger" @click="cancelBuild(row)">取消</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -78,7 +76,7 @@
       <el-tab-pane label="运行时档案" name="profiles">
         <div class="runtime-toolbar">
           <el-checkbox v-model="includeDeprecated" @change="loadProfiles">显示已废弃</el-checkbox>
-          <el-button v-if="user.isAdmin" @click="openBuild">应急手工登记</el-button>
+          <el-button v-if="user.canManageRuntime" @click="openBuild">应急手工登记</el-button>
         </div>
         <el-table :data="profiles" v-loading="loading" height="calc(100vh - 260px)" stripe>
           <el-table-column label="运行时" min-width="230">
@@ -96,7 +94,7 @@
           </el-table-column>
           <el-table-column label="使用中版本" prop="versionUsageCount" width="110" />
           <el-table-column label="状态" width="110"><template #default="{ row }"><el-tag :type="statusType(row.profile.status)">{{ row.profile.status }}</el-tag></template></el-table-column>
-          <el-table-column v-if="user.isAdmin" label="操作" width="100" fixed="right">
+          <el-table-column v-if="user.canManageRuntime" label="操作" width="100" fixed="right">
             <template #default="{ row }"><el-button v-if="row.profile.status === 'ACTIVE' && !row.profile.defaultProfile" link type="warning" @click="deprecate(row.profile)">废弃</el-button></template>
           </el-table-column>
         </el-table>
@@ -201,7 +199,7 @@ onMounted(loadAll)
 <style scoped>
 .dependency-center { flex: 1; min-width: 0; background: var(--bg); display: flex; flex-direction: column; }
 .dependency-center.embedded { max-width: none; margin: 0; padding: 0; }
-.embedded .page-header { min-height: 68px; margin: 0; padding: 12px 20px; background: var(--surface); }
+.embedded .page-header { min-height: 50px; margin: 0; padding: 8px 20px 0; background: transparent; }
 .page-header { gap: 12px; }.spacer { flex: 1; }.policy { margin: 12px 20px 0; width: auto; }.tabs { flex: 1; min-height: 0; padding: 0 20px; }.runtime-toolbar { display:flex; justify-content:flex-end; align-items:center; gap:12px; margin-bottom:12px; }.muted,.digest { color:var(--text-muted); font-size:12px; margin-top:4px; }.digest { overflow-wrap:anywhere; }.error-text { color:var(--danger); font-size:12px; }.dep-tag { margin:2px 4px 2px 0; }.form-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }.build-form { margin-top:14px; }.immutable-tip { margin:16px 0; } pre { white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; } code { font-size:12px; overflow-wrap:anywhere; }
 @media (max-width: 700px) { .form-grid { grid-template-columns:1fr; gap:0; } }
 </style>

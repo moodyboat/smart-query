@@ -1,49 +1,33 @@
 <template>
   <section class="main-area" :class="{ 'scenario-mode': convStore.getCurrentScenario() }" :style="scenarioTheme.background ? { '--bg': scenarioTheme.background, '--scenario-header-bg': scenarioTheme.headerBg } : {}">
-    <header class="chat-header">
-      <button v-if="showSidebarToggle" class="hamburger-btn" @click="emit('toggleSidebar')">☰</button>
-      <span class="header-title">工作台</span>
-      <!-- 当前场景指示器 -->
-      <el-tag v-if="convStore.getCurrentScenario()" type="success" size="small" class="scenario-indicator" @click="showScenarioPrompt" style="cursor: pointer" :style="{ 'background-color': scenarioTheme.primary, 'border-color': scenarioTheme.primary }">
-        {{ currentScenarioConfig.icon }} {{ currentScenarioConfig.name }} <span style="margin-left: 8px; opacity: 0.8;">查看提示词</span>
-      </el-tag>
-      <span v-if="connectionState === 'connecting'" class="conn-badge connecting">连接中...</span>
-      <span v-else-if="connectionState === 'streaming'" class="conn-badge streaming">
-        <span class="spinner-sm"></span>接收中
-      </span>
+    <div class="chat-tools">
+      <button v-if="showSidebarToggle" class="hamburger-btn" aria-label="打开导航" @click="emit('toggleSidebar')">☰</button>
+      <button v-if="convStore.getCurrentScenario()" type="button" class="scenario-indicator" @click="showScenarioPrompt"><span>{{ currentScenarioConfig.icon }}</span>{{ currentScenarioConfig.name }}</button>
+      <span class="toolbar-spacer"></span>
+      <span v-if="connectionState === 'connecting'" class="conn-badge connecting">连接中</span>
+      <span v-else-if="connectionState === 'streaming'" class="conn-badge streaming"><span class="spinner-sm"></span>接收中</span>
       <span v-else-if="connectionState === 'error'" class="conn-badge error">连接中断</span>
-      <span v-if="loading && stepInfo.total > 0" class="step-badge">
-        步骤 {{ stepInfo.current }}/{{ stepInfo.total }}
-      </span>
-      <button v-if="conversationId" class="trace-btn" @click="traceVisible = true" title="查看执行追踪">
-        <el-icon :size="16"><View /></el-icon>
-      </button>
-      <button v-if="userStore.isAdmin" class="trace-btn" @click="adminVisible = true" title="系统监控">
-        <el-icon :size="16"><Monitor /></el-icon>
-      </button>
-      <button v-if="conversationId && messages.length > 0" class="trace-btn" @click="generateWordReport" title="生成Word报告">
-        <el-icon :size="16"><Document /></el-icon>
-      </button>
-    </header>
+      <span v-if="loading && stepInfo.total > 0" class="step-badge">步骤 {{ stepInfo.current }}/{{ stepInfo.total }}</span>
+      <button v-if="conversationId" class="trace-btn" @click="traceVisible = true" title="执行追踪"><el-icon :size="16"><View /></el-icon></button>
+      <button v-if="userStore.canViewMonitor" class="trace-btn" @click="adminVisible = true" title="系统监控"><el-icon :size="16"><Monitor /></el-icon></button>
+      <button v-if="conversationId && messages.length > 0" class="trace-btn" @click="generateWordReport" title="生成报告"><el-icon :size="16"><Document /></el-icon></button>
+    </div>
 
     <div class="messages-area" ref="messagesArea">
       <div v-if="messages.length === 0" class="welcome" :style="scenarioTheme.cardBg ? { '--welcome-card-bg': scenarioTheme.cardBg } : {}">
-        <div class="welcome-avatar" v-if="convStore.getCurrentScenario()">
-          <div class="avatar-circle" :style="{ 'background': scenarioTheme.gradient || 'var(--color-primary)' }">
-            <span class="avatar-emoji">{{ currentScenarioConfig.icon }}</span>
+        <div class="welcome-avatar">
+          <div class="avatar-circle" :class="{ 'default-avatar': !convStore.getCurrentScenario() }" :style="convStore.getCurrentScenario() ? { 'background': scenarioTheme.gradient || 'var(--brand-gradient)' } : {}">
+            <span class="avatar-emoji">{{ convStore.getCurrentScenario() ? currentScenarioConfig.icon : '✦' }}</span>
           </div>
         </div>
-        <h3>{{ scenarioWelcome.title || '欢迎使用智能问数' }}</h3>
-        <p class="welcome-desc">{{ scenarioWelcome.subtitle || '不只是查询 — 我可以帮你做完整的数据分析' }}</p>
-        <p class="welcome-description" v-if="convStore.getCurrentScenario()">{{ scenarioWelcome.description }}</p>
+        <h3>{{ scenarioWelcome.title || '今天想分析什么？' }}</h3>
 
         <div class="welcome-cards" v-if="scenarioCapabilities.length > 0">
           <div class="welcome-card" v-for="(capability, index) in scenarioCapabilities" :key="index">
             <div class="card-icon" :style="{ '--icon-accent': capability.iconColor || 'var(--brand-primary)' }">
-              <span class="card-icon-emoji">{{ capability.icon }}</span>
+              <span class="card-icon-emoji">{{ displayCapabilityIcon(capability.icon) }}</span>
             </div>
             <div class="card-title">{{ capability.title }}</div>
-            <div class="card-desc">{{ capability.description }}</div>
           </div>
         </div>
 
@@ -54,9 +38,9 @@
               v-for="ex in exampleQueries"
               :key="ex"
               class="chip example-chip"
-              :class="{ disabled: !conversationId || !dataSourceId }"
-              @click="tryExample(ex)"
-            >{{ ex }}</button>
+              :class="{ disabled: !dataSourceId }"
+              @click="tryExample(displayExample(ex))"
+            >{{ displayExample(ex) }}</button>
           </div>
         </div>
       </div>
@@ -91,22 +75,23 @@
     </div>
 
     <div class="input-area">
-      <div v-if="!conversationId || !dataSourceId" class="input-hint">
-        {{ !dataSourceId ? '请先在左侧选择数据源' : '请新建或选择一个对话' }}
+      <div v-if="!dataSourceId" class="input-hint">
+        请先在左侧选择数据源
       </div>
-      <div v-else class="input-row">
-        <el-input
-          v-model="inputText"
-          placeholder="输入你的问题，回车发送..."
-          size="large"
-          @keydown.enter.prevent="sendMessage"
-          :disabled="loading"
-          clearable
-          class="chat-input"
-        />
-        <el-button type="primary" size="large" :loading="loading" @click="sendMessage" class="send-btn">
-          发送
-        </el-button>
+      <div v-else class="composer-wrap">
+        <div class="input-row">
+          <el-input
+            v-model="inputText"
+            :placeholder="conversationId ? '继续提问' : '输入问题，发送后自动创建会话'"
+            size="large"
+            @keydown.enter.prevent="sendMessage"
+            :disabled="loading"
+            class="chat-input"
+          />
+          <button type="button" class="send-btn" :disabled="loading || !inputText.trim()" aria-label="发送" @click="sendMessage">
+            <span v-if="loading" class="spinner-sm"></span><el-icon v-else><Promotion /></el-icon>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -121,13 +106,13 @@
 
 <script setup>
 import { ref, reactive, computed, nextTick, onBeforeUnmount, watch } from 'vue'
-import { View, Monitor, MagicStick, Document } from '@element-plus/icons-vue'
+import { View, Monitor, MagicStick, Document, Promotion } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, ElLoading } from 'element-plus'
 import MessageRow from './MessageRow.vue'
 import TracePanel from './TracePanel.vue'
 import AdminStatsPanel from './AdminStatsPanel.vue'
 import ScenarioModule from './ScenarioModule.vue'
-import { buildChatUrl, fetchReport, downloadWordReport } from '../api'
+import { buildChatUrl, createConversation, fetchReport, downloadWordReport } from '../api'
 import api from '../api'
 import { SSE_SAFETY_TIMEOUT_MS, BLOCK_STATUS } from '../constants'
 import { useMiningStore } from '../stores/mining'
@@ -181,6 +166,17 @@ const scenarioCapabilities = computed(() => {
   return currentScenarioConfig.value.capabilities || []
 })
 
+function displayCapabilityIcon(icon) {
+  const value = String(icon || '')
+  if (/^sql$/i.test(value)) return '数'
+  if (/^py(?:thon)?$/i.test(value)) return '学'
+  return value
+}
+
+function displayExample(text) {
+  return String(text || '').replace(/Python/gi, '机器学习')
+}
+
 // 场景化主题
 const scenarioTheme = computed(() => {
   return currentScenarioConfig.value.theme || {}
@@ -191,7 +187,7 @@ const scenarioWelcome = computed(() => {
   return currentScenarioConfig.value.welcome || {}
 })
 
-const emit = defineEmits(['openDashboard', 'messageCompleted', 'toggleSidebar'])
+const emit = defineEmits(['openDashboard', 'messageCompleted', 'toggleSidebar', 'conversationCreated'])
 
 const activeAbortController = ref(null)
 
@@ -247,18 +243,38 @@ async function sendMessage() {
   const text = inputText.value?.trim()
   if (!text || loading.value) return
 
-  const convId = props.conversationId
   const dsId = props.dataSourceId
-  if (!convId || !dsId) {
-    console.warn('Missing conversationId or dataSourceId:', { convId, dsId })
+  if (!dsId) {
+    ElMessage.warning('请先选择数据源')
     return
+  }
+
+  loading.value = true
+  connectionState.value = 'connecting'
+
+  let convId = props.conversationId
+  if (!convId) {
+    try {
+      const created = await createConversation({
+        title: '新对话',
+        dataSourceId: dsId,
+        scenario: convStore.getCurrentScenario() || undefined
+      })
+      convId = created?.id
+      if (!convId) throw new Error('服务未返回会话 ID')
+      convStore.setCurrentConversation(convId)
+      emit('conversationCreated', convId)
+    } catch (error) {
+      loading.value = false
+      connectionState.value = 'idle'
+      ElMessage.error(`创建会话失败：${error?.message || '请稍后重试'}`)
+      return
+    }
   }
 
   // User message
   messages.value.push({ _id: ++msgIdCounter, type: 'user_text', content: text })
   inputText.value = ''
-  loading.value = true
-  connectionState.value = 'connecting'
   scrollToBottom()
 
   const assistantMsg = getOrCreateAssistantMsg()
@@ -623,7 +639,7 @@ function restoreHistory(formattedMessages, charts) {
 }
 
 function tryExample(text) {
-  if (!props.conversationId || !props.dataSourceId) return
+  if (!props.dataSourceId) return
   inputText.value = text
   sendMessage()
 }
@@ -836,284 +852,282 @@ defineExpose({ sendMessage, clearMessages, messages, updateChartOption, pendingC
 
 <style scoped>
 .main-area {
-  flex: 1; display: flex; flex-direction: column; min-width: 0;
-  background: var(--bg);
-}
-
-.chat-header {
-  height: 52px;
-  background: var(--scenario-header-bg, var(--sidebar-bg));
-  border-bottom: 1px solid var(--sidebar-border);
-  display: flex; align-items: center; padding: 0 var(--space-xl);
-  font-size: var(--font-lg); font-weight: 600; flex-shrink: 0;
-  justify-content: space-between;
-  color: var(--on-dark-text);
-  box-shadow: var(--shadow-sm);
   position: relative;
-}
-.chat-header::after {
-  content: '';
-  position: absolute; left: 0; right: 0; bottom: -1px; height: 1px;
-  background: linear-gradient(90deg, transparent, var(--brand-primary), transparent);
-  opacity: 0.6;
-}
-.header-title { color: var(--on-dark-text); }
-.scenario-indicator {
-  font-weight: 500;
-  padding: 4px 12px;
-  border-radius: 20px;
-  animation: fadeIn 0.3s ease-in;
-  margin-left: var(--space-sm);
-}
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-/* 场景提示词对话框样式 */
-:deep(.scenario-prompt-dialog) {
-  max-width: 800px;
-}
-:deep(.scenario-prompt-dialog .el-message-box__content) {
-  white-space: pre-wrap;
-  font-family: var(--font-family-mono);
-  font-size: var(--font-base);
-  line-height: 1.6;
-  max-height: 400px;
-  overflow-y: auto;
-}
-.hamburger-btn {
-  width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;
-  background: transparent; border: none; font-size: var(--font-2xl); cursor: pointer;
-  border-radius: var(--radius-md); color: var(--on-dark-text); margin-right: var(--space-sm);
-  transition: background var(--transition-fast);
-}
-.hamburger-btn:hover { background: var(--on-dark-fill-hover); }
-.cost-badge { font-size: var(--font-sm); color: var(--on-dark-muted); font-weight: 400; }
-.step-badge {
-  font-size: var(--font-xs); color: var(--on-dark-text); font-weight: 500;
-  padding: 2px var(--space-sm); background: var(--on-dark-fill); border-radius: var(--radius-xl);
-  animation: stepPulse 2s ease-in-out infinite;
-}
-.conn-badge {
-  font-size: var(--font-xs); font-weight: 500; padding: 2px var(--space-sm); border-radius: var(--radius-xl);
-  display: inline-flex; align-items: center; gap: var(--space-xs);
-  color: var(--on-dark-text);
-}
-.conn-badge.connecting { background: var(--on-dark-fill); }
-.conn-badge.streaming { background: var(--on-dark-fill); }
-.conn-badge.error { background: rgba(245, 108, 108, 0.85); }
-.spinner-sm {
-  width: 10px; height: 10px; border: 1.5px solid var(--on-dark-border); border-top-color: var(--on-dark-text);
-  border-radius: 50%; animation: spin 0.6s linear infinite;
-}
-@keyframes stepPulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.6; }
-}
-
-.messages-area {
-  flex: 1; overflow-y: auto; padding: var(--space-lg) var(--space-2xl);
-}
-
-.welcome {
-  text-align: center; color: var(--text-muted); padding: 60px var(--space-xl) 30px;
-}
-.welcome h3 {
-  font-size: 30px; margin-bottom: var(--space-md); color: var(--text-primary);
-  font-weight: 700; letter-spacing: -0.02em; line-height: 1.25;
-}
-.welcome-desc {
-  font-size: var(--font-xl); color: var(--text-secondary);
-  margin-bottom: var(--space-2xl);
-  font-weight: 400;
-}
-
-.welcome-cards {
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-md);
-  max-width: 760px; margin: 0 auto var(--space-2xl); text-align: left;
-}
-@media (max-width: 1023px) {
-  .welcome-cards { grid-template-columns: repeat(2, 1fr); max-width: 500px; }
-}
-@media (max-width: 567px) {
-  .welcome-cards { grid-template-columns: 1fr; }
-}
-.welcome-card {
-  padding: var(--space-lg); background: var(--glass-bg);
-  backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-sm);
-  transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
-}
-.welcome-card:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-md);
-  border-color: var(--brand-primary-light);
-}
-.card-icon {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 40px; height: 40px;
-  border-radius: var(--radius-md);
-  margin-bottom: var(--space-sm);
-  background: color-mix(in srgb, var(--icon-accent) 14%, white);
-  border: 1px solid color-mix(in srgb, var(--icon-accent) 28%, transparent);
-}
-.card-icon-emoji {
-  font-size: 22px; line-height: 1;
-}
-.sql-icon, .py-icon, .chart-icon, .report-icon {
-  font-size: var(--font-sm); font-weight: 700;
-  position: relative; z-index: 1;
-}
-.card-title { font-size: var(--font-base); font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
-.card-desc { font-size: var(--font-sm); color: var(--text-muted); line-height: 1.5; }
-
-.welcome-examples { max-width: 600px; margin: 0 auto; }
-.example-label { font-size: var(--font-sm); color: var(--text-muted); margin-bottom: var(--space-md); }
-.example-chips {
-  display: flex; flex-wrap: wrap; gap: var(--space-sm); justify-content: center;
-}
-.example-chip {
-  font-size: var(--font-base); padding: 8px 16px;
-}
-.example-chip.disabled { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
-
-.input-area {
-  padding: var(--space-md) var(--space-xl) var(--space-lg);
-  background: var(--surface);
-  border-top: 1px solid var(--border-light);
-  flex-shrink: 0;
-}
-.input-row {
-  display: flex; gap: var(--space-sm);
-  max-width: 1200px; margin: 0 auto;
-}
-.input-row .chat-input {
+  min-width: 0;
   flex: 1;
-}
-.input-row :deep(.chat-input .el-input__wrapper) {
-  border-radius: var(--radius-pill);
-  padding: 4px 18px;
-  box-shadow: 0 0 0 1px var(--border) inset;
-  transition: box-shadow var(--transition-base);
-}
-.input-row :deep(.chat-input .el-input__wrapper:hover) {
-  box-shadow: 0 0 0 1px var(--brand-primary-light) inset;
-}
-.input-row :deep(.chat-input.is-focus .el-input__wrapper),
-.input-row :deep(.chat-input .el-input__wrapper.is-focus) {
-  box-shadow: 0 0 0 2px var(--brand-primary-light) inset, var(--shadow-brand) !important;
-}
-.send-btn {
-  border-radius: var(--radius-pill);
-  padding: 0 var(--space-xl);
-  background: var(--brand-gradient);
-  border-color: transparent;
-  box-shadow: var(--shadow-brand);
-  font-weight: 500;
-}
-.send-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-lg), var(--shadow-brand);
-}
-.input-hint {
-  text-align: center; padding: var(--space-lg); color: var(--text-muted); font-size: var(--font-md);
-  display: flex; align-items: center; justify-content: center; gap: var(--space-sm);
-}
-.no-response-hint {
-  text-align: center; padding: var(--space-xl); color: var(--text-muted); font-size: var(--font-md);
-  display: flex; align-items: center; justify-content: center; gap: var(--space-sm);
-}
-.retry-btn-inline {
-  padding: 2px var(--space-sm); font-size: var(--font-sm); background: transparent; color: var(--primary);
-  border: 1px solid var(--primary-light); border-radius: var(--radius-sm); cursor: pointer;
-}
-.retry-btn-inline:hover { background: var(--primary-light); }
-.trace-btn {
-  background: var(--on-dark-fill); border: 1px solid var(--on-dark-border); border-radius: var(--radius-md);
-  padding: var(--space-xs) var(--space-sm); cursor: pointer; color: var(--on-dark-text); display: flex; align-items: center;
-  margin-left: auto;
-  transition: background var(--transition-fast), border-color var(--transition-fast);
-}
-.trace-btn:hover { background: var(--on-dark-fill-hover); border-color: var(--on-dark-border-strong); color: var(--on-dark-text); }
-
-/* 场景化样式 */
-.main-area.scenario-mode {
-  transition: background 0.3s ease;
-}
-
-.scenario-icon {
-  margin-right: var(--space-sm);
-  font-size: var(--font-xl);
-}
-
-.welcome-avatar {
-  margin-bottom: var(--space-xl);
+  max-width: none;
+  height: 100%;
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #e4e8ef;
+  border-radius: 12px;
+  color: var(--text-primary);
+  background: #fff;
+  box-shadow: 0 4px 16px rgba(31,35,41,.05);
+  margin: 0;
 }
-
-.avatar-circle {
-  width: 80px;
-  height: 80px;
-  border-radius: 50%;
+.chat-tools {
+  position: absolute;
+  z-index: 4;
+  top: 10px;
+  right: 12px;
+  left: 12px;
   display: flex;
   align-items: center;
-  justify-content: center;
-  box-shadow: none;
-  animation: none;
+  gap: 6px;
+  pointer-events: none;
 }
-
-.avatar-emoji {
-  font-size: 40px;
+.chat-tools > * { pointer-events: auto; }
+.toolbar-spacer { flex: 1; pointer-events: none; }
+.scenario-indicator {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  border: 0;
+  border-radius: 999px;
+  color: #1762aa;
+  background: rgba(0,113,227,.08);
+  font: inherit;
+  font-size: 9.5px;
+  cursor: pointer;
 }
+.scenario-indicator:hover { background: rgba(0,113,227,.13); }
+.hamburger-btn, .trace-btn {
+  width: 31px;
+  height: 31px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  padding: 0;
+  border: 1px solid rgba(60,60,67,.1);
+  border-radius: 9px;
+  color: #68686d;
+  background: rgba(255,255,255,.68);
+  cursor: pointer;
+}
+.hamburger-btn { border: 0; font-size: 15px; }
+.hamburger-btn:hover, .trace-btn:hover { color: #0071e3; background: #f0f7ff; border-color: rgba(0,113,227,.18); }
+.conn-badge, .step-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: #5e6770;
+  background: #f1f1f3;
+  font-size: 9px;
+  font-weight: 560;
+}
+.conn-badge.streaming { color: #006edb; background: #eaf5ff; }
+.conn-badge.error { color: #c9342f; background: #fff0ef; }
+.spinner-sm {
+  width: 11px;
+  height: 11px;
+  display: inline-block;
+  flex-shrink: 0;
+  border: 1.5px solid rgba(0,113,227,.2);
+  border-top-color: #0071e3;
+  border-radius: 50%;
+  animation: spin .65s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 
-/* 动画已移除 */
-
-.welcome-description {
-  font-size: var(--font-md);
-  color: var(--text-secondary);
-  margin-bottom: var(--space-2xl);
-  max-width: 600px;
-  margin-left: auto;
+.messages-area {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  padding: 52px clamp(18px, 4vw, 56px) 34px;
+  scroll-behavior: smooth;
+}
+.messages-area > :deep(.message-row),
+.messages-area > .no-response-hint,
+.messages-area > :deep(.scenario-module) {
+  width: min(100%, 820px);
   margin-right: auto;
-  line-height: 1.6;
+  margin-left: auto;
 }
-
-.welcome-card {
-  transition: all 0.2s ease;
+.welcome {
+  width: min(100%, 760px);
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  margin: 0 auto;
+  padding: 30px 0 70px;
+  color: var(--text-secondary);
+  text-align: center;
 }
-
-.welcome-card:hover {
-  transform: none;
+.welcome-avatar { display: flex; justify-content: center; margin-bottom: 17px; }
+.avatar-circle {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  color: white;
   box-shadow: none;
-  border-color: var(--border-hover);
 }
-
+.default-avatar { background: #2468f2; }
+.avatar-emoji { font-size: 21px; line-height: 1; }
+.welcome h3 {
+  margin: 0 0 8px;
+  color: #1d1d1f;
+  font-size: clamp(22px, 2.4vw, 30px);
+  font-weight: 660;
+  letter-spacing: -.045em;
+  line-height: 1.12;
+}
+.welcome-desc { margin: 0 0 25px; color: #77777d; font-size: 13px; line-height: 1.6; }
+.welcome-description { max-width: 620px; margin: -14px auto 24px; color: #77777d; font-size: 11px; line-height: 1.6; }
+.welcome-cards {
+  width: min(100%, 680px);
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 9px;
+  margin: 0 auto 24px;
+  text-align: left;
+}
+.welcome-card {
+  min-height: 126px;
+  padding: 15px;
+  border: 1px solid rgba(60,60,67,.09);
+  border-radius: 9px;
+  background: #fff;
+  box-shadow: none;
+  transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease;
+}
+.welcome-card:hover { transform:none;border-color:#a9c4fb;box-shadow:none; }
 .card-icon {
-  font-size: var(--font-lg);
-  padding: 4px var(--space-sm);
+  width: 33px;
+  height: 33px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 10px;
+  border: 1px solid color-mix(in srgb, var(--icon-accent) 22%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--icon-accent) 9%, white);
+}
+.card-icon-emoji { font-size: 17px; }
+.card-title { margin-bottom: 4px; color: #29292c; font-size: 11px; font-weight: 620; }
+.card-desc { color: #86868b; font-size: 9.5px; line-height: 1.5; }
+.welcome-examples { width: min(100%, 640px); margin: 0 auto; }
+.example-label { margin-bottom: 9px; color: #9a9aa0; font-size: 9px; }
+.example-chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 7px; }
+.example-chip {
+  padding: 7px 12px;
+  border: 1px solid rgba(60,60,67,.09);
+  color: #57575c;
+  background: #fff;
+  font-size: 10px;
+  box-shadow: none;
+}
+.example-chip:hover { transform: none; color: #006edb; border-color: rgba(0,113,227,.18); background: #f1f8ff; box-shadow: none; }
+.example-chip.disabled { opacity: .45; pointer-events: none; }
+
+.input-area {
+  flex-shrink: 0;
+  padding: 10px clamp(16px, 4vw, 48px) 13px;
+  border-top: 1px solid #edf0f5;
+  background: #fff;
+}
+.composer-wrap { width: min(100%, 820px); margin: 0 auto; }
+.input-row {
+  min-height: 53px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 7px 6px 15px;
+  border: 1px solid rgba(60,60,67,.14);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 3px 12px rgba(31,35,41,.06);
+  transition: border-color .2s ease, box-shadow .2s ease;
+}
+.input-row:focus-within { border-color:#91b4f9;box-shadow:0 0 0 3px rgba(36,104,242,.08); }
+.chat-input { flex: 1; }
+.input-row :deep(.chat-input .el-input__wrapper),
+.input-row :deep(.chat-input .el-input__wrapper:hover),
+.input-row :deep(.chat-input .el-input__wrapper.is-focus) {
+  padding: 0;
   background: transparent;
+  box-shadow: none !important;
+}
+.input-row :deep(.chat-input .el-input__inner) { color: #29292c; font-size: 12px; }
+.send-btn {
+  width: 39px;
+  height: 39px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 8px;
+  color: white;
+  background: #2468f2;
+  box-shadow: none;
+  cursor: pointer;
+}
+.send-btn:hover:not(:disabled) { filter: brightness(1.04); transform: translateY(-1px); }
+.send-btn:disabled { color: #aaaab0; background: #e7e7ea; box-shadow: none; cursor: default; }
+.input-hint {
+  width: min(100%, 820px);
+  margin: 0 auto;
+  padding: 15px;
+  border: 1px solid rgba(0,113,227,.1);
+  border-radius: 14px;
+  color: #6f7d8b;
+  background: #f1f8ff;
+  font-size: 10px;
+  text-align: center;
+}
+.no-response-hint { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 20px; color: #86868b; font-size: 10px; }
+.retry-btn-inline { padding: 4px 8px; border: 0; border-radius: 7px; color: #0071e3; background: #edf6ff; cursor: pointer; }
+
+:deep(.scenario-prompt-dialog) { max-width: 800px; }
+:deep(.scenario-prompt-dialog .el-message-box__content) {
+  max-height: 400px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  line-height: 1.65;
 }
 
-/* 场景模式下的消息气泡美化 - 动画已移除 */
-.scenario-mode .welcome {
-  animation: none;
+@media (max-width: 1023px) {
+  .welcome-cards { grid-template-columns: repeat(2, 1fr); }
 }
-
-/* 场景化示例问题 */
-.example-item {
-  transition: all 0.2s ease;
+@media (min-width: 1600px) and (min-height: 850px) {
+  .messages-area > :deep(.message-row),
+  .messages-area > .no-response-hint,
+  .messages-area > :deep(.scenario-module),
+  .composer-wrap,
+  .input-hint { width: min(100%, 920px); }
+  .welcome { width: min(100%, 900px); }
+  .welcome h3 { font-size: 42px; }
+  .welcome-desc { font-size: 14px; }
+  .welcome-cards { width: min(100%, 820px); gap: 12px; }
+  .welcome-card { min-height: 145px; padding: 18px; }
+  .card-icon { width: 38px; height: 38px; }
+  .card-title { font-size: 12.5px; }
+  .card-desc { font-size: 10.5px; }
+  .welcome-examples { width: min(100%, 760px); }
+  .example-chip { padding: 8px 13px; font-size: 11px; }
+  .input-row { min-height: 58px; }
 }
-
-.scenario-mode .example-item {
-  border-left: 3px solid transparent;
+@media (max-width: 680px) {
+  .main-area { border: 0; border-radius: 0; }
+  .chat-tools { top: 8px; right: 9px; left: 9px; }
+  .chat-tools .conn-badge, .chat-tools .step-badge { display: none; }
+  .messages-area { padding: 48px 13px 24px; }
+  .welcome { justify-content: flex-start; padding-top: 36px; }
+  .welcome-cards { grid-template-columns: 1fr 1fr; }
+  .input-area { padding-inline: 10px; }
 }
-
-.scenario-mode .example-item:hover {
-  border-left-color: var(--primary);
+@media (max-width: 480px) {
+  .welcome-cards { grid-template-columns: 1fr; }
+  .welcome-card { min-height: 0; }
+  .trace-btn:not(:last-child) { display: none; }
 }
 </style>

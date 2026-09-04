@@ -3,6 +3,7 @@ package com.smartquery.orchestration;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartquery.common.BusinessException;
+import com.smartquery.common.PermissionCodes;
 import com.smartquery.entity.DependencyRequest;
 import com.smartquery.entity.DraftDependency;
 import com.smartquery.entity.OperatorVersionRuntimeBinding;
@@ -56,7 +57,7 @@ public class DependencyCenterService {
     public List<DependencyRequest> listRequests(String status) {
         LambdaQueryWrapper<DependencyRequest> query = new LambdaQueryWrapper<DependencyRequest>()
             .orderByDesc(DependencyRequest::getCreatedAt);
-        if (!resourceAccessService.isAdmin()) query.eq(DependencyRequest::getOwnerUserId, currentUserId());
+        if (!canManageRuntime()) query.eq(DependencyRequest::getOwnerUserId, currentUserId());
         if (status != null && !status.isBlank()) query.eq(DependencyRequest::getStatus, status);
         return requestMapper.selectList(query);
     }
@@ -100,7 +101,7 @@ public class DependencyCenterService {
 
     @Transactional
     public DependencyRequest review(Long requestId, Map<String, Object> body) {
-        resourceAccessService.requireAdmin();
+        requireRuntimeManager();
         DependencyRequest request = requireRequest(requestId);
         if (!List.of("SUBMITTED", "UNDER_REVIEW").contains(request.getStatus())) {
             throw new BusinessException(409, "当前依赖申请不能审批: " + request.getStatus());
@@ -146,7 +147,7 @@ public class DependencyCenterService {
     /** Registers an attested image produced by the restricted build worker. */
     @Transactional
     public RuntimeProfile registerBuiltRuntime(Map<String, Object> body) {
-        resourceAccessService.requireAdmin();
+        requireRuntimeManager();
         String actor = currentUserId();
         return registerBuiltRuntime(body, actor, actor);
     }
@@ -250,7 +251,7 @@ public class DependencyCenterService {
 
     @Transactional
     public RuntimeProfile deprecateProfile(Long profileId) {
-        resourceAccessService.requireAdmin();
+        requireRuntimeManager();
         RuntimeProfile profile = requireProfile(profileId);
         if ("DEPRECATED".equals(profile.getStatus())) return profile;
         profile.setStatus("DEPRECATED");
@@ -261,7 +262,7 @@ public class DependencyCenterService {
 
     @Transactional
     public DependencyRequest deprecateRequest(Long requestId) {
-        resourceAccessService.requireAdmin();
+        requireRuntimeManager();
         DependencyRequest request = requireRequest(requestId);
         request.setStatus("DEPRECATED");
         requestMapper.updateById(request);
@@ -412,7 +413,7 @@ public class DependencyCenterService {
 
     private DependencyRequest requireRequest(Long id) {
         DependencyRequest request = requireRequestInternal(id);
-        if (!resourceAccessService.isAdmin() && !currentUserId().equals(request.getOwnerUserId())) {
+        if (!canManageRuntime() && !currentUserId().equals(request.getOwnerUserId())) {
             throw new BusinessException(403, "无权访问该依赖申请");
         }
         return request;
@@ -428,7 +429,7 @@ public class DependencyCenterService {
         return profile;
     }
     private void requireOwner(String owner) {
-        if (!resourceAccessService.isAdmin() && !currentUserId().equals(owner)) {
+        if (!canManageRuntime() && !currentUserId().equals(owner)) {
             throw new BusinessException(403, "无权关联该草稿");
         }
     }
@@ -487,6 +488,14 @@ public class DependencyCenterService {
         return "D" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"))
             + UUID.randomUUID().toString().substring(0, 6).toUpperCase(Locale.ROOT);
     }
+    private boolean canManageRuntime() {
+        return resourceAccessService.hasPermission(PermissionCodes.RUNTIME_MANAGE);
+    }
+
+    private void requireRuntimeManager() {
+        resourceAccessService.requirePermission(PermissionCodes.RUNTIME_MANAGE, "需要运行治理权限");
+    }
+
     private String currentUserId() { return resourceAccessService.currentUserId(); }
 
     public record ProfileView(RuntimeProfile profile, List<RuntimeDependency> dependencies,

@@ -6,6 +6,8 @@ CREATE TABLE IF NOT EXISTS sq_prediction_result (
     model_id BIGINT NOT NULL COMMENT '关联模型ID',
     model_name VARCHAR(200) COMMENT '模型名称(冗余)',
     batch_id VARCHAR(50) COMMENT '批量预测批次ID',
+    trigger_type VARCHAR(30) NOT NULL DEFAULT 'manual' COMMENT 'manual/schedule',
+    model_execution_id BIGINT COMMENT '关联正式模型执行记录',
     input_data JSON COMMENT '输入特征值',
     prediction VARCHAR(500) COMMENT '预测结果',
     probability DOUBLE COMMENT '预测概率/置信度',

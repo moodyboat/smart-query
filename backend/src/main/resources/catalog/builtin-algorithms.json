@@ -1,0 +1,292 @@
+{
+  "version": 1,
+  "algorithms": [
+    {
+      "algorithmId": "random_forest",
+      "name": "随机森林",
+      "description": "通过多棵决策树集成提升预测精度和稳定性",
+      "modelTypes": ["classification", "regression"],
+      "aliases": ["rf"],
+      "paramsSchema": [
+        {"key":"n_estimators","label":"树的数量","type":"int","min":10,"max":1000,"step":10,"defaultValue":100},
+        {"key":"max_depth","label":"最大深度","type":"int","min":1,"max":100,"step":1,"defaultValue":10}
+      ],
+      "pythonCodeTemplate": "from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor\nparams.setdefault('random_state', 42)\nmodel_cls = RandomForestClassifier if _model_type == 'classification' else RandomForestRegressor\nclf = model_cls(**params)",
+      "icon": "🌲",
+      "category": "集成学习"
+    },
+    {
+      "algorithmId": "xgboost",
+      "name": "XGBoost",
+      "description": "适合结构化数据的高效梯度提升算法",
+      "modelTypes": ["classification", "regression"],
+      "aliases": ["xgb"],
+      "paramsSchema": [
+        {"key":"n_estimators","label":"树的数量","type":"int","min":10,"max":1000,"step":10,"defaultValue":100},
+        {"key":"learning_rate","label":"学习率","type":"float","min":0.001,"max":1,"step":0.01,"defaultValue":0.1}
+      ],
+      "pythonCodeTemplate": "from xgboost import XGBClassifier, XGBRegressor\nparams.setdefault('random_state', 42)\nmodel_cls = XGBClassifier if _model_type == 'classification' else XGBRegressor\nclf = model_cls(**params)",
+      "icon": "📈",
+      "category": "集成学习"
+    },
+    {
+      "algorithmId": "lightgbm",
+      "name": "LightGBM",
+      "description": "面向中大型表格数据的高效梯度提升框架",
+      "modelTypes": ["classification", "regression"],
+      "aliases": ["lgbm"],
+      "paramsSchema": [
+        {"key":"n_estimators","label":"树的数量","type":"int","min":10,"max":1000,"step":10,"defaultValue":100},
+        {"key":"num_leaves","label":"叶节点数","type":"int","min":2,"max":256,"step":1,"defaultValue":31}
+      ],
+      "pythonCodeTemplate": "from lightgbm import LGBMClassifier, LGBMRegressor\nparams.setdefault('random_state', 42)\nmodel_cls = LGBMClassifier if _model_type == 'classification' else LGBMRegressor\nclf = model_cls(**params)",
+      "icon": "💡",
+      "category": "集成学习"
+    },
+    {
+      "algorithmId": "gradient_boosting",
+      "name": "梯度提升",
+      "description": "串行构建弱学习器的经典梯度提升模型",
+      "modelTypes": ["classification", "regression"],
+      "aliases": ["gb", "gbm"],
+      "paramsSchema": [
+        {"key":"n_estimators","label":"树的数量","type":"int","min":10,"max":1000,"step":10,"defaultValue":100},
+        {"key":"learning_rate","label":"学习率","type":"float","min":0.001,"max":1,"step":0.01,"defaultValue":0.1}
+      ],
+      "pythonCodeTemplate": "from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor\nparams.setdefault('random_state', 42)\nmodel_cls = GradientBoostingClassifier if _model_type == 'classification' else GradientBoostingRegressor\nclf = model_cls(**params)",
+      "icon": "🚀",
+      "category": "集成学习"
+    },
+    {
+      "algorithmId": "extra_trees",
+      "name": "极端随机树",
+      "description": "使用更强随机化的树集成，适合高维表格数据",
+      "modelTypes": ["classification", "regression"],
+      "aliases": ["etr"],
+      "paramsSchema": [
+        {"key":"n_estimators","label":"树的数量","type":"int","min":10,"max":1000,"step":10,"defaultValue":200},
+        {"key":"max_depth","label":"最大深度","type":"int","min":1,"max":100,"step":1,"defaultValue":20}
+      ],
+      "pythonCodeTemplate": "from sklearn.ensemble import ExtraTreesClassifier, ExtraTreesRegressor\nparams.setdefault('random_state', 42)\nmodel_cls = ExtraTreesClassifier if _model_type == 'classification' else ExtraTreesRegressor\nclf = model_cls(**params)",
+      "icon": "🌴",
+      "category": "集成学习"
+    },
+    {
+      "algorithmId": "adaboost",
+      "name": "AdaBoost",
+      "description": "逐轮关注难分样本的经典提升算法",
+      "modelTypes": ["classification", "regression"],
+      "aliases": ["ada"],
+      "paramsSchema": [
+        {"key":"n_estimators","label":"弱学习器数量","type":"int","min":10,"max":1000,"step":10,"defaultValue":100},
+        {"key":"learning_rate","label":"学习率","type":"float","min":0.001,"max":2,"step":0.01,"defaultValue":0.1}
+      ],
+      "pythonCodeTemplate": "from sklearn.ensemble import AdaBoostClassifier, AdaBoostRegressor\nparams.setdefault('random_state', 42)\nmodel_cls = AdaBoostClassifier if _model_type == 'classification' else AdaBoostRegressor\nclf = model_cls(**params)",
+      "icon": "🔁",
+      "category": "集成学习"
+    },
+    {
+      "algorithmId": "hist_gradient_boosting",
+      "name": "直方图梯度提升",
+      "description": "面向中大型表格数据的高效梯度提升实现",
+      "modelTypes": ["classification", "regression"],
+      "aliases": ["hgb"],
+      "paramsSchema": [
+        {"key":"max_iter","label":"最大迭代次数","type":"int","min":20,"max":2000,"step":20,"defaultValue":100},
+        {"key":"max_leaf_nodes","label":"最大叶节点数","type":"int","min":2,"max":255,"step":1,"defaultValue":31}
+      ],
+      "pythonCodeTemplate": "from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor\nparams.setdefault('random_state', 42)\nmodel_cls = HistGradientBoostingClassifier if _model_type == 'classification' else HistGradientBoostingRegressor\nclf = model_cls(**params)",
+      "icon": "📊",
+      "category": "集成学习"
+    },
+    {
+      "algorithmId": "decision_tree",
+      "name": "决策树",
+      "description": "可解释性强的树模型",
+      "modelTypes": ["classification", "regression"],
+      "aliases": ["dt"],
+      "paramsSchema": [{"key":"max_depth","label":"最大深度","type":"int","min":1,"max":100,"step":1,"defaultValue":10}],
+      "pythonCodeTemplate": "from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor\nparams.setdefault('random_state', 42)\nmodel_cls = DecisionTreeClassifier if _model_type == 'classification' else DecisionTreeRegressor\nclf = model_cls(**params)",
+      "icon": "🌳",
+      "category": "树模型"
+    },
+    {
+      "algorithmId": "logistic_regression",
+      "name": "逻辑回归",
+      "description": "可解释的线性分类基线模型",
+      "modelTypes": ["classification"],
+      "aliases": ["lr"],
+      "paramsSchema": [
+        {"key":"C","label":"正则化强度","type":"float","min":0.01,"max":100,"step":0.1,"defaultValue":1},
+        {"key":"max_iter","label":"最大迭代次数","type":"int","min":10,"max":10000,"step":10,"defaultValue":300}
+      ],
+      "pythonCodeTemplate": "from sklearn.linear_model import LogisticRegression\nparams.setdefault('random_state', 42)\nclf = LogisticRegression(**params)",
+      "icon": "📐",
+      "category": "线性模型"
+    },
+    {
+      "algorithmId": "linear_regression",
+      "name": "线性回归",
+      "description": "适合线性关系与基准比较的回归模型",
+      "modelTypes": ["regression"],
+      "aliases": ["linreg"],
+      "paramsSchema": [{"key":"fit_intercept","label":"拟合截距","type":"boolean","defaultValue":true}],
+      "pythonCodeTemplate": "from sklearn.linear_model import LinearRegression\nclf = LinearRegression(**params)",
+      "icon": "📏",
+      "category": "线性模型"
+    },
+    {
+      "algorithmId": "ridge",
+      "name": "岭回归",
+      "description": "使用 L2 正则化缓解多重共线性",
+      "modelTypes": ["regression"],
+      "aliases": [],
+      "paramsSchema": [{"key":"alpha","label":"正则强度","type":"float","min":0.0001,"max":1000,"step":0.1,"defaultValue":1.0}],
+      "pythonCodeTemplate": "from sklearn.linear_model import Ridge\nclf = Ridge(**params)",
+      "icon": "〽️",
+      "category": "线性模型"
+    },
+    {
+      "algorithmId": "lasso",
+      "name": "Lasso 回归",
+      "description": "使用 L1 正则化执行稀疏特征选择",
+      "modelTypes": ["regression"],
+      "aliases": [],
+      "paramsSchema": [{"key":"alpha","label":"正则强度","type":"float","min":0.00001,"max":100,"step":0.01,"defaultValue":0.1}],
+      "pythonCodeTemplate": "from sklearn.linear_model import Lasso\nparams.setdefault('random_state', 42)\nclf = Lasso(**params)",
+      "icon": "➖",
+      "category": "线性模型"
+    },
+    {
+      "algorithmId": "elastic_net",
+      "name": "弹性网络",
+      "description": "结合 L1 与 L2 正则化",
+      "modelTypes": ["regression"],
+      "aliases": ["enet"],
+      "paramsSchema": [
+        {"key":"alpha","label":"正则强度","type":"float","min":0.00001,"max":100,"step":0.01,"defaultValue":0.1},
+        {"key":"l1_ratio","label":"L1 占比","type":"float","min":0,"max":1,"step":0.05,"defaultValue":0.5}
+      ],
+      "pythonCodeTemplate": "from sklearn.linear_model import ElasticNet\nparams.setdefault('random_state', 42)\nclf = ElasticNet(**params)",
+      "icon": "🕸️",
+      "category": "线性模型"
+    },
+    {
+      "algorithmId": "sgd",
+      "name": "随机梯度下降",
+      "description": "适合大规模稀疏数据的在线线性模型",
+      "modelTypes": ["classification", "regression"],
+      "aliases": [],
+      "paramsSchema": [{"key":"alpha","label":"正则强度","type":"float","min":0.0000001,"max":1,"step":0.0001,"defaultValue":0.0001}],
+      "pythonCodeTemplate": "from sklearn.linear_model import SGDClassifier, SGDRegressor\nparams.setdefault('random_state', 42)\nmodel_cls = SGDClassifier if _model_type == 'classification' else SGDRegressor\nclf = model_cls(**params)",
+      "icon": "⚡",
+      "category": "线性模型"
+    },
+    {
+      "algorithmId": "svm",
+      "name": "支持向量机",
+      "description": "适合中小规模数据集的核方法",
+      "modelTypes": ["classification", "regression"],
+      "aliases": ["svc", "svr"],
+      "paramsSchema": [
+        {"key":"C","label":"正则化强度","type":"float","min":0.01,"max":100,"step":0.1,"defaultValue":1},
+        {"key":"kernel","label":"核函数","type":"select","options":["rbf","linear","poly"],"defaultValue":"rbf"}
+      ],
+      "pythonCodeTemplate": "from sklearn.svm import SVC, SVR\nmodel_cls = SVC if _model_type == 'classification' else SVR\nclf = model_cls(**params)",
+      "icon": "🔶",
+      "category": "核方法"
+    },
+    {
+      "algorithmId": "knn",
+      "name": "K 近邻",
+      "description": "基于距离度量的惰性学习算法",
+      "modelTypes": ["classification", "regression"],
+      "aliases": ["k_neighbors"],
+      "paramsSchema": [{"key":"n_neighbors","label":"邻居数 K","type":"int","min":1,"max":100,"step":1,"defaultValue":5}],
+      "pythonCodeTemplate": "from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor\nmodel_cls = KNeighborsClassifier if _model_type == 'classification' else KNeighborsRegressor\nclf = model_cls(**params)",
+      "icon": "🔗",
+      "category": "近邻方法"
+    },
+    {
+      "algorithmId": "naive_bayes",
+      "name": "高斯朴素贝叶斯",
+      "description": "训练快速的概率分类基线",
+      "modelTypes": ["classification"],
+      "aliases": ["nb"],
+      "paramsSchema": [{"key":"var_smoothing","label":"方差平滑","type":"float","min":1e-12,"max":0.1,"step":1e-9,"defaultValue":1e-9}],
+      "pythonCodeTemplate": "from sklearn.naive_bayes import GaussianNB\nclf = GaussianNB(**params)",
+      "icon": "🎲",
+      "category": "概率模型"
+    },
+    {
+      "algorithmId": "neural_network",
+      "name": "多层感知机（MLP）",
+      "description": "支持分类和回归的全连接神经网络",
+      "modelTypes": ["classification", "regression"],
+      "aliases": ["mlp", "nn"],
+      "paramsSchema": [
+        {"key":"hidden_layer_size","label":"每层神经元","type":"int","min":4,"max":1024,"step":4,"defaultValue":100},
+        {"key":"hidden_layers","label":"隐藏层数","type":"int","min":1,"max":8,"step":1,"defaultValue":2},
+        {"key":"max_iter","label":"最大迭代次数","type":"int","min":50,"max":5000,"step":50,"defaultValue":500}
+      ],
+      "pythonCodeTemplate": "from sklearn.neural_network import MLPClassifier, MLPRegressor\nhidden_size = int(params.pop('hidden_layer_size', 100))\nhidden_layers = int(params.pop('hidden_layers', 2))\nparams['hidden_layer_sizes'] = tuple([hidden_size] * hidden_layers)\nparams.setdefault('random_state', 42)\nmodel_cls = MLPClassifier if _model_type == 'classification' else MLPRegressor\nclf = model_cls(**params)",
+      "icon": "🧠",
+      "category": "神经网络"
+    },
+    {
+      "algorithmId": "kmeans",
+      "name": "K-Means 聚类",
+      "description": "基于距离的无监督聚类算法",
+      "modelTypes": ["clustering"],
+      "aliases": [],
+      "paramsSchema": [{"key":"n_clusters","label":"聚类数","type":"int","min":2,"max":50,"step":1,"defaultValue":3}],
+      "pythonCodeTemplate": "from sklearn.cluster import KMeans\nparams.setdefault('n_clusters', 3)\nparams.setdefault('random_state', 42)\nclf = KMeans(**params)",
+      "icon": "🎯",
+      "category": "聚类"
+    },
+    {
+      "algorithmId": "gaussian_mixture",
+      "name": "高斯混合聚类",
+      "description": "使用概率混合模型发现重叠簇",
+      "modelTypes": ["clustering"],
+      "aliases": ["gmm"],
+      "paramsSchema": [{"key":"n_components","label":"簇数量","type":"int","min":2,"max":50,"step":1,"defaultValue":3}],
+      "pythonCodeTemplate": "from sklearn.mixture import GaussianMixture\nparams.setdefault('random_state', 42)\nclf = GaussianMixture(**params)",
+      "icon": "🫧",
+      "category": "聚类"
+    },
+    {
+      "algorithmId": "isolation_forest",
+      "name": "孤立森林",
+      "description": "通过随机切分隔离异常点",
+      "modelTypes": ["anomaly_detection"],
+      "aliases": [],
+      "paramsSchema": [{"key":"contamination","label":"异常比例","type":"float","min":0.001,"max":0.5,"step":0.01,"defaultValue":0.05}],
+      "pythonCodeTemplate": "from sklearn.ensemble import IsolationForest\nparams.setdefault('random_state', 42)\nclf = IsolationForest(**params)",
+      "icon": "🚨",
+      "category": "异常检测"
+    },
+    {
+      "algorithmId": "one_class_svm",
+      "name": "单类支持向量机",
+      "description": "学习正常样本边界并识别边界外异常",
+      "modelTypes": ["anomaly_detection"],
+      "aliases": ["ocsvm"],
+      "paramsSchema": [{"key":"nu","label":"异常比例上界","type":"float","min":0.001,"max":0.5,"step":0.01,"defaultValue":0.05}],
+      "pythonCodeTemplate": "from sklearn.svm import OneClassSVM\nclf = OneClassSVM(**params)",
+      "icon": "🛡️",
+      "category": "异常检测"
+    },
+    {
+      "algorithmId": "local_outlier_factor",
+      "name": "局部离群因子",
+      "description": "根据局部密度差异识别异常点",
+      "modelTypes": ["anomaly_detection"],
+      "aliases": ["lof"],
+      "paramsSchema": [{"key":"n_neighbors","label":"邻居数量","type":"int","min":2,"max":200,"step":1,"defaultValue":20}],
+      "pythonCodeTemplate": "from sklearn.neighbors import LocalOutlierFactor\nparams.setdefault('novelty', True)\nclf = LocalOutlierFactor(**params)",
+      "icon": "📍",
+      "category": "异常检测"
+    }
+  ]
+}

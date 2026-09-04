@@ -116,7 +116,7 @@
         <!-- Tool use block: Chart -->
         <div v-if="block.type === 'tool_use' && block.name === 'generate_chart'" class="tool-block chart-tool">
           <div class="tool-header">
-            <span class="tool-badge chart-badge">Chart</span>
+            <span class="tool-badge chart-badge">图表</span>
             <span class="chart-title-inline">{{ block.input?.title || block.result?.title }}</span>
             <button
               v-if="block.status === BLOCK_STATUS.SUCCESS"
@@ -139,7 +139,7 @@
         <!-- Tool use block: Dashboard -->
         <div v-if="block.type === 'tool_use' && block.name === 'generate_dashboard'" class="tool-block">
           <div class="tool-header">
-            <span class="tool-badge dashboard-badge">Dashboard</span>
+            <span class="tool-badge dashboard-badge">看板</span>
             <button
               v-if="block.result?.dashboardId && openDashboard"
               class="fullscreen-btn"
@@ -163,7 +163,7 @@
         <!-- Tool use block: Report -->
         <div v-if="block.type === 'tool_use' && block.name === 'generate_report'" class="tool-block report-block">
           <div class="tool-header">
-            <span class="tool-badge report-badge">Report</span>
+            <span class="tool-badge report-badge">报告</span>
             <span class="report-title-inline">{{ block.result?.title }}</span>
           </div>
           <div v-if="block.result" class="report-content">
@@ -201,7 +201,7 @@
         <!-- Tool use block: Filter Widgets -->
         <div v-if="block.type === 'tool_use' && block.name === 'generate_filter_widgets'" class="tool-block">
           <div class="tool-header">
-            <span class="tool-badge filter-badge">Filters</span>
+            <span class="tool-badge filter-badge">筛选</span>
             <span v-if="block.result?.targetId" class="filter-target">→ 图表 #{{ block.result.targetId }}</span>
           </div>
           <div v-if="block.result" class="filter-bar">
@@ -247,7 +247,7 @@
         <!-- Tool use block: Schema Explore -->
         <div v-if="block.type === 'tool_use' && block.name === 'schema_explore'" class="tool-block">
           <div class="tool-header">
-            <span class="tool-badge schema-badge">Schema</span>
+            <span class="tool-badge schema-badge">结构</span>
           </div>
           <div v-if="block.result" class="tool-result" v-html="renderMarkdown(block.result)" />
         </div>
@@ -255,7 +255,7 @@
         <!-- Tool use block: Mining Model -->
         <div v-if="block.type === 'tool_use' && block.name === 'mining_model'" class="tool-block mining-tool">
           <div class="tool-header">
-            <span class="tool-badge mining-badge">Mining</span>
+            <span class="tool-badge mining-badge">建模</span>
             <span v-if="block.result?.action" class="mining-action-label">{{ miningActionLabel(block.result.action) }}</span>
             <span class="tool-status" :class="block.status">{{ statusLabel(block.status) }}</span>
           </div>
@@ -682,30 +682,35 @@ function retryPython(code, stderr) {
 </script>
 
 <style scoped>
-.message-row { margin-bottom: var(--space-lg); }
+.message-row { margin-bottom: 22px; }
 
 /* User */
-.user-message { display: flex; justify-content: flex-end; margin: var(--space-md) 0 var(--space-lg); }
+.user-message { display: flex; justify-content: flex-end; margin: 10px 0 22px; }
 .user-bubble {
-  background: var(--brand-gradient); color: var(--on-dark-text);
-  padding: var(--space-md) var(--space-lg);
-  border-radius: 18px 18px 4px 18px;
-  font-size: var(--font-base); max-width: 70%;
-  word-break: break-word; line-height: 1.55;
-  box-shadow: var(--shadow-brand);
+  max-width: min(72%, 620px);
+  padding: 10px 14px;
+  border: 1px solid rgba(0,113,227,.1);
+  border-radius: 16px 16px 5px 16px;
+  color: #164b7d;
+  background: linear-gradient(145deg, #eaf5ff, #deefff);
+  box-shadow: 0 4px 14px rgba(0,113,227,.06);
+  word-break: break-word;
+  font-size: 12px;
   font-weight: 450;
+  line-height: 1.6;
 }
 
 /* Assistant */
-.assistant-block { margin: var(--space-xs) 0; }
+.assistant-block { margin: 4px 0; }
 .assistant-text {
-  font-size: var(--font-base); line-height: 1.75; color: var(--text-regular);
-  padding: var(--space-md) var(--space-lg);
-  background: var(--surface);
-  border: 1px solid var(--border-light);
-  border-radius: 4px 18px 18px 18px;
-  max-width: 90%;
-  box-shadow: var(--shadow-sm);
+  max-width: 820px;
+  padding: 4px 2px 9px;
+  border: 0;
+  color: #343438;
+  background: transparent;
+  box-shadow: none;
+  font-size: 12px;
+  line-height: 1.78;
 }
 .assistant-text.streaming {
   display: flex; flex-wrap: wrap; align-items: baseline;
@@ -727,8 +732,8 @@ function retryPython(code, stderr) {
 /* Thinking */
 .thinking-block { margin: var(--space-xs) 0; }
 .thinking-header {
-  display: inline-flex; align-items: center; gap: var(--space-xs); padding: var(--space-xs) var(--space-sm);
-  background: var(--border-lighter); border-radius: var(--radius-md); font-size: var(--font-sm); color: var(--text-muted);
+  display: inline-flex; align-items: center; gap: var(--space-xs); padding: 5px 9px;
+  background: #f1f1f3; border-radius: 8px; font-size: 10px; color: var(--text-muted);
   cursor: pointer; user-select: none;
 }
 .thinking-content {
@@ -738,17 +743,21 @@ function retryPython(code, stderr) {
 
 /* Tool blocks */
 .tool-block {
-  margin: var(--space-sm) 0; border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden;
-  background: var(--surface); max-width: 95%;
-  box-shadow: var(--shadow-sm);
+  max-width: 100%;
+  margin: 9px 0;
+  overflow: hidden;
+  border: 1px solid rgba(60,60,67,.11);
+  border-radius: 14px;
+  background: rgba(255,255,255,.82);
+  box-shadow: 0 6px 20px rgba(32,54,82,.055);
 }
 .tool-header {
-  display: flex; align-items: center; gap: var(--space-sm); padding: var(--space-sm) 14px;
-  background: var(--surface); border-bottom: 1px solid var(--border); font-size: var(--font-md);
+  display: flex; align-items: center; gap: var(--space-sm); padding: 9px 13px;
+  background: rgba(248,248,250,.86); border-bottom: 1px solid rgba(60,60,67,.09); font-size: 10px;
 }
 .tool-badge {
-  display: inline-block; padding: 2px var(--space-sm); border-radius: var(--radius-sm);
-  font-size: var(--font-xs); font-weight: 700; text-transform: uppercase; color: var(--surface);
+  display: inline-block; padding: 2px 7px; border-radius: 6px;
+  font-size: 8px; font-weight: 700; text-transform: uppercase; color: var(--surface);
 }
 .sql-badge { background: var(--color-warning); }
 .python-badge { background: var(--primary); }
@@ -853,8 +862,8 @@ function retryPython(code, stderr) {
 
 .tool-input { padding: 0; }
 .tool-result {
-  padding: var(--space-md) var(--space-lg);
-  font-size: var(--font-md);
+  padding: 12px 14px;
+  font-size: 11px;
   line-height: 1.6;
   color: var(--text-regular);
 }

@@ -6,6 +6,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartquery.common.BusinessException;
+import com.smartquery.common.PermissionCodes;
 import com.smartquery.entity.ArchiveChunk;
 import com.smartquery.entity.ArchiveRecord;
 import com.smartquery.entity.NodeReplay;
@@ -65,6 +66,7 @@ public class StorageGovernanceService {
     private final ArchivePayloadCodec archiveCodec;
     private final ObjectMapper objectMapper;
     private final ResourceAccessService resourceAccess;
+    private final StorageHotDataViewService hotDataViewService;
 
     public StoragePolicy policy() {
         StoragePolicy policy = policyMapper.selectById(1L);
@@ -78,7 +80,7 @@ public class StorageGovernanceService {
 
     @Transactional
     public StoragePolicy updatePolicy(Map<String, Object> request) {
-        resourceAccess.requireAdmin();
+        requireRuntimeManager();
         StoragePolicy current = policy();
         current.setOutputRetentionDays(integer(request, "outputRetentionDays",
             current.getOutputRetentionDays(), 1, 3650));
@@ -140,7 +142,7 @@ public class StorageGovernanceService {
 
     @Transactional
     public ArchiveRecord archiveOutput(Long artifactId, String reason) {
-        resourceAccess.requireAdmin();
+        requireRuntimeManager();
         return archiveOutputLocked(artifactId, boundedReason(reason), resourceAccess.currentUserId());
     }
 
@@ -151,7 +153,7 @@ public class StorageGovernanceService {
 
     @Transactional
     public ArchiveRecord archiveReplay(Long replayId, String reason) {
-        resourceAccess.requireAdmin();
+        requireRuntimeManager();
         return archiveReplayLocked(replayId, boundedReason(reason), resourceAccess.currentUserId());
     }
 
@@ -162,7 +164,7 @@ public class StorageGovernanceService {
 
     @Transactional
     public ArchiveRecord restore(Long archiveId) {
-        resourceAccess.requireAdmin();
+        requireRuntimeManager();
         ArchiveRecord archive = archiveMapper.selectForUpdate(archiveId);
         if (archive == null) throw new BusinessException(404, "归档记录不存在: " + archiveId);
         if (!ARCHIVE_READY.equals(archive.getState())) {
@@ -254,7 +256,7 @@ public class StorageGovernanceService {
     }
 
     public GovernanceDashboard dashboard() {
-        resourceAccess.requireAdmin();
+        requireRuntimeManager();
         StoragePolicy policy = policy();
         List<StorageUsage> allUsages = usageMapper.selectList(new LambdaQueryWrapper<StorageUsage>()
             .orderByDesc(StorageUsage::getHotBytes));
@@ -269,7 +271,7 @@ public class StorageGovernanceService {
             .orderByDesc(NodeReplay::getCreatedAt).last("LIMIT 50"));
         Map<String, Object> summary = summary(allUsages);
         Map<String, Object> runs = runMonitor();
-        return new GovernanceDashboard(policy, summary, usages, outputs, replays, archives,
+        return new GovernanceDashboard(policy, summary, usages, hotDataViewService.views(outputs), replays, archives,
             runs, alerts(policy, allUsages, runs));
     }
 
@@ -679,7 +681,7 @@ public class StorageGovernanceService {
     }
 
     private String boundedReason(String reason) {
-        String value = reason == null || reason.isBlank() ? "管理员手动归档" : reason.trim();
+        String value = reason == null || reason.isBlank() ? "运行治理人员手动归档" : reason.trim();
         if (value.length() > 500) throw new BusinessException(422, "归档原因不能超过500字符");
         return value;
     }
@@ -700,6 +702,9 @@ public class StorageGovernanceService {
     private int percent(long value, long total) {
         return total <= 0 ? 100 : (int) Math.min(100, Math.round((double) value * 100D / total));
     }
+    private void requireRuntimeManager() {
+        resourceAccess.requirePermission(PermissionCodes.RUNTIME_MANAGE, "需要运行治理权限");
+    }
     private long safeAdd(long first, long second) {
         try { return Math.addExact(first, second); }
         catch (ArithmeticException error) { throw new BusinessException(413, "存储容量数值溢出"); }
@@ -710,7 +715,8 @@ public class StorageGovernanceService {
     }
 
     public record GovernanceDashboard(StoragePolicy policy, Map<String, Object> summary,
-                                      List<StorageUsage> usages, List<OutputArtifact> outputs,
+                                      List<StorageUsage> usages,
+                                      List<StorageHotDataViewService.HotOutputView> outputs,
                                       List<NodeReplay> replays, List<ArchiveRecord> archives,
                                       Map<String, Object> runs, List<Map<String, Object>> alerts) {}
 }

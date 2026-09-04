@@ -10,12 +10,12 @@ import com.smartquery.logging.DiagnosticsTimer;
 import com.smartquery.mapper.*;
 import com.smartquery.orchestration.MiningOperatorRegistrationService;
 import com.smartquery.python.PythonResult;
-import com.smartquery.python.PythonSandbox;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.file.Path;
 import java.time.LocalDateTime;
@@ -123,6 +123,7 @@ public class MiningService {
 
     // ======================== Model Lifecycle ========================
 
+    @Transactional
     public MiningModel createModel(MiningModel model) {
         UserContextHolder.UserContext actor = UserContextHolder.require();
         if (model.getName() == null || model.getName().isBlank()) throw new IllegalArgumentException("模型名称不能为空");
@@ -151,7 +152,12 @@ public class MiningService {
             model.setHyperparameters("{}");
         }
         model.setFeatureColumns(normalizeToJsonArray(model.getFeatureColumns()));
+        if (model.getAlgorithm() != null && !model.getAlgorithm().isBlank()) {
+            algorithmService.applyBinding(model,
+                algorithmService.activeBinding(model.getAlgorithm(), model.getModelType()));
+        }
         miningModelMapper.insert(model);
+        miningOperatorRegistrationService.ensureOperator(model);
         logMiningEvent(model, "model_created", Map.of(
             "sourceTable", model.getSourceTable() != null ? model.getSourceTable() : "",
             "algorithm", model.getAlgorithm() != null ? model.getAlgorithm() : ""
@@ -159,8 +165,10 @@ public class MiningService {
         return model;
     }
 
+    @Transactional
     public MiningModel updateModel(Long id, MiningModel updates) {
         MiningModel existing = resourceAccess.requireModel(id);
+        boolean algorithmDefinitionChanged = updates.getAlgorithm() != null || updates.getModelType() != null;
 
         if (updates.getName() != null) existing.setName(updates.getName());
         if (updates.getDescription() != null) existing.setDescription(updates.getDescription());
@@ -199,6 +207,11 @@ public class MiningService {
         if (updates.getThresholdPolicy() != null) existing.setThresholdPolicy(updates.getThresholdPolicy());
         if (updates.getGovernancePolicy() != null) existing.setGovernancePolicy(updates.getGovernancePolicy());
 
+        if (algorithmDefinitionChanged && existing.getAlgorithm() != null && !existing.getAlgorithm().isBlank()) {
+            algorithmService.applyBinding(existing,
+                algorithmService.activeBinding(existing.getAlgorithm(), existing.getModelType()));
+        }
+
         // Recompute nextRunAt when schedule config changes
         if (Boolean.TRUE.equals(existing.getScheduleEnabled()) && existing.getScheduleCron() != null) {
             try {
@@ -211,6 +224,7 @@ public class MiningService {
         }
 
         miningModelMapper.updateById(existing);
+        miningOperatorRegistrationService.ensureOperator(existing);
 
         if (existing.getPipelineId() != null) {
             syncModelToPipeline(existing.getPipelineId(), existing);
@@ -219,6 +233,7 @@ public class MiningService {
         return existing;
     }
 
+    @Transactional
     public void deleteModel(Long id) {
         MiningModel model = resourceAccess.requireModel(id);
         if (ModelStatus.TRAINING.equals(model.getStatus())) {
@@ -235,6 +250,7 @@ public class MiningService {
         if (updated != 1) {
             throw new IllegalStateException("模型删除失败，请刷新后重试");
         }
+        miningOperatorRegistrationService.archiveOperator(model);
     }
 
     // ======================== Validation ========================
@@ -389,6 +405,7 @@ public class MiningService {
         execution.setModelId(modelId);
         execution.setTriggeredByUserId(actor.userId().toString());
         execution.setTriggerType(triggerType == null ? "manual" : triggerType);
+        execution.setExecutionKind("TRAIN");
         execution.setStatus(ModelStatus.EXEC_QUEUED);
         execution.setHyperparameters(model.getHyperparameters());
         execution.setProgressPercent(0);
@@ -440,6 +457,15 @@ public class MiningService {
         return trainModelInternal(modelId, "schedule", inputFilter, null);
     }
 
+    /** Persistent-task scheduler entry point. The task, rather than mutable model fields, is the source of truth. */
+    public MiningModel trainModelForScheduleTask(Long modelId, String inputFilter, Long scheduleTaskId) {
+        MiningModel model = requireSchedulableModel(modelId);
+        if (!ModelStatus.PUBLISHED.equals(model.getStatus()) && !ModelStatus.TRAINED.equals(model.getStatus())) {
+            throw new IllegalStateException("定期训练只允许已训练或已发布模型");
+        }
+        return trainModelInternal(modelId, "schedule", inputFilter, null, null, false, scheduleTaskId);
+    }
+
     private MiningModel trainModelInternal(Long modelId, String triggerType, String inputFilter,
                                            UserContextHolder.UserContext triggerActor) {
         return trainModelInternal(modelId, triggerType, inputFilter, triggerActor, null, false);
@@ -448,6 +474,14 @@ public class MiningService {
     private MiningModel trainModelInternal(Long modelId, String triggerType, String inputFilter,
                                            UserContextHolder.UserContext triggerActor,
                                            Long preparedExecutionId, boolean statusAlreadyClaimed) {
+        return trainModelInternal(modelId, triggerType, inputFilter, triggerActor,
+            preparedExecutionId, statusAlreadyClaimed, null);
+    }
+
+    private MiningModel trainModelInternal(Long modelId, String triggerType, String inputFilter,
+                                           UserContextHolder.UserContext triggerActor,
+                                           Long preparedExecutionId, boolean statusAlreadyClaimed,
+                                           Long scheduleTaskId) {
         MiningModel model = miningModelMapper.selectById(modelId);
         if (model == null) throw new IllegalArgumentException("模型不存在: " + modelId);
 
@@ -493,10 +527,12 @@ public class MiningService {
         }
         if (preparedExecutionId == null) {
             execution.setModelId(modelId);
+            execution.setScheduleTaskId(scheduleTaskId);
             if (triggerActor != null && triggerActor.userId() != null) {
                 execution.setTriggeredByUserId(triggerActor.userId().toString());
             }
             execution.setTriggerType(triggerType != null ? triggerType : "manual");
+            execution.setExecutionKind("TRAIN");
             execution.setHyperparameters(model.getHyperparameters());
             execution.setCancelRequested(false);
             execution.setStatus(ModelStatus.EXEC_RUNNING);
@@ -551,6 +587,10 @@ public class MiningService {
             }
             Long dsId = model.getDataSourceId();
             Map<String, Object> request = buildTrainingRequest(model, execution, inputFilter);
+            execution.setAlgorithmId(model.getAlgorithm());
+            execution.setAlgorithmVersion(model.getAlgorithmVersion());
+            execution.setAlgorithmSnapshot(model.getAlgorithmSnapshot());
+            modelExecutionMapper.updateById(execution);
             MiningRuntimeClient.RuntimeResult runtime = DiagnosticsTimer.timedSupply(
                 "mining.train",
                 () -> miningRuntimeClient.execute("train", request, dsId, pythonTimeoutMs,
@@ -606,10 +646,11 @@ public class MiningService {
                 model.setEvaluationStatus("pending");
                 model.setApprovedByUserId(null);
                 model.setApprovedAt(null);
-                GovernanceReport governance = evaluateGovernance(model);
-                model.setEvaluationStatus(governance.passed() ? "evaluation_passed"
-                    : governance.qualityPassed() && governance.approvalRequired()
-                        ? "pending_approval" : "evaluation_failed");
+                GovernanceReport governance = evaluateGovernance(model, false);
+                // Machine-learning quality is an automated operator gate. Human review happens
+                // later on the immutable ML operator version, not on the composed-model queue.
+                model.setEvaluationStatus(governance.qualityPassed()
+                    ? "evaluation_passed" : "evaluation_failed");
 
                 if (model.getPipelineId() == null) {
                     MiningPipeline autoPipeline = createAutoPipeline(model);
@@ -869,14 +910,23 @@ public class MiningService {
     // ======================== Lifecycle ========================
 
     public GovernanceReport governanceReport(Long modelId) {
+        if (resourceAccess.hasPermission(com.smartquery.common.PermissionCodes.MODEL_REVIEW)) {
+            MiningModel model = miningModelMapper.selectById(modelId);
+            if (model == null || Integer.valueOf(1).equals(model.getDeleted())) {
+                throw new com.smartquery.common.BusinessException(404, "模型不存在: " + modelId);
+            }
+            return evaluateGovernance(model);
+        }
         return evaluateGovernance(resourceAccess.requireModel(modelId));
     }
 
     public MiningModel approveEvaluation(Long modelId) {
-        if (!resourceAccess.isAdmin()) {
-            throw new com.smartquery.common.BusinessException(403, "仅管理员可审批模型发布");
+        resourceAccess.requirePermission(com.smartquery.common.PermissionCodes.MODEL_REVIEW,
+            "无权限审批模型版本");
+        MiningModel model = miningModelMapper.selectById(modelId);
+        if (model == null || Integer.valueOf(1).equals(model.getDeleted())) {
+            throw new com.smartquery.common.BusinessException(404, "模型不存在: " + modelId);
         }
-        MiningModel model = resourceAccess.requireModel(modelId);
         GovernanceReport report = evaluateGovernance(model, false);
         if (!report.qualityPassed()) {
             throw new IllegalStateException("模型存在质量硬失败，不能审批: " + String.join("；", report.hardFailures()));
@@ -903,29 +953,37 @@ public class MiningService {
         if (!Integer.valueOf(MiningRuntimeClient.ARTIFACT_SCHEMA_VERSION).equals(model.getArtifactSchemaVersion())) {
             failures.add("模型制品版本不是当前 Pipeline 版本");
         }
-        String mode = validationMode(model);
-        if (!Set.of("cv", "oos", "temporal").contains(mode)) {
-            failures.add("必须使用 cv、独立 OOS 或时间外验证，普通随机切分不能发布");
+        String modelType = model.getModelType() == null ? "" : model.getModelType().toLowerCase(Locale.ROOT);
+        boolean supervised = modelType.contains("classification") || modelType.contains("regression");
+        if (supervised) {
+            String mode = validationMode(model);
+            if (!Set.of("cv", "oos", "temporal").contains(mode)) {
+                failures.add("必须使用 cv、独立 OOS 或时间外验证，普通随机切分不能发布");
+            }
+            if ("oos".equals(mode) && !Boolean.TRUE.equals(validation.get("oos_independent"))) {
+                failures.add("OOS 不是独立数据快照");
+            }
+            if (Boolean.TRUE.equals(policy.get("requireGroupIsolation"))
+                    && !Boolean.TRUE.equals(validation.get("group_isolation"))) {
+                failures.add("治理策略要求按实体分组隔离，但训练未配置 group_columns");
+            }
+            if ("temporal".equals(mode)) {
+                int windows = validation.get("rolling_windows") instanceof List<?> list ? list.size() : 0;
+                int minimumWindows = intPolicy(policy, "minTemporalWindows", 3);
+                evaluated.put("temporalWindows", windows);
+                if (windows < minimumWindows) {
+                    failures.add("时间滚动回测窗口不足: " + windows + " < " + minimumWindows);
+                }
+            }
+            int testRows = number(validation.get("holdout_test_size"), 0).intValue();
+            int minimumTestRows = intPolicy(policy, "minTestRows", 20);
+            evaluated.put("testRows", testRows);
+            if (testRows < minimumTestRows) {
+                failures.add("独立测试样本量不足: " + testRows + " < " + minimumTestRows);
+            }
         }
-        if ("oos".equals(mode) && !Boolean.TRUE.equals(validation.get("oos_independent"))) {
-            failures.add("OOS 不是独立数据快照");
-        }
-        if (Boolean.TRUE.equals(policy.get("requireGroupIsolation"))
-                && !Boolean.TRUE.equals(validation.get("group_isolation"))) {
-            failures.add("治理策略要求按实体分组隔离，但训练未配置 group_columns");
-        }
-        if ("temporal".equals(mode)) {
-            int windows = validation.get("rolling_windows") instanceof List<?> list ? list.size() : 0;
-            int minimumWindows = intPolicy(policy, "minTemporalWindows", 3);
-            evaluated.put("temporalWindows", windows);
-            if (windows < minimumWindows) failures.add("时间滚动回测窗口不足: " + windows + " < " + minimumWindows);
-        }
-        int testRows = number(validation.get("holdout_test_size"), 0).intValue();
-        int minimumTestRows = intPolicy(policy, "minTestRows", 20);
-        evaluated.put("testRows", testRows);
-        if (testRows < minimumTestRows) failures.add("独立测试样本量不足: " + testRows + " < " + minimumTestRows);
 
-        if (model.getModelType() != null && model.getModelType().contains("classification")) {
+        if (modelType.contains("classification")) {
             double balanced = number(metrics.get("test_balanced_accuracy"), -1).doubleValue();
             double minBalanced = doublePolicy(policy, "minBalancedAccuracy", 0.55);
             evaluated.put("balancedAccuracy", balanced);
@@ -950,11 +1008,37 @@ public class MiningService {
                 if (brier.doubleValue() > maxBrier) failures.add(String.format(
                     "概率校准误差过高(Brier): %.4f > %.4f", brier.doubleValue(), maxBrier));
             }
-        } else if (model.getModelType() != null && model.getModelType().contains("regression")) {
+        } else if (modelType.contains("regression")) {
             double r2 = number(metrics.get("test_r2"), -999).doubleValue();
             double minR2 = doublePolicy(policy, "minR2", 0.0);
             evaluated.put("testR2", r2);
             if (r2 < minR2) failures.add(String.format("测试 R² 未达标: %.4f < %.4f", r2, minR2));
+        } else if (modelType.contains("clustering")) {
+            int clusters = number(metrics.get("n_clusters"), 0).intValue();
+            double silhouette = number(metrics.get("silhouette_score"), -1).doubleValue();
+            int minimumClusters = intPolicy(policy, "minClusters", 2);
+            double minimumSilhouette = doublePolicy(policy, "minSilhouetteScore", 0.20);
+            evaluated.put("clusters", clusters);
+            evaluated.put("silhouetteScore", silhouette);
+            if (clusters < minimumClusters) failures.add("有效聚类数量不足: " + clusters + " < " + minimumClusters);
+            if (silhouette < minimumSilhouette) failures.add(String.format(
+                "聚类轮廓系数未达标: %.4f < %.4f", silhouette, minimumSilhouette));
+        } else if (modelType.contains("anomaly")) {
+            Map<String, Object> sizes = parseJsonMap(objectMapper.valueToTree(
+                metrics.getOrDefault("cluster_sizes", Map.of())).toString());
+            int anomalyRows = number(sizes.get("-1"), 0).intValue();
+            int normalRows = number(sizes.get("1"), 0).intValue();
+            int totalRows = anomalyRows + normalRows;
+            double anomalyRate = totalRows == 0 ? 0 : (double) anomalyRows / totalRows;
+            double minimumRate = doublePolicy(policy, "minAnomalyRate", 0.001);
+            double maximumRate = doublePolicy(policy, "maxAnomalyRate", 0.50);
+            evaluated.put("anomalyRows", anomalyRows);
+            evaluated.put("anomalyRate", anomalyRate);
+            if (totalRows < intPolicy(policy, "minEvaluationRows", minTrainingRows)) {
+                failures.add("异常检测评估样本量不足: " + totalRows);
+            }
+            if (anomalyRate < minimumRate || anomalyRate > maximumRate) failures.add(String.format(
+                "异常占比超出治理范围: %.4f（要求 %.4f - %.4f）", anomalyRate, minimumRate, maximumRate));
         }
 
         if (metrics.get("overfitting_gap") instanceof Number gap
@@ -977,7 +1061,7 @@ public class MiningService {
         boolean requireApproval = Boolean.TRUE.equals(policy.get("requireApproval"));
         boolean qualityPassed = failures.isEmpty();
         if (checkApproval && requireApproval && !"approved".equals(model.getEvaluationStatus())) {
-            failures.add("治理策略要求管理员人工审批");
+            failures.add("治理策略要求具备模型审批权限的人员人工审批");
         }
         return new GovernanceReport(failures.isEmpty(), qualityPassed, requireApproval,
             List.copyOf(failures), List.copyOf(warnings), Map.copyOf(evaluated));
@@ -1013,7 +1097,9 @@ public class MiningService {
             throw new IllegalStateException("旧版模型制品不能发布，请先执行制品迁移（重新训练）");
         }
 
-        GovernanceReport governance = evaluateGovernance(model);
+        // The immutable ML operator version receives the human approval. At this stage only the
+        // objective training/artifact quality gates are enforced, avoiding duplicate approvals.
+        GovernanceReport governance = evaluateGovernance(model, false);
         if (!governance.passed()) {
             throw new IllegalStateException("模型发布治理检查失败（force 不能绕过硬门槛）: "
                 + String.join("；", governance.hardFailures()));
@@ -1155,10 +1241,59 @@ public class MiningService {
     /** Trusted scheduler entry point; prediction records remain attached to the owned model. */
     public Map<String, Object> batchPredictForSchedule(Long modelId) {
         MiningModel model = requireScheduledModel(modelId);
+        return runScheduledPrediction(model, null, null, null, null);
+    }
+
+    /** Persistent-task scheduler entry point with immutable execution-to-task provenance. */
+    public Map<String, Object> batchPredictForScheduleTask(Long modelId, Long scheduleTaskId,
+                                                           String inputTable, String resultTable,
+                                                           String inputFilter) {
+        MiningModel model = requireSchedulableModel(modelId);
+        return runScheduledPrediction(model, scheduleTaskId, inputTable, resultTable, inputFilter);
+    }
+
+    private Map<String, Object> runScheduledPrediction(MiningModel model, Long scheduleTaskId,
+                                                        String inputTable, String resultTable,
+                                                        String inputFilter) {
         if (!ModelStatus.PUBLISHED.equals(model.getStatus())) {
             throw new IllegalStateException("定时预测只允许已发布模型");
         }
-        return predictionService.batchPredict(modelId);
+        ModelExecution execution = new ModelExecution();
+        execution.setModelId(model.getId());
+        execution.setScheduleTaskId(scheduleTaskId);
+        execution.setTriggerType("schedule");
+        execution.setExecutionKind("PREDICT");
+        execution.setStatus(ModelStatus.EXEC_RUNNING);
+        execution.setProgressPercent(10);
+        execution.setCurrentStage("PREDICTING");
+        execution.setProgressMessage("正式定时预测正在执行");
+        execution.setCancelRequested(false);
+        execution.setStartedAt(LocalDateTime.now());
+        modelExecutionMapper.insert(execution);
+        try {
+            Map<String, Object> result = predictionService.batchPredictForSchedule(
+                model.getId(), execution.getId(), inputTable, resultTable, inputFilter);
+            execution.setStatus(ModelStatus.EXEC_SUCCESS);
+            execution.setProgressPercent(100);
+            execution.setCurrentStage("COMPLETED");
+            execution.setProgressMessage("正式定时预测执行完成");
+            execution.setOutputSummary(objectMapper.writeValueAsString(result));
+            Object producedResultTable = result.get("resultTable");
+            if (producedResultTable != null) execution.setArtifactPath(String.valueOf(producedResultTable));
+            execution.setFinishedAt(LocalDateTime.now());
+            modelExecutionMapper.updateById(execution);
+            return result;
+        } catch (Exception error) {
+            execution.setStatus(ModelStatus.FAILED);
+            execution.setProgressPercent(100);
+            execution.setCurrentStage("FAILED");
+            execution.setProgressMessage("正式定时预测失败");
+            execution.setExecutionLog(error.getMessage());
+            execution.setFinishedAt(LocalDateTime.now());
+            modelExecutionMapper.updateById(execution);
+            if (error instanceof RuntimeException runtime) throw runtime;
+            throw new RuntimeException("定时预测结果保存失败", error);
+        }
     }
 
     public Map<String, Object> batchPredictWithOverrides(Long modelId, String inputTable, String resultTable, String inputFilter) {
@@ -1254,6 +1389,10 @@ public class MiningService {
             if (cfg.targetColumn() != null && !cfg.targetColumn().isBlank()) model.setTargetColumn(cfg.targetColumn());
             if (cfg.modelType() != null) model.setModelType(cfg.modelType());
             if (cfg.algorithm() != null) model.setAlgorithm(cfg.algorithm());
+            if (model.getAlgorithm() != null && !model.getAlgorithm().isBlank()) {
+                algorithmService.applyBinding(model,
+                    algorithmService.activeBinding(model.getAlgorithm(), model.getModelType()));
+            }
             if (!cfg.hyperparams().isEmpty()) model.setHyperparameters(toJson(cfg.hyperparams()));
             if (!cfg.preprocessing().isEmpty()) model.setPreprocessing(toJson(cfg.preprocessing()));
             if (cfg.transforms() != null && !cfg.transforms().isEmpty()) {
@@ -1303,6 +1442,11 @@ public class MiningService {
         model.setModelPath(execution.getArtifactPath());
         model.setArtifactSha256(execution.getArtifactSha256());
         model.setArtifactSchemaVersion(execution.getArtifactSchemaVersion());
+        if (execution.getAlgorithmSnapshot() != null && !execution.getAlgorithmSnapshot().isBlank()) {
+            model.setAlgorithm(execution.getAlgorithmId());
+            model.setAlgorithmVersion(execution.getAlgorithmVersion());
+            model.setAlgorithmSnapshot(execution.getAlgorithmSnapshot());
+        }
         model.setStatus(ModelStatus.TRAINED);
         miningModelMapper.updateById(model);
 
@@ -1346,12 +1490,13 @@ public class MiningService {
             com.smartquery.common.IdentifierValidator.validateFilter(resolvedFilter);
         }
 
-        Algorithm algorithm = algorithmService.getByAlgorithmId(model.getAlgorithm());
-        if (algorithm == null || algorithm.getPythonCodeTemplate() == null
-                || algorithm.getPythonCodeTemplate().isBlank()) {
-            throw new IllegalStateException("算法配置缺失: " + model.getAlgorithm());
+        boolean missingSnapshot = model.getAlgorithmSnapshot() == null || model.getAlgorithmSnapshot().isBlank();
+        AlgorithmService.AlgorithmBinding algorithm = algorithmService.resolveModelBinding(model);
+        algorithmService.applyBinding(model, algorithm);
+        if (missingSnapshot) {
+            // Upgrade legacy models once so subsequent retraining no longer depends on a mutable catalog row.
+            miningModelMapper.updateById(model);
         }
-        PythonSandbox.validate(algorithm.getPythonCodeTemplate());
 
         int nextVersion = model.getVersion() == null ? 1 : model.getVersion() + 1;
         String artifactName = "model_" + model.getId() + "_v" + nextVersion
@@ -1371,8 +1516,9 @@ public class MiningService {
         request.put("modelId", model.getId());
         request.put("modelVersion", nextVersion);
         request.put("modelType", model.getModelType());
-        request.put("algorithmId", model.getAlgorithm());
-        request.put("algorithmCode", algorithm.getPythonCodeTemplate());
+        request.put("algorithmId", algorithm.algorithmId());
+        request.put("algorithmVersion", algorithm.versionNo());
+        request.put("algorithmCode", algorithm.pythonCodeTemplate());
         request.put("sourceTable", model.getSourceTable());
         request.put("featureColumns", parseJsonList(model.getFeatureColumns()));
         request.put("targetColumn", model.getTargetColumn());
@@ -1739,6 +1885,14 @@ public class MiningService {
         }
         if (!Boolean.TRUE.equals(model.getScheduleEnabled())) {
             throw new IllegalStateException("模型未启用定时任务: " + modelId);
+        }
+        return model;
+    }
+
+    private MiningModel requireSchedulableModel(Long modelId) {
+        MiningModel model = miningModelMapper.selectById(modelId);
+        if (model == null || Integer.valueOf(1).equals(model.getDeleted())) {
+            throw new IllegalArgumentException("模型不存在: " + modelId);
         }
         return model;
     }

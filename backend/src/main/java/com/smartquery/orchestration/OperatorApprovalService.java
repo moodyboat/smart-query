@@ -3,8 +3,8 @@ package com.smartquery.orchestration;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.smartquery.common.BusinessException;
+import com.smartquery.common.PermissionCodes;
 import com.smartquery.common.UserContextHolder;
-import com.smartquery.common.UserRoles;
 import com.smartquery.entity.OperatorDefinition;
 import com.smartquery.entity.OperatorVersion;
 import com.smartquery.entity.OperatorVersionApproval;
@@ -19,6 +19,7 @@ import com.smartquery.mapper.OutputDraftMapper;
 import com.smartquery.mapper.PolicyDraftMapper;
 import com.smartquery.mapper.RuleDraftMapper;
 import com.smartquery.mapper.UserMapper;
+import com.smartquery.service.RoleService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -45,6 +46,7 @@ public class OperatorApprovalService {
     private final PolicyDraftMapper policyDraftMapper;
     private final UserMapper userMapper;
     private final VersionCatalogService versionCatalogService;
+    private final RoleService roleService;
 
     public List<ApprovalView> list(String requestedStatus) {
         String status = normalizedStatus(requestedStatus);
@@ -61,7 +63,7 @@ public class OperatorApprovalService {
                 operator.getOperatorType(), version.getVersionNo(), version.getStatus(),
                 version.getImplementationType(), version.getContentHash(),
                 userLabel(approval.getRequestedByUserId()), userLabel(approval.getReviewerUserId()),
-                canReview() && !currentUserId().equals(approval.getRequestedByUserId())
+                canReview() && (isAdmin() || !currentUserId().equals(approval.getRequestedByUserId()))
                     && "SUBMITTED".equals(approval.getStatus())));
         }
         return List.copyOf(result);
@@ -145,7 +147,7 @@ public class OperatorApprovalService {
         if (!"SUBMITTED".equals(approval.getStatus())) {
             throw new BusinessException(409, "审批单已经处理: " + approval.getStatus());
         }
-        if (currentUserId().equals(approval.getRequestedByUserId())) {
+        if (currentUserId().equals(approval.getRequestedByUserId()) && !isAdmin()) {
             throw new BusinessException(403, "版本创建人与审批人必须分离，不能自审");
         }
         OperatorVersion version = versionMapper.selectById(approval.getOperatorVersionId());
@@ -307,15 +309,14 @@ public class OperatorApprovalService {
     }
 
     private void requireReviewer() {
-        if (!canReview()) throw new BusinessException(403, "仅算子审批员或管理员可以审批版本");
+        if (!canReview()) throw new BusinessException(403, "需要算子版本审批权限");
     }
 
     private boolean canReview() {
-        String role = UserContextHolder.require().role();
-        return UserRoles.ADMIN.equals(role) || UserRoles.OPERATOR_REVIEWER.equals(role);
+        return roleService.currentUserHas(PermissionCodes.OPERATOR_REVIEW);
     }
 
-    private boolean isAdmin() { return UserRoles.ADMIN.equals(UserContextHolder.require().role()); }
+    private boolean isAdmin() { return roleService.currentUserHas(PermissionCodes.RESOURCE_ACCESS_ALL); }
     private String currentUserId() { return UserContextHolder.require().userId().toString(); }
 
     private String required(Map<String, Object> body, String field) {

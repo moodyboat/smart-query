@@ -230,7 +230,7 @@
           <div class="preview-stat"><span class="ps-value">{{ previewResult.featureCount }}</span><span class="ps-label">特征数</span></div>
         </div>
         <div v-if="previewResult.metrics" class="preview-section">
-          <div class="preview-section-title">模型指标</div>
+          <div class="preview-section-title">评估指标</div>
           <div class="preview-metrics-grid">
             <div v-for="(val, key) in previewResult.metrics" :key="key" class="preview-metric-card">
               <span class="pm-value">{{ typeof val === 'number' ? (val < 10 ? val.toFixed(4) : (val * 100).toFixed(1) + '%') : val }}</span>
@@ -323,8 +323,8 @@ const NODE_TYPE_LABELS = {
   preprocessing: '数据预处理',
   fill_missing: '填充缺失值',
   feature_engineering: '特征工程',
-  training: '模型训练',
-  evaluation: '模型评估',
+  training: '制品训练',
+  evaluation: '效果评估',
   output: '输出写入'
 }
 

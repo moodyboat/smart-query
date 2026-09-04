@@ -32,8 +32,10 @@ class OutputQueryCursorCodecTest {
     @Test
     void tamperingOrCrossQueryReuseIsRejected() {
         String cursor = codec.encode(8L, 42, "query-a");
-        char replacement = cursor.charAt(cursor.length() - 1) == 'A' ? 'B' : 'A';
-        String tampered = cursor.substring(0, cursor.length() - 1) + replacement;
+        int signatureStart = cursor.indexOf('.') + 1;
+        char replacement = cursor.charAt(signatureStart) == 'A' ? 'B' : 'A';
+        String tampered = cursor.substring(0, signatureStart) + replacement
+            + cursor.substring(signatureStart + 1);
 
         assertThrows(BusinessException.class, () -> codec.decode(tampered, 8L, "query-a"));
         assertThrows(BusinessException.class, () -> codec.decode(cursor, 8L, "query-b"));

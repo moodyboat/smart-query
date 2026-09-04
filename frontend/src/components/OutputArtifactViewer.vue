@@ -7,10 +7,14 @@
           {{ kindLabel }} · {{ view.totalRows }} 条结果 · 运行 #{{ view.artifact.runId }}
         </div>
       </div>
-      <el-tag :type="kindTagType" effect="plain">{{ rendererLabel }}</el-tag>
+      <div class="viewer-actions">
+        <el-tag :type="kindTagType" effect="plain">{{ rendererLabel }}</el-tag>
+        <el-button v-if="canDownload" size="small" type="primary" :loading="downloading" @click="download">下载文件</el-button>
+      </div>
     </div>
 
-    <el-tabs v-if="isChart" v-model="chartTab" class="chart-tabs">
+    <ComposedOutputView v-if="isDashboard" :view="view" />
+    <el-tabs v-else-if="isChart" v-model="chartTab" class="chart-tabs">
       <el-tab-pane :label="chartPageLimited ? '图表（当前页）' : '图表'" name="chart">
         <EChartsRenderer :title="title" :option="chartOption" />
       </el-tab-pane>
@@ -26,8 +30,11 @@
 
 <script setup>
 import { computed, defineComponent, h, ref } from 'vue'
-import { ElTable, ElTableColumn, ElTag } from 'element-plus'
+import { ElMessage, ElTable, ElTableColumn, ElTag } from 'element-plus'
 import EChartsRenderer from './EChartsRenderer.vue'
+import ComposedOutputView from './ComposedOutputView.vue'
+import { downloadOutputArtifact } from '../api/orchestration.js'
+import { buildSafeChartOption } from '../utils/outputCharts.js'
 
 const props = defineProps({
   view: { type: Object, default: null },
@@ -37,15 +44,44 @@ const props = defineProps({
 defineEmits(['sort-change'])
 
 const chartTab = ref('chart')
+const downloading = ref(false)
 const isChart = computed(() => props.view?.artifact?.outputKind === 'CHART')
+const isDashboard = computed(() => props.view?.artifact?.outputKind === 'DASHBOARD')
+const isExport = computed(() => String(props.view?.artifact?.outputKind || '').startsWith('EXPORT_'))
+const canDownload = computed(() => isExport.value && Number.isFinite(Number(props.view?.artifact?.id)))
 const chartPageLimited = computed(() => props.serverDriven
   && Number(props.view?.totalRows || 0) > Number(props.view?.rows?.length || 0))
 const title = computed(() => props.view?.contentSpec?.title || props.view?.contentSpec?.sheetName || '流程输出')
 const kindLabel = computed(() => ({
-  LEAD: '线索', CHART: '图表', TABLE: '数据表', EXCEL: 'Excel 表格视图'
+  LEAD: '线索', CHART: '图表', TABLE: '数据表', EXCEL: 'Excel 表格视图',
+  DASHBOARD: '组合页面', ARTIFACT: '运行制品', TEMP_RESULT: '临时结果',
+  EXPORT_XLSX: 'XLSX 文件', EXPORT_CSV: 'CSV 文件', EXPORT_PDF: 'PDF 文件',
+  EXPORT_JSON: 'JSON 文件', EXPORT_PNG: 'PNG 图片'
 }[props.view?.artifact?.outputKind] || props.view?.artifact?.outputKind))
 const rendererLabel = computed(() => props.view?.summary?.renderer || kindLabel.value)
-const kindTagType = computed(() => ({ LEAD: 'danger', CHART: 'success', TABLE: 'info', EXCEL: 'primary' }[props.view?.artifact?.outputKind] || 'info'))
+const kindTagType = computed(() => ({ LEAD: 'danger', CHART: 'success', TABLE: 'info', EXCEL: 'primary',
+  DASHBOARD: 'success', ARTIFACT: 'warning', TEMP_RESULT: 'warning', EXPORT_XLSX: 'primary',
+  EXPORT_CSV: 'primary', EXPORT_PDF: 'primary', EXPORT_JSON: 'primary', EXPORT_PNG: 'primary'
+}[props.view?.artifact?.outputKind] || 'info'))
+
+async function download() {
+  downloading.value = true
+  try {
+    const { blob } = await downloadOutputArtifact(props.view.artifact.id)
+    const kind = String(props.view.artifact.outputKind).replace('EXPORT_', '').toLowerCase()
+    const fileName = props.view.contentSpec?.fileName || `result.${kind}`
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = fileName
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+  } catch (error) {
+    ElMessage.error(error.message || '文件导出失败')
+  } finally { downloading.value = false }
+}
 
 function specField(raw) {
   return typeof raw === 'string' ? raw : raw?.field
@@ -71,26 +107,7 @@ const chartOption = computed(() => {
   const spec = props.view?.contentSpec || {}
   if (spec.echartsOption) return spec.echartsOption
   const rows = props.view?.rows?.map(row => row.display) || []
-  const dimensions = (Array.isArray(spec.dimensions) ? spec.dimensions : [spec.dimension]).filter(Boolean).map(specField)
-  const measures = (Array.isArray(spec.measures) ? spec.measures : [spec.measure]).filter(Boolean).map(specField)
-  const dimension = dimensions[0] || props.view?.columns?.[0]?.field
-  const valueFields = measures.length ? measures : (props.view?.columns || []).slice(1).map(column => column.field)
-  const type = String(spec.chartType || 'bar').toLowerCase()
-  if (type === 'pie') {
-    return {
-      tooltip: { trigger: 'item' }, legend: { type: 'scroll', bottom: 0 },
-      series: [{ type: 'pie', radius: ['35%', '68%'], data: rows.map(row => ({
-        name: readPath(row, dimension), value: Number(readPath(row, valueFields[0])) || 0
-      })) }]
-    }
-  }
-  return {
-    tooltip: { trigger: 'axis' }, legend: { top: 6 }, grid: { left: 48, right: 24, top: 48, bottom: 48 },
-    xAxis: { type: 'category', data: rows.map(row => readPath(row, dimension)) },
-    yAxis: { type: 'value' },
-    series: valueFields.map(field => ({ name: field, type: ['line', 'scatter'].includes(type) ? type : 'bar',
-      data: rows.map(row => readPath(row, field)) }))
-  }
+  return buildSafeChartOption(spec, rows, props.view?.columns || [])
 })
 
 function formatCell(value, format) {
@@ -162,6 +179,7 @@ const ResultGrid = defineComponent({
 <style scoped>
 .artifact-viewer { min-width: 0; height: 100%; display: flex; flex-direction: column; }
 .viewer-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.viewer-actions { display:flex;align-items:center;gap:8px; }
 .viewer-title { font-size: var(--font-xl); font-weight: 700; color: var(--text-primary); }
 .viewer-meta { margin-top: 4px; color: var(--text-muted); font-size: var(--font-sm); }
 .chart-tabs { flex: 1; min-height: 0; }

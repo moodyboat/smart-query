@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartquery.common.BusinessException;
+import com.smartquery.common.PermissionCodes;
 import com.smartquery.entity.DependencyRequest;
 import com.smartquery.entity.DraftDependency;
 import com.smartquery.entity.RuntimeBuildJob;
@@ -54,7 +55,7 @@ public class RuntimeBuildJobService {
     public List<RuntimeBuildJob> list(String status) {
         LambdaQueryWrapper<RuntimeBuildJob> query = new LambdaQueryWrapper<RuntimeBuildJob>()
             .orderByDesc(RuntimeBuildJob::getCreatedAt);
-        if (!resourceAccessService.isAdmin()) {
+        if (!resourceAccessService.hasPermission(PermissionCodes.RUNTIME_MANAGE)) {
             query.eq(RuntimeBuildJob::getRequestedByUserId, resourceAccessService.currentUserId());
         }
         if (status != null && !status.isBlank()) query.eq(RuntimeBuildJob::getStatus, status);
@@ -208,7 +209,7 @@ public class RuntimeBuildJobService {
 
     @Transactional
     public RuntimeBuildJob retry(Long jobId) {
-        resourceAccessService.requireAdmin();
+        resourceAccessService.requirePermission(PermissionCodes.RUNTIME_MANAGE, "需要运行治理权限");
         RuntimeBuildJob job = require(jobId);
         if (!RuntimeBuildStatus.FAILED.equals(job.getStatus())) {
             throw new BusinessException(409, "只有最终失败的构建任务可以重试");
@@ -225,7 +226,7 @@ public class RuntimeBuildJobService {
 
     @Transactional
     public RuntimeBuildJob cancel(Long jobId) {
-        resourceAccessService.requireAdmin();
+        resourceAccessService.requirePermission(PermissionCodes.RUNTIME_MANAGE, "需要运行治理权限");
         RuntimeBuildJob job = require(jobId);
         if (!List.of(RuntimeBuildStatus.QUEUED, RuntimeBuildStatus.RETRYABLE).contains(job.getStatus())) {
             throw new BusinessException(409, "只有等待中的构建任务可以取消");

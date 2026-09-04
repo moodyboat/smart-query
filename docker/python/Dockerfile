@@ -9,7 +9,7 @@ ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
     PIP_DEFAULT_TIMEOUT=600 \
     PIP_RETRIES=10
 
-# 挖掘算法依赖：覆盖 AlgorithmRegistry 的 9 种算法（sklearn 系 + xgboost + lightgbm）
+# 挖掘算法依赖：覆盖内置算法目录（sklearn 系 + xgboost + lightgbm）
 # + 数据处理（pandas/numpy）+ 绘图（matplotlib）+ DB 访问（pymysql/sqlalchemy）+ 模型序列化（joblib）
 COPY requirements.txt /tmp/requirements.txt
 RUN --mount=type=cache,id=smart-query-python-pip,target=/root/.cache/pip \

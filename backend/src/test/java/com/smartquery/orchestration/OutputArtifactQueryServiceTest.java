@@ -3,10 +3,11 @@ package com.smartquery.orchestration;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartquery.common.BusinessException;
 import com.smartquery.common.UserContextHolder;
-import com.smartquery.common.UserRoles;
+import com.smartquery.support.TestRoles;
 import com.smartquery.entity.OutputArtifact;
 import com.smartquery.mapper.OutputArtifactMapper;
 import com.smartquery.mapper.OutputArtifactRowMapper;
+import com.smartquery.service.RoleService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -38,7 +39,7 @@ class OutputArtifactQueryServiceTest {
     private final OutputQueryCursorCodec cursorCodec = mock(OutputQueryCursorCodec.class);
     private final OutputArtifactQueryService service = new OutputArtifactQueryService(
         artifacts, rows, jdbcTemplate, objectMapper,
-        new ContentHashService(objectMapper), cursorCodec);
+        new ContentHashService(objectMapper), cursorCodec, mock(RoleService.class));
 
     @AfterEach
     void clearUser() {
@@ -47,7 +48,7 @@ class OutputArtifactQueryServiceTest {
 
     @Test
     void legacyArtifactKeepsReadingButRejectsFieldFiltering() {
-        UserContextHolder.set(new UserContextHolder.UserContext(7L, "owner", UserRoles.USER));
+        UserContextHolder.set(new UserContextHolder.UserContext(7L, "owner", TestRoles.USER));
         OutputArtifact artifact = artifact("LEGACY");
         when(artifacts.selectById(3L)).thenReturn(artifact);
 
@@ -61,7 +62,7 @@ class OutputArtifactQueryServiceTest {
 
     @Test
     void fieldOutsideServerCatalogIsRejectedBeforeSqlComposition() throws Exception {
-        UserContextHolder.set(new UserContextHolder.UserContext(7L, "owner", UserRoles.USER));
+        UserContextHolder.set(new UserContextHolder.UserContext(7L, "owner", TestRoles.USER));
         when(artifacts.selectById(3L)).thenReturn(artifact("READY"));
         doAnswer(invocation -> {
             RowCallbackHandler handler = invocation.getArgument(1);
@@ -85,7 +86,7 @@ class OutputArtifactQueryServiceTest {
     @Test
     @SuppressWarnings("unchecked")
     void validTextFilterUsesFullTextAndBoundEscapedValue() throws Exception {
-        UserContextHolder.set(new UserContextHolder.UserContext(7L, "owner", UserRoles.USER));
+        UserContextHolder.set(new UserContextHolder.UserContext(7L, "owner", TestRoles.USER));
         when(artifacts.selectById(3L)).thenReturn(artifact("READY"));
         doAnswer(invocation -> {
             RowCallbackHandler handler = invocation.getArgument(1);

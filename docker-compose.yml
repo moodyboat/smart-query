@@ -66,6 +66,7 @@ services:
       SPRING_DATASOURCE_PASSWORD: ${DM_PASSWORD:-Dameng123}
       SPRING_DATASOURCE_DRIVER: dm.jdbc.driver.DmDriver
       SPRING_DATASOURCE_INIT_SQL: ${DM_SCHEMA:-SET SCHEMA SMART_QUERY}
+      TZ: Asia/Shanghai
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       GLM_API_KEY: ${GLM_API_KEY:-}

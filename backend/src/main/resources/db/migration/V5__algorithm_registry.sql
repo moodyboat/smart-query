@@ -10,6 +10,8 @@ CREATE TABLE IF NOT EXISTS sq_algorithm (
     params_schema JSON NOT NULL COMMENT '参数定义数组',
     python_code_template TEXT NOT NULL COMMENT 'Python训练代码模板',
     is_builtin TINYINT NOT NULL DEFAULT 0 COMMENT '1=内置 0=自定义',
+    enabled TINYINT NOT NULL DEFAULT 1 COMMENT '1=启用 0=停用',
+    version_no INT NOT NULL DEFAULT 1 COMMENT '算法定义版本',
     icon VARCHAR(20) DEFAULT NULL COMMENT '图标emoji',
     category VARCHAR(50) DEFAULT NULL COMMENT '分类(用于面板分组)',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,

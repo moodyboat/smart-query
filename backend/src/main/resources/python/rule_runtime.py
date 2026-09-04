@@ -81,8 +81,14 @@ def _enrich_test_records(records, prefix):
         if not isinstance(item, dict):
             raise ValueError("each input record must be an object")
         record = dict(item)
-        record.setdefault("__sourceRefs", [f"{prefix}:{index + 1}"])
-        record.setdefault("__sourceSnapshots", [dict(item)])
+        # Test cases are authored by an LLM and must never be allowed to forge
+        # platform lineage. Always replace reserved fields with the canonical
+        # runtime representation before invoking the user rule.
+        source_snapshot = {
+            key: value for key, value in item.items() if not key.startswith("__")
+        }
+        record["__sourceRefs"] = [f"{prefix}:{index + 1}"]
+        record["__sourceSnapshots"] = [source_snapshot]
         enriched.append(record)
     return enriched
 
@@ -109,6 +115,25 @@ def _without_platform_fields(records):
     ]
 
 
+def _expected_records(expected):
+    # Accept both the documented records array and the common
+    # {"records": [...]} shape returned by compatible chat models.
+    if isinstance(expected, dict):
+        expected = expected.get("records")
+    if expected is None:
+        return None
+    if not isinstance(expected, list):
+        raise ValueError("test expected must be a records array or an object containing records")
+    normalized = []
+    for index, record in enumerate(expected):
+        if not isinstance(record, dict):
+            raise ValueError(f"expected record #{index + 1} is not an object")
+        normalized.append({
+            key: value for key, value in record.items() if not key.startswith("__")
+        })
+    return normalized
+
+
 def _run_tests(function, tests, max_records):
     reports = []
     if not isinstance(tests, list) or len(tests) < 2:
@@ -122,7 +147,7 @@ def _run_tests(function, tests, max_records):
         parameters = test.get("parameters") or {}
         actual = function(records, parameters)
         _validate_output(actual, max_records)
-        expected = test.get("expected")
+        expected = _expected_records(test.get("expected"))
         comparable = _without_platform_fields(actual)
         passed = expected is None or comparable == expected
         report = {"name": test.get("name", f"test-{index + 1}"), "passed": passed}

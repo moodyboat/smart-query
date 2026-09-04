@@ -18,9 +18,28 @@ public class Algorithm {
     private String modelTypes;
     private String paramsSchema;
     private String pythonCodeTemplate;
+    private String aliases;
     private Integer isBuiltin;
+    private Integer enabled;
+    private Integer versionNo;
     private String icon;
     private String category;
+
+    /** Governance-only, calculated from active models and pipelines. */
+    @TableField(exist = false)
+    private Long modelReferenceCount;
+
+    @TableField(exist = false)
+    private Long publishedModelReferenceCount;
+
+    @TableField(exist = false)
+    private Long pipelineReferenceCount;
+
+    @TableField(exist = false)
+    private Long totalReferenceCount;
+
+    @TableField(exist = false)
+    private Boolean deletable;
 
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createdAt;

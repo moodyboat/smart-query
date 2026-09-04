@@ -1,8 +1,8 @@
 <template>
   <div class="algorithm-palette">
     <div class="palette-title">
-      <span>算法库</span>
-      <el-button size="small" text type="primary" @click="$emit('manageAlgorithms')">查看 / 管理</el-button>
+      <span>训练方法</span>
+      <el-button size="small" text type="primary" @click="$emit('manageAlgorithms')">管理算法</el-button>
     </div>
     <div v-for="group in algorithmGroups" :key="group.category" class="palette-group">
       <div class="palette-group-title" @click="toggleGroup(group.category)">
@@ -93,7 +93,7 @@ const baseNodes = [
   { type: 'preprocessing', icon: '🔧', name: '预处理' },
   { type: 'fill_missing', icon: '🩹', name: '填充缺失值' },
   { type: 'feature_engineering', icon: '⚙️', name: '特征工程' },
-  { type: 'evaluation', icon: '📊', name: '模型评估' },
+  { type: 'evaluation', icon: '📊', name: '效果评估' },
   { type: 'output', icon: '💾', name: '输出写入' }
 ]
 </script>

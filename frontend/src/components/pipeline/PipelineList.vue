@@ -1,19 +1,15 @@
 <template>
   <div class="pipeline-list-header">
     <div class="list-header-left">
-      <div v-if="props.repositoryMode" class="list-heading">
-        <strong>模型草稿</strong>
-        <small>保存未发布的训练设计；点击草稿进入模型流程编排</small>
-      </div>
-      <span class="list-count">{{ filteredPipelines.length }} 个{{ props.repositoryMode ? '模型草稿' : '流程' }}</span>
-      <el-select v-model="filterDsId" placeholder="全部数据源" size="small" clearable style="width: 160px">
+      <span class="list-count">{{ filteredPipelines.length }} 个算子训练流程</span>
+      <el-select v-model="filterDsId" placeholder="流水线数据源筛选" aria-label="流水线数据源筛选" size="small" clearable style="width: 190px">
         <el-option v-for="ds in dataSources" :key="ds.id" :label="ds.name" :value="ds.id" />
       </el-select>
     </div>
-    <el-button type="primary" size="small" @click="$emit('create')">{{ props.repositoryMode ? '新建模型流水线' : '新建流程' }}</el-button>
+    <el-button type="primary" size="small" @click="$emit('create')">新建算子训练流程</el-button>
   </div>
   <div v-if="filteredPipelines.length === 0" class="empty-pipelines">
-    <p>{{ props.repositoryMode ? '暂无模型草稿，点击「新建模型流水线」开始编排训练过程' : '暂无流程，点击「新建流程」开始编排数据分析管道' }}</p>
+    <p>暂无算子训练流程</p>
   </div>
   <div class="pipeline-grid">
     <div v-for="p in filteredPipelines" :key="p.id" class="pipeline-card" @click="openPrimary(p)">
@@ -38,7 +34,7 @@
         <span v-if="parsedNodes(p).length > 5" class="mini-more">+{{ parsedNodes(p).length - 5 }}</span>
       </div>
       <div class="pipeline-card-actions">
-        <el-button size="small" text type="primary" @click.stop="openPrimary(p)">{{ props.unifiedDag ? '进入流程编排' : props.repositoryMode ? '进入模型编排' : '编辑' }}</el-button>
+        <el-button size="small" text type="primary" @click.stop="openPrimary(p)">{{ props.unifiedDag ? '进入流程编排' : '编辑' }}</el-button>
         <el-button v-if="props.unifiedDag" size="small" text @click.stop="emit('open', p)">编辑训练草稿</el-button>
         <el-button size="small" text type="success" @click.stop="$emit('runFromCard', p)" :disabled="p.status === PIPELINE_STATUS.RUNNING">
           {{ p.status === PIPELINE_STATUS.RUNNING ? '运行中' : '运行' }}
@@ -148,6 +144,7 @@ function nodeLabel(node) {
 }
 
 .pipeline-card {
+  min-width: 0;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
@@ -195,9 +192,21 @@ function nodeLabel(node) {
 
 .pipeline-card-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-xs);
   margin-top: var(--space-sm);
   border-top: 1px solid var(--border-light);
   padding-top: var(--space-sm);
+}
+.pipeline-card-actions :deep(.el-button) { margin-left: 0; }
+
+@media (max-width: 1180px) {
+  .pipeline-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); }
+  .pipeline-card-actions :deep(.el-button) { padding-inline: 7px; }
+}
+
+@media (max-width: 680px) {
+  .pipeline-grid { grid-template-columns: 1fr; }
+  .pipeline-card-meta { flex-wrap: wrap; gap: var(--space-xs) var(--space-sm); }
 }
 </style>

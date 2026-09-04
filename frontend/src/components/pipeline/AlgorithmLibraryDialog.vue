@@ -2,7 +2,7 @@
   <el-dialog
     :model-value="visible"
     title="算法模板库"
-    width="920px"
+    width="min(920px, 94vw)"
     destroy-on-close
     @update:model-value="emit('update:visible', $event)"
   >
@@ -22,8 +22,9 @@
               :class="{ active: selected?.id === algorithm.id }"
               @click="selectAlgorithm(algorithm)"
             >
-              <span>{{ algorithm.icon || '🤖' }}</span>
+              <span class="algorithm-icon">{{ algorithm.icon || '🤖' }}</span>
               <span class="algorithm-item-name">{{ algorithm.name }}</span>
+              <el-tag v-if="algorithm.enabled === 0" size="small" type="info">停用</el-tag>
               <el-tag v-if="algorithm.isBuiltin" size="small" type="info">内置</el-tag>
             </button>
           </div>
@@ -31,7 +32,7 @@
       </aside>
 
       <main class="algorithm-detail">
-        <el-empty v-if="!selected && !editing" description="请选择一个算法查看实现" />
+        <el-empty v-if="!selected && !editing" description="请选择一个算法查看详情" />
 
         <el-form v-else-if="editing" :model="form" label-width="96px" size="small">
           <el-alert type="warning" :closable="false" style="margin-bottom: 14px">
@@ -49,7 +50,7 @@
               </el-select>
             </el-form-item>
           </div>
-          <el-form-item label="模型类型" required>
+          <el-form-item label="任务类型" required>
             <el-checkbox-group v-model="form.modelTypesList">
               <el-checkbox v-for="type in modelTypes" :key="type.id" :label="type.id">{{ type.name }}</el-checkbox>
             </el-checkbox-group>
@@ -76,9 +77,14 @@
             </div>
             <div v-if="isAdmin">
               <el-button v-if="selected.isBuiltin" size="small" type="primary" @click="startClone">复制为可编辑模板</el-button>
-              <template v-else>
+              <el-button size="small" :type="selected.enabled === 0 ? 'success' : 'warning'" plain @click="toggleStatus">
+                {{ selected.enabled === 0 ? '启用' : '停用' }}
+              </el-button>
+              <template v-if="!selected.isBuiltin">
                 <el-button size="small" @click="startEdit">修改</el-button>
-                <el-button size="small" type="danger" plain @click="remove">删除</el-button>
+                <el-tooltip :content="deleteHint" placement="top">
+                  <span><el-button size="small" type="danger" plain :disabled="!selected.deletable" @click="remove">删除</el-button></span>
+                </el-tooltip>
               </template>
             </div>
           </div>
@@ -86,6 +92,10 @@
           <el-descriptions :column="2" border size="small">
             <el-descriptions-item label="分类">{{ selected.category || '其他' }}</el-descriptions-item>
             <el-descriptions-item label="类型">{{ modelTypeNames(selected.modelTypes) }}</el-descriptions-item>
+            <el-descriptions-item label="版本">版本 {{ selected.versionNo || 1 }}</el-descriptions-item>
+            <el-descriptions-item label="状态">{{ selected.enabled === 0 ? '已停用' : '已启用' }}</el-descriptions-item>
+            <el-descriptions-item v-if="isAdmin" label="算子引用">{{ selected.modelReferenceCount || 0 }}（已提交版本 {{ selected.publishedModelReferenceCount || 0 }}）</el-descriptions-item>
+            <el-descriptions-item v-if="isAdmin" label="流程引用">{{ selected.pipelineReferenceCount || 0 }}</el-descriptions-item>
           </el-descriptions>
           <h4>训练超参数</h4>
           <el-table :data="parameterRows" size="small" border max-height="210">
@@ -106,7 +116,7 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { createAlgorithm, updateAlgorithm, deleteAlgorithm } from '../../api'
+import { createAlgorithm, updateAlgorithm, deleteAlgorithm, setAlgorithmEnabled } from '../../api'
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
@@ -151,11 +161,24 @@ function parseJson(value, fallback) {
   try { return JSON.parse(value) } catch { return fallback }
 }
 
-const parameterRows = computed(() => parseJson(selected.value?.paramsSchema, []).map(p => ({
-  ...p,
-  defaultValue: p.defaultValue == null ? '-' : Array.isArray(p.defaultValue) ? p.defaultValue.join(', ') : String(p.defaultValue),
-  range: p.options?.join(', ') || (p.min != null || p.max != null ? `${p.min ?? '-∞'} ～ ${p.max ?? '+∞'}` : '-')
-})))
+const parameterRows = computed(() => {
+  const parsed = parseJson(selected.value?.paramsSchema, [])
+  const rows = Array.isArray(parsed)
+    ? parsed
+    : Object.entries(parsed?.properties || {}).map(([key, value]) => ({ key, label: key, ...value }))
+  return rows.map(p => ({
+    ...p,
+    defaultValue: p.defaultValue == null && p.default == null ? '-' : String(p.defaultValue ?? p.default),
+    range: p.options?.join(', ') || p.enum?.join(', ') || (p.min != null || p.max != null ? `${p.min ?? '-∞'} ～ ${p.max ?? '+∞'}` : '-')
+  }))
+})
+
+const deleteHint = computed(() => {
+  if (!selected.value) return ''
+  if (selected.value.enabled !== 0) return '删除前需先停用'
+  if ((selected.value.totalReferenceCount || 0) > 0) return `仍被 ${selected.value.totalReferenceCount} 个算子或流程引用`
+  return '删除该自定义算法'
+})
 
 watch(() => props.visible, visible => {
   if (!visible) return
@@ -192,7 +215,7 @@ function cancelEdit() { editing.value = false; if (!selected.value) selected.val
 
 async function save() {
   if (!form.algorithmId.trim() || !form.name.trim() || !form.modelTypesList.length) {
-    ElMessage.warning('请填写算法标识、名称和模型类型'); return
+    ElMessage.warning('请填写算法标识、名称和任务类型'); return
   }
   try {
     JSON.parse(form.paramsSchema)
@@ -217,13 +240,31 @@ async function save() {
 
 async function remove() {
   try {
-    await ElMessageBox.confirm(`确定删除自定义算法“${selected.value.name}”吗？`, '删除算法模板', { type: 'warning' })
+    if (!selected.value?.deletable) return
+    await ElMessageBox.confirm(`确定删除已停用且无引用的自定义算法“${selected.value.name}”吗？`, '删除算法模板', { type: 'warning' })
     await deleteAlgorithm(selected.value.id)
     const deletedId = selected.value.id
     selected.value = props.algorithms.find(a => a.id !== deletedId) || null
     emit('refresh')
     ElMessage.success('算法模板已删除')
   } catch (error) { if (error !== 'cancel' && error !== 'close') ElMessage.error(error.message || '删除失败') }
+}
+
+async function toggleStatus() {
+  if (!selected.value) return
+  const enabled = selected.value.enabled === 0
+  const action = enabled ? '启用' : '停用'
+  try {
+    await ElMessageBox.confirm(
+      enabled
+        ? `启用“${selected.value.name}”后将恢复为新建算子可选项。`
+        : `停用“${selected.value.name}”后新建算子不再可选，历史训练快照不受影响。`,
+      `${action}算法`, { type: enabled ? 'info' : 'warning' }
+    )
+    selected.value = await setAlgorithmEnabled(selected.value.id, enabled)
+    emit('refresh', selected.value.id)
+    ElMessage.success(`算法已${action}`)
+  } catch (error) { if (error !== 'cancel' && error !== 'close') ElMessage.error(error.message || `${action}失败`) }
 }
 </script>
 
@@ -233,6 +274,7 @@ async function remove() {
 .library-actions { display: flex; gap: 8px; margin-bottom: 12px; }
 .group-title { padding: 9px 8px 5px; color: var(--text-muted); font-size: 12px; font-weight: 600; }
 .algorithm-item { width: 100%; border: 0; background: transparent; display: flex; align-items: center; gap: 8px; padding: 9px; border-radius: 7px; cursor: pointer; color: var(--text-primary); text-align: left; }
+.algorithm-icon { width:24px;height:24px;display:grid;place-items:center;flex:none;border-radius:6px;background:#f4f7fb;font-size:14px;line-height:1; }
 .algorithm-item:hover, .algorithm-item.active { background: var(--hover); }
 .algorithm-item.active { color: var(--brand-primary); }
 .algorithm-item-name { flex: 1; }
@@ -247,4 +289,11 @@ async function remove() {
 .code-input :deep(textarea) { font-family: Consolas, monospace; line-height: 1.45; }
 .field-help { color: var(--text-muted); font-size: 12px; margin-top: 4px; }
 .detail-actions { display: flex; justify-content: flex-end; gap: 8px; }
+@media (max-width: 760px) {
+  .library-layout { grid-template-columns: 1fr; min-height: 0; }
+  .algorithm-list { border-right: 0; border-bottom: 1px solid var(--border); padding: 0 0 12px; }
+  .algorithm-list :deep(.el-scrollbar) { height: 220px !important; }
+  .form-grid { grid-template-columns: 1fr; }
+  .detail-header { gap: 12px; flex-wrap: wrap; }
+}
 </style>

@@ -37,6 +37,7 @@ public class OutputAuthoringService {
     private final VersionCatalogService versionCatalogService;
     private final ContentHashService contentHashService;
     private final OutputSpecSandbox outputSpecSandbox;
+    private final OutputCapabilityRegistryService outputCapabilityRegistryService;
     private final OutputOperatorExecutor outputOperatorExecutor;
     private final RuntimeProfileService runtimeProfileService;
     private final DependencyCenterService dependencyCenterService;
@@ -77,8 +78,15 @@ public class OutputAuthoringService {
             previous = object(version.getImplementationPayload(), "已有输出工件");
         }
         Map<String, Object> requestedInputSchema = map(body.getOrDefault("inputSchema", Map.of()));
+        List<String> selectedCapabilities = strings(body.get("selectedCapabilityCodes"));
+        if (!selectedCapabilities.isEmpty()) {
+            java.util.Set<String> enabled = outputCapabilityRegistryService.list(false).stream()
+                .map(OutputCapabilityRegistryService.CapabilityView::code).collect(java.util.stream.Collectors.toSet());
+            List<String> invalid = selectedCapabilities.stream().filter(code -> !enabled.contains(code)).toList();
+            if (!invalid.isEmpty()) throw new BusinessException(422, "选择了未启用的输出能力: " + String.join(", ", invalid));
+        }
         String prompt = authoringPrompt(instruction, conversationContext(conversationId), previous,
-            requestedInputSchema, map(body.get("sampleFields")));
+            requestedInputSchema, map(body.get("sampleFields")), selectedCapabilities);
         String model = text(body.get("model"));
         String response = llmService.chat(model == null ? defaultModel : model,
             List.of(Map.of("role", "system", "content", "你是数据产品的输出算子设计师，只返回严格JSON。"),
@@ -87,9 +95,17 @@ public class OutputAuthoringService {
         validateGenerated(artifact);
 
         Map<String, Object> rawSpec = new LinkedHashMap<>();
-        rawSpec.put("outputKind", String.valueOf(artifact.get("outputKind")).toUpperCase(Locale.ROOT));
-        rawSpec.put("contentSpec", map(artifact.get("contentSpec")));
-        rawSpec.put("dependencies", runtimeProfileService.requirements(artifact));
+        if (artifact.get("targets") instanceof List<?>) {
+            rawSpec.put("specVersion", 2);
+            rawSpec.put("transformations", artifact.getOrDefault("transformations", List.of()));
+            rawSpec.put("targets", artifact.get("targets"));
+        } else {
+            // Accept an older model response and let the sandbox migrate it to one V2 target.
+            rawSpec.put("outputKind", String.valueOf(artifact.get("outputKind")).toUpperCase(Locale.ROOT));
+            rawSpec.put("contentSpec", map(artifact.get("contentSpec")));
+        }
+        // Built-in output capabilities are pinned by the registry. The LLM cannot add packages.
+        rawSpec.put("dependencies", List.of());
         OutputDraft draft = new OutputDraft();
         draft.setOperatorId(operatorId);
         draft.setConversationId(conversationId);
@@ -136,7 +152,7 @@ public class OutputAuthoringService {
             report.put("contentHash", shaped.contentHash());
             report.put("renderer", shaped.renderer());
             report.put("warnings", shaped.warnings());
-            report.put("sandbox", "DECLARATIVE_OUTPUT_V1");
+            report.put("sandbox", "COMPOSABLE_OUTPUT_V2");
             report.put("runtimeProfileId", profile.getId());
             report.put("runtimeType", profile.getRuntimeType());
             report.put("imageDigest", profile.getImageDigest());
@@ -159,7 +175,7 @@ public class OutputAuthoringService {
         } catch (RuntimeException error) {
             draft.setStatus("SHAPING_FAILED");
             draft.setShapingReport(json(Map.of("valid", false, "error", errorText(error),
-                "sandbox", "DECLARATIVE_OUTPUT_V1")));
+                "sandbox", "COMPOSABLE_OUTPUT_V2")));
         }
         outputDraftMapper.updateById(draft);
         return draft;
@@ -269,11 +285,42 @@ public class OutputAuthoringService {
 
     private Map<String, Object> previewModel(Map<String, Object> shaped, OperatorExecutionResult executed,
                                              List<Map<String, Object>> records) {
-        Map<String, Object> spec = map(shaped.get("contentSpec"));
         List<Map<String, Object>> rows = new ArrayList<>();
         for (int index = 0; index < records.size(); index++) {
             rows.add(outputSpecSandbox.viewRow(records.get(index), index));
         }
+        if ("2".equals(String.valueOf(shaped.get("specVersion")))) {
+            List<Map<String, Object>> views = new ArrayList<>();
+            for (Map<String, Object> artifact : maps(executed.output().get("artifacts"))) {
+                Map<String, Object> spec = map(artifact.get("contentSpec"));
+                Map<String, Object> view = new LinkedHashMap<>();
+                view.put("targetId", artifact.get("targetId"));
+                view.put("capabilityCode", artifact.get("capabilityCode"));
+                view.put("capabilityType", artifact.get("capabilityType"));
+                view.put("outputKind", artifact.get("kind"));
+                view.put("contentSpec", spec);
+                view.put("renderer", artifact.get("renderer"));
+                view.put("recordCount", records.size());
+                view.put("columns", spec.getOrDefault("columns", List.of()));
+                view.put("rows", rows);
+                views.add(Map.copyOf(view));
+            }
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("specVersion", 2);
+            result.put("recordCount", records.size());
+            result.put("leadCount", executed.leads().size());
+            result.put("targetViews", List.copyOf(views));
+            if (!views.isEmpty()) {
+                Map<String, Object> first = views.get(0);
+                result.put("outputKind", first.get("outputKind"));
+                result.put("contentSpec", first.get("contentSpec"));
+                result.put("renderer", first.get("renderer"));
+                result.put("columns", first.get("columns"));
+                result.put("rows", rows);
+            }
+            return result;
+        }
+        Map<String, Object> spec = map(shaped.get("contentSpec"));
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("outputKind", shaped.get("outputKind"));
         result.put("contentSpec", spec);
@@ -347,17 +394,26 @@ public class OutputAuthoringService {
     }
 
     private String authoringPrompt(String instruction, String history, Map<String, Object> previous,
-                                   Map<String, Object> inputSchema, Map<String, Object> sampleFields) {
+                                   Map<String, Object> inputSchema, Map<String, Object> sampleFields,
+                                   List<String> selectedCapabilities) {
+        List<Map<String, Object>> capabilities = outputCapabilityRegistryService.list(false).stream()
+            .map(item -> Map.<String, Object>of("code", item.code(), "type", item.capabilityType(),
+                "name", item.name(), "implementationType", item.implementationType()))
+            .toList();
         return """
-            根据对话生成或修改一个声明式输出算子草稿。输出算子只定义怎样展示流程结果，不得包含代码、
-            SQL、HTML、URL、模板、formatter或任意可执行配置。支持：LEAD线索视图、CHART图表、
-            TABLE数据表、EXCEL类Excel网格视图（仅界面展示，不生成下载文件）。所有表格行必须允许展开
-            查看对应原始输入和判断依据，不得隐藏血缘。
+            根据对话生成或修改一个“可组合结果出口”草稿。安全、权限、审计和血缘由平台强制执行。
+            转换可选，输出目标至少一个；展示、持久化、导出和业务动作彼此独立并可同时选择多个。
+            不得包含代码、SQL、HTML、URL、模板、formatter、任意ECharts option或dependencies。
 
-            只返回JSON对象，字段必须为：outputKind、contentSpec、inputSchema、outputSchema、
-            parameterSchema、explanation、dependencies（可选）。dependencies只能声明前端渲染器依赖，
-            元素格式为type=FRONTEND_RENDERER、name、version。TABLE/EXCEL的contentSpec必须有columns；CHART必须有
-            chartType、dimensions、measures；LEAD可有leadPolicy。columns元素使用field/title/format/width。
+            只返回JSON对象，字段必须为：specVersion（固定2）、transformations、targets、inputSchema、
+            outputSchema、parameterSchema、explanation。每个transformations/targets元素只包含id、
+            capabilityCode、config；capabilityCode只能来自平台目录。表格和导出的columns元素使用
+            field/title/format/width；图表config使用chartType、dimensions、measures；组合页面使用
+            metric/chart/table/filter/container可信widgets；线索使用leadPolicy。排序使用sort数组，元素仅
+            field和direction（asc/desc）。展示与导出不要相互替代。
+
+            当前已启用的数据库能力目录：%s
+            用户明确选择的能力（非空时必须全部使用，仍可按指令补充其他目标）：%s
 
             对话上下文：
             %s
@@ -365,7 +421,8 @@ public class OutputAuthoringService {
             上一版本工件：%s
             输入Schema：%s
             可用样例字段：%s
-            """.formatted(history, instruction, json(previous), json(inputSchema), json(sampleFields));
+            """.formatted(json(capabilities), json(selectedCapabilities), history, instruction,
+                json(previous), json(inputSchema), json(sampleFields));
     }
 
     private String conversationContext(Long conversationId) {
@@ -392,12 +449,20 @@ public class OutputAuthoringService {
     }
 
     private void validateGenerated(Map<String, Object> artifact) {
-        String kind = required(artifact, "outputKind").toUpperCase(Locale.ROOT);
-        if (!List.of("LEAD", "CHART", "TABLE", "EXCEL").contains(kind)) {
-            throw new BusinessException(422, "LLM输出工件类型不受支持");
-        }
-        if (!(artifact.get("contentSpec") instanceof Map<?, ?>)) {
-            throw new BusinessException(422, "LLM输出工件contentSpec必须是对象");
+        if (artifact.get("targets") instanceof List<?> targets) {
+            if (targets.isEmpty()) throw new BusinessException(422, "LLM输出工件至少需要一个target");
+            if (targets.size() > 20) throw new BusinessException(422, "LLM输出目标不能超过20个");
+            if (artifact.get("transformations") != null && !(artifact.get("transformations") instanceof List<?>)) {
+                throw new BusinessException(422, "LLM输出工件transformations必须是数组");
+            }
+        } else {
+            String kind = required(artifact, "outputKind").toUpperCase(Locale.ROOT);
+            if (!List.of("LEAD", "CHART", "TABLE", "EXCEL").contains(kind)) {
+                throw new BusinessException(422, "LLM输出工件类型不受支持");
+            }
+            if (!(artifact.get("contentSpec") instanceof Map<?, ?>)) {
+                throw new BusinessException(422, "LLM输出工件contentSpec必须是对象");
+            }
         }
         if (json(artifact).getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 50_000) {
             throw new BusinessException(422, "LLM输出工件过大");
@@ -434,6 +499,17 @@ public class OutputAuthoringService {
         Map<String, Object> result = new LinkedHashMap<>();
         if (raw instanceof Map<?, ?> map) map.forEach((key, value) -> result.put(String.valueOf(key), value));
         return result;
+    }
+    private List<Map<String, Object>> maps(Object raw) {
+        if (!(raw instanceof List<?> list)) return List.of();
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Object value : list) if (value instanceof Map<?, ?>) result.add(map(value));
+        return result;
+    }
+    private List<String> strings(Object raw) {
+        if (!(raw instanceof List<?> list)) return List.of();
+        return list.stream().map(String::valueOf).map(String::trim).filter(value -> !value.isEmpty())
+            .distinct().toList();
     }
     private Map<String, Object> object(String value, String name) {
         try { return objectMapper.readValue(value, new TypeReference<>() {}); }

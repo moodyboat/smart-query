@@ -26,8 +26,7 @@ export function useModelActions(mining) {
   const publishModel_ref = ref(null)
   const publishLoading = ref(false)
   const publishConfig = ref({
-    predictInputTable: '', predictInputFilter: '', predictResultTable: '',
-    scheduleEnabled: false, scheduleCron: '0 6 * * *', scheduleMode: 'predict'
+    predictInputTable: '', predictInputFilter: '', predictResultTable: ''
   })
   const publishTableOptions = ref([])
 
@@ -144,10 +143,7 @@ export function useModelActions(mining) {
     publishConfig.value = {
       predictInputTable: model.predictInputTable || model.sourceTable || '',
       predictInputFilter: model.predictInputFilter || '',
-      predictResultTable: model.predictResultTable || '',
-      scheduleEnabled: !!model.scheduleEnabled,
-      scheduleCron: model.scheduleCron || '0 6 * * *',
-      scheduleMode: model.scheduleMode || 'predict'
+      predictResultTable: model.predictResultTable || ''
     }
     showPublishDialog.value = true
     if (model.dataSourceId) {
@@ -162,12 +158,7 @@ export function useModelActions(mining) {
       predictInputTable: publishConfig.value.predictInputTable || null,
       predictInputFilter: publishConfig.value.predictInputFilter || null,
       predictResultTable: publishConfig.value.predictResultTable || null,
-      scheduleEnabled: publishConfig.value.scheduleEnabled,
-      ...(force ? { force: true } : {}),
-      ...(publishConfig.value.scheduleEnabled ? {
-        scheduleCron: publishConfig.value.scheduleCron,
-        scheduleMode: publishConfig.value.scheduleMode
-      } : {})
+      ...(force ? { force: true } : {})
     }
   }
 
@@ -179,9 +170,7 @@ export function useModelActions(mining) {
       mining.updateModelInList(model)
       if (detailModel?.value?.id === publishModel_ref.value.id) detailModel.value = model
       showPublishDialog.value = false
-      ElMessage.success(publishConfig.value.scheduleEnabled
-        ? '模型已发布，机器学习算子版本已提交审批，定时调度已启用'
-        : '模型已发布，机器学习算子版本已提交审批')
+      ElMessage.success('机器学习算子版本已提交审批；审批通过后进入统一算子库，调度请在穿透式监控模型中配置')
     } catch (e) {
       if (e.message && e.message.includes('过拟合')) {
         try {
@@ -194,7 +183,7 @@ export function useModelActions(mining) {
           mining.updateModelInList(model)
           if (detailModel?.value?.id === publishModel_ref.value.id) detailModel.value = model
           showPublishDialog.value = false
-          ElMessage.success('模型已发布，机器学习算子版本已提交审批')
+          ElMessage.success('机器学习算子版本已提交审批；审批通过后进入统一算子库')
         } catch { /* user cancelled */ }
       } else {
         ElMessage.error('发布失败: ' + (e.message || '未知错误'))
@@ -209,14 +198,14 @@ export function useModelActions(mining) {
     try {
       await ElMessageBox.confirm(
         `确定将「${model?.name || id}」下线？${model?.scheduleEnabled ? '定时调度将同时停止。' : ''}`,
-        '下线模型',
+        '下线机器学习算子',
         { confirmButtonText: '确定下线', cancelButtonText: '取消', type: 'warning' }
       )
     } catch { return }
     try {
       const result = await offlineMiningModel(id)
       mining.updateModelInList(result)
-      ElMessage.success('模型已下线')
+      ElMessage.success('机器学习算子已下线')
       if (detailModel?.value?.id === id) detailModel.value = result
     } catch (e) {
       ElMessage.error(e.message || '操作失败')
@@ -232,24 +221,24 @@ export function useModelActions(mining) {
     const isPublished = model.status === MODEL_STATUS.PUBLISHED
     const isTraining = model.status === MODEL_STATUS.TRAINING
 
-    let confirmMessage = `确定删除模型「${name}」吗？`
+    let confirmMessage = `确定删除机器学习算子「${name}」吗？`
     let useForceDelete = false
 
     if (isGhostModel(model)) {
-      confirmMessage += `\n\n👻 这是一个幽灵模型（文件丢失或状态异常），将使用强制删除。`
+      confirmMessage += `\n\n该算子的训练制品缺失或状态异常，将使用强制删除。`
       useForceDelete = true
     } else if (isPublished) {
-      confirmMessage += `\n\n⚠️ 这是已发布模型，需要使用强制删除。`
+      confirmMessage += `\n\n这是已发布算子，需要使用强制删除。`
       useForceDelete = true
     } else if (isTraining) {
-      confirmMessage += `\n\n⚠️ 这是训练中的模型，需要使用强制删除。`
+      confirmMessage += `\n\n这是训练中的算子，需要使用强制删除。`
       useForceDelete = true
     } else {
       confirmMessage += `此操作不可撤销。`
     }
 
     try {
-      await ElMessageBox.confirm(confirmMessage, '删除模型', {
+      await ElMessageBox.confirm(confirmMessage, '删除机器学习算子', {
         confirmButtonText: useForceDelete ? '强制删除' : '删除',
         cancelButtonText: '取消',
         type: useForceDelete ? 'error' : 'warning'

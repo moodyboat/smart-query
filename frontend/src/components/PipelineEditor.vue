@@ -7,7 +7,7 @@
       :data-sources="props.dataSources"
       :repository-mode="props.repositoryMode"
       :unified-dag="props.unifiedDag"
-      :is-admin="userStore.isAdmin"
+      :is-admin="userStore.canManageAlgorithms"
       @create="createPipeline"
       @open="openPipeline"
       @run-from-card="runFromCard"
@@ -22,6 +22,7 @@
         :source-type="editingPipeline.sourceType"
         :linked-model="linkedModel"
         :sync-status="syncStatus"
+        :operator-mode="!props.repositoryMode"
         :saving="saving"
         :running="running"
         :can-run="canRun"
@@ -71,7 +72,7 @@
           <el-tag :type="(lastRunResult.status === MODEL_STATUS.TRAINED || lastRunResult.status === EXECUTION_STATUS.SUCCESS) ? 'success' : 'danger'" size="small">
             {{ (lastRunResult.status === MODEL_STATUS.TRAINED || lastRunResult.status === EXECUTION_STATUS.SUCCESS) ? '训练成功' : '训练失败' }}
           </el-tag>
-          <span v-if="lastRunResult.modelName" style="font-size: var(--font-sm);color:var(--text-muted);margin-left:8px">模型: {{ lastRunResult.modelName }} (#{{ lastRunResult.modelId }})</span>
+          <span v-if="lastRunResult.modelName" style="font-size: var(--font-sm);color:var(--text-muted);margin-left:8px">训练制品: {{ lastRunResult.modelName }} (#{{ lastRunResult.modelId }})</span>
           <el-button size="small" text @click="lastRunResult = null" style="margin-left: auto">关闭</el-button>
         </div>
         <div v-if="lastRunResult.metrics" class="results-metrics">
@@ -174,7 +175,7 @@
         :categories="categories"
         :model-types="modelTypes"
         :model-type-names="modelTypeNames"
-        :is-admin="userStore.isAdmin"
+        :is-admin="userStore.canManageAlgorithms"
         :initial-algorithm="libraryAlgorithm"
         @refresh="refreshAlgorithmLibrary"
       />
@@ -309,8 +310,8 @@ const stepTypes = [
   { type: NODE_TYPES.PREPROCESSING, icon: '🔧', title: '数据预处理', desc: '缺失值处理(含逐列策略)、编码、缩放' },
   { type: NODE_TYPES.FILL_MISSING, icon: '🩹', title: '高级缺失值处理', desc: '按列精细配置缺失值填充（预处理节点的增强版）' },
   { type: NODE_TYPES.FEATURE_ENGINEERING, icon: '⚙️', title: '特征工程', desc: '特征选择和目标定义' },
-  { type: NODE_TYPES.TRAINING, icon: '🧠', title: '模型训练', desc: '选择算法并训练模型' },
-  { type: NODE_TYPES.EVALUATION, icon: '📊', title: '模型评估', desc: '评估指标和验证策略' },
+  { type: NODE_TYPES.TRAINING, icon: '🧠', title: '制品训练', desc: '选择算法并生成训练制品' },
+  { type: NODE_TYPES.EVALUATION, icon: '📊', title: '效果评估', desc: '评估指标和验证策略' },
   { type: NODE_TYPES.OUTPUT, icon: '💾', title: '输出写入', desc: '将预测结果写入数据库表' }
 ]
 
@@ -819,7 +820,7 @@ async function runPipeline() {
     const metrics = parseMetrics(result.metrics)
     const primaryKey = result.modelType === 'regression' ? 'test_r2' : 'test_accuracy'
     const primary = metrics[primaryKey] ?? metrics[primaryKey.replace('test_', '')]
-    const parts = [`模型 #${result.modelId}`]
+    const parts = [`训练制品 #${result.modelId}`]
     if (primary != null) parts.push(`${metricLabel(primaryKey)} ${primary < 10 ? primary.toFixed(4) : (primary * 100).toFixed(1) + '%'}`)
     if (metrics.overfitting_gap != null) parts.push(`过拟合差距 ${(metrics.overfitting_gap * 100).toFixed(1)}%`)
     ElMessage.success(`流程执行完成 — ${parts.join('，')}`)

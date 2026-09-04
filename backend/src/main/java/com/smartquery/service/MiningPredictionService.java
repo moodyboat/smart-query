@@ -60,12 +60,12 @@ public class MiningPredictionService {
             throw new RuntimeException("预测执行失败: " + truncateLog(error, predictErrorTruncation));
         }
 
-        Map<String, Object> parsed = runtime.payload();
+        Map<String, Object> parsed = new LinkedHashMap<>(runtime.payload());
         if (!(parsed.get("predictions") instanceof List<?>)) {
             throw new IllegalStateException("Python 预测结果缺少 predictions");
         }
         String batchId = "single_" + System.currentTimeMillis();
-        savePredictionResults(model, inputRows, parsed, batchId);
+        savePredictionResults(model, inputRows, parsed, batchId, "manual", null);
 
         logPredictionEvent(model, "mining_prediction_complete", Map.of(
             "status", "success", "predictions", parsed.getOrDefault("predictions", List.of()).hashCode(),
@@ -115,13 +115,35 @@ public class MiningPredictionService {
     }
 
     public Map<String, Object> batchPredict(Long modelId, String overrideResultTable) {
+        return batchPredictInternal(modelId, null, overrideResultTable, null, "manual", null);
+    }
+
+    /** Scheduler-only boundary. It tags persisted results so previews and manual trials cannot enter formal monitoring. */
+    public Map<String, Object> batchPredictForSchedule(Long modelId, Long modelExecutionId) {
+        return batchPredictInternal(modelId, null, null, null, "schedule", modelExecutionId);
+    }
+
+    public Map<String, Object> batchPredictForSchedule(Long modelId, Long modelExecutionId,
+                                                       String overrideInputTable, String overrideResultTable,
+                                                       String overrideFilter) {
+        return batchPredictInternal(modelId, overrideInputTable, overrideResultTable, overrideFilter,
+            "schedule", modelExecutionId);
+    }
+
+    private Map<String, Object> batchPredictInternal(Long modelId, String overrideInputTable,
+                                                     String overrideResultTable, String overrideFilter,
+                                                     String triggerType, Long modelExecutionId) {
         MiningModel model = miningModelMapper.selectById(modelId);
         validateForPrediction(model);
 
-        String inputTable = model.getPredictInputTable() != null && !model.getPredictInputTable().isBlank()
-            ? model.getPredictInputTable() : model.getSourceTable();
+        String inputTable = overrideInputTable != null && !overrideInputTable.isBlank()
+            ? overrideInputTable
+            : model.getPredictInputTable() != null && !model.getPredictInputTable().isBlank()
+                ? model.getPredictInputTable() : model.getSourceTable();
         String resultTable = overrideResultTable != null && !overrideResultTable.isBlank()
             ? overrideResultTable : model.getPredictResultTable();
+        String inputFilter = overrideFilter != null && !overrideFilter.isBlank()
+            ? overrideFilter : model.getPredictInputFilter();
         if (resultTable == null || resultTable.isBlank()) {
             resultTable = model.getSourceTable() + "_predict";
         }
@@ -132,8 +154,8 @@ public class MiningPredictionService {
         if (resultTable != null && !resultTable.isBlank()) {
             com.smartquery.common.IdentifierValidator.validateTableName(resultTable);
         }
-        if (model.getPredictInputFilter() != null && !model.getPredictInputFilter().isBlank()) {
-            com.smartquery.common.IdentifierValidator.validateFilter(model.getPredictInputFilter());
+        if (inputFilter != null && !inputFilter.isBlank()) {
+            com.smartquery.common.IdentifierValidator.validateFilter(inputFilter);
         }
 
         String batchId = "batch_" + System.currentTimeMillis();
@@ -143,7 +165,7 @@ public class MiningPredictionService {
         logPredictionEvent(model, "mining_prediction_start", Map.of("inputTable", inputTable, "mode", "batch", "batchId", batchId));
 
         MiningRuntimeClient.RuntimeResult runtime = executeBatchPrediction(
-            model, inputTable, resultTable, model.getPredictInputFilter());
+            model, inputTable, resultTable, inputFilter);
 
         if (!runtime.successful()) {
             String err = runtime.errorMessage();
@@ -151,7 +173,7 @@ public class MiningPredictionService {
             throw new RuntimeException("批量预测失败: " + truncateLog(err, predictErrorTruncation));
         }
 
-        Map<String, Object> parsed = runtime.payload();
+        Map<String, Object> parsed = new LinkedHashMap<>(runtime.payload());
         validateBatchPayload(parsed);
 
         int savedRows = parsed.containsKey("saved_rows") ? ((Number) parsed.get("saved_rows")).intValue() : 0;
@@ -159,11 +181,17 @@ public class MiningPredictionService {
         summary.setModelId(modelId);
         summary.setModelName(model.getName());
         summary.setBatchId(batchId);
+        summary.setTriggerType(triggerType);
+        summary.setModelExecutionId(modelExecutionId);
         summary.setInputData("{\"source\":\"" + inputTable + "\",\"total_rows\":" + savedRows + "}");
         summary.setPrediction("batch_summary");
         summary.setResultTable(resultTable);
         summary.setPredictedAt(LocalDateTime.now());
         predictionResultMapper.insert(summary);
+
+        parsed.put("batchId", batchId);
+        parsed.put("resultTable", resultTable);
+        parsed.put("triggerType", triggerType);
 
         log.info("[PREDICT] Batch predict completed: {} rows predicted, saved to '{}'", savedRows, resultTable);
 
@@ -221,6 +249,7 @@ public class MiningPredictionService {
         summary.setModelId(modelId);
         summary.setModelName(model.getName());
         summary.setBatchId(batchId);
+        summary.setTriggerType("manual");
         summary.setInputData("{\"source\":\"" + inputTable + "\",\"total_rows\":" + savedRows + "}");
         summary.setPrediction("batch_summary");
         summary.setResultTable(resultTable);
@@ -257,7 +286,8 @@ public class MiningPredictionService {
 
     @SuppressWarnings("unchecked")
     private void savePredictionResults(MiningModel model, List<Map<String, Object>> inputRows,
-                                       Map<String, Object> parsed, String batchId) {
+                                       Map<String, Object> parsed, String batchId,
+                                       String triggerType, Long modelExecutionId) {
         List<Object> predictions = (List<Object>) parsed.get("predictions");
         List<List<Double>> probabilities = (List<List<Double>>) parsed.get("probabilities");
         if (predictions == null) return;
@@ -267,6 +297,8 @@ public class MiningPredictionService {
             pr.setModelId(model.getId());
             pr.setModelName(model.getName());
             pr.setBatchId(batchId);
+            pr.setTriggerType(triggerType);
+            pr.setModelExecutionId(modelExecutionId);
             pr.setInputData(toJson(i < inputRows.size() ? inputRows.get(i) : null));
             pr.setPrediction(String.valueOf(predictions.get(i)));
             if (probabilities != null && i < probabilities.size()) {

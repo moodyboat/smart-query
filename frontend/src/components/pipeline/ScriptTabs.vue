@@ -26,7 +26,7 @@
         </el-tab-pane>
         <el-tab-pane label="完整脚本" name="__full__">
           <div class="script-tab-header">
-            <span class="script-node-type">full</span>
+            <span class="script-node-type">完整</span>
             <el-button size="small" @click="copyCode(fullScript)">复制全部</el-button>
           </div>
           <pre class="script-code"><code v-html="highlightPython(fullScript)"></code></pre>

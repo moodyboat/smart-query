@@ -15,6 +15,7 @@ import com.smartquery.mapper.DataSourceMapper;
 import com.smartquery.mapper.MiningModelMapper;
 import com.smartquery.service.MiningService;
 import com.smartquery.service.ResourceAccessService;
+import com.smartquery.orchestration.MiningOperatorRegistrationService;
 import com.smartquery.util.DbMetadataUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -45,6 +46,8 @@ public class MiningModelController {
     private final ConversationEventLogger eventLogger;
     private final RateLimiter rateLimiter;
     private final ResourceAccessService resourceAccess;
+    private final com.smartquery.service.ScheduleTaskService scheduleTaskService;
+    private final MiningOperatorRegistrationService miningOperatorRegistrationService;
     private final com.smartquery.service.TaskEventService taskEventService;
 
     /**
@@ -104,7 +107,7 @@ public class MiningModelController {
     @DeleteMapping("/{id}/force")
     public Result<Void> forceDelete(@PathVariable Long id) {
         if (!resourceAccess.isAdmin()) {
-            throw new BusinessException(403, "仅管理员可强制删除模型");
+            throw new BusinessException(403, "需要全局资源管理权限才能强制删除模型");
         }
         MiningModel model = miningModelMapper.selectById(id);
         if (model == null) {
@@ -120,6 +123,7 @@ public class MiningModelController {
             new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<MiningModel>()
                 .eq(MiningModel::getId, id)
                 .set(MiningModel::getDeleted, 1));
+        miningOperatorRegistrationService.archiveOperator(model);
 
         return Result.ok();
     }
@@ -259,6 +263,7 @@ public class MiningModelController {
         Boolean enabled = body.containsKey("enabled") ? Boolean.TRUE.equals(body.get("enabled")) : null;
         String mode = body.containsKey("mode") ? (String) body.get("mode") : null;
         miningService.updateSchedule(id, cron, enabled, mode);
+        scheduleTaskService.upsertLegacyModelSchedule(id, cron, enabled, mode);
         MiningModel model = resourceAccess.requireModel(id);
         log.info("[MINING] Schedule updated for model {}: cron={}, enabled={}, mode={}",
             id, model.getScheduleCron(), model.getScheduleEnabled(), model.getScheduleMode());
@@ -354,7 +359,7 @@ public class MiningModelController {
      */
     @PostMapping("/admin/reset-circuit-breaker")
     public Result<Map<String, Object>> resetCircuitBreaker() {
-        if (!resourceAccess.isAdmin()) throw new BusinessException(403, "仅管理员可执行该操作");
+        if (!resourceAccess.isAdmin()) throw new BusinessException(403, "需要全局资源管理权限");
         circuitBreaker.reset();
         return Result.ok(Map.of(
             "message", "熔断器已重置",
@@ -368,7 +373,7 @@ public class MiningModelController {
      */
     @GetMapping("/admin/circuit-breaker-status")
     public Result<Map<String, Object>> getCircuitBreakerStatus() {
-        if (!resourceAccess.isAdmin()) throw new BusinessException(403, "仅管理员可访问该信息");
+        if (!resourceAccess.isAdmin()) throw new BusinessException(403, "需要全局资源管理权限");
         return Result.ok(Map.of(
             "state", circuitBreaker.getState(),
             "failures", circuitBreaker.getConsecutiveFailures()

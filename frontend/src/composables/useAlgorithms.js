@@ -5,6 +5,7 @@ const algorithms = ref([])
 const modelTypes = ref([])
 const categories = ref([])
 const loaded = ref(false)
+const loadedWithDisabled = ref(false)
 
 function parseJson(val, fallback) {
   if (!val) return fallback
@@ -15,11 +16,11 @@ function parseJson(val, fallback) {
 }
 
 export function useAlgorithms() {
-  async function loadAlgorithms(force = false) {
-    if (loaded.value && !force) return
+  async function loadAlgorithms(force = false, includeDisabled = false) {
+    if (loaded.value && !force && (!includeDisabled || loadedWithDisabled.value)) return
     try {
       const [algos, cats, types] = await Promise.all([
-        fetchAlgorithms(),
+        fetchAlgorithms(undefined, includeDisabled),
         fetchAlgorithmCategories(),
         fetchModelTypes()
       ])
@@ -27,6 +28,7 @@ export function useAlgorithms() {
       categories.value = cats || []
       modelTypes.value = types || []
       loaded.value = true
+      loadedWithDisabled.value = includeDisabled
     } catch (e) {
       console.error('Failed to load algorithm definitions:', e)
     }
@@ -34,7 +36,7 @@ export function useAlgorithms() {
 
   const algorithmGroups = computed(() => {
     const groups = {}
-    for (const algo of algorithms.value) {
+    for (const algo of algorithms.value.filter(a => a.enabled !== 0)) {
       const cat = algo.category || '其他'
       if (!groups[cat]) groups[cat] = { category: cat, algorithms: [] }
       groups[cat].algorithms.push(algo)
@@ -48,7 +50,7 @@ export function useAlgorithms() {
   })
 
   function getAlgorithmDef(algorithmId) {
-    return algorithms.value.find(a => a.algorithmId === algorithmId) || null
+    return algorithms.value.find(a => a.algorithmId === algorithmId && a.enabled !== 0) || null
   }
 
   function getAlgorithmLabel(algorithmId) {
@@ -58,6 +60,7 @@ export function useAlgorithms() {
 
   function getAlgorithmsForModelType(modelType) {
     return algorithms.value.filter(a => {
+      if (a.enabled === 0) return false
       const types = parseJson(a.modelTypes, [])
       return types.includes(modelType)
     })

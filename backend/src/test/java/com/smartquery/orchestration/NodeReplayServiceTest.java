@@ -3,7 +3,7 @@ package com.smartquery.orchestration;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartquery.common.BusinessException;
 import com.smartquery.common.UserContextHolder;
-import com.smartquery.common.UserRoles;
+import com.smartquery.support.TestRoles;
 import com.smartquery.entity.NodeReplay;
 import com.smartquery.entity.NodeRun;
 import com.smartquery.entity.NodeRunSnapshot;
@@ -15,6 +15,7 @@ import com.smartquery.mapper.NodeRunMapper;
 import com.smartquery.mapper.OperatorVersionMapper;
 import com.smartquery.mapper.OrchestrationRunMapper;
 import com.smartquery.orchestration.execution.OperatorExecutorRegistry;
+import com.smartquery.service.RoleService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -45,10 +46,12 @@ class NodeReplayServiceTest {
     private final ContentHashService hashes = new ContentHashService(objectMapper);
     private final ScheduledExecutorService watchdog = mock(ScheduledExecutorService.class);
     private final ReplayOutputCommitService replayOutputCommit = mock(ReplayOutputCommitService.class);
+    private final RoleService roleService = mock(RoleService.class);
     private final Executor deferred = command -> { };
     private final NodeReplayService service = new NodeReplayService(replays, chunks, snapshots,
         runs, nodes, flows, versions, runtimes, executors, hashes,
-        new NodeReplayDiffService(hashes), replayOutputCommit, objectMapper, deferred, deferred, watchdog);
+        new NodeReplayDiffService(hashes), replayOutputCommit, objectMapper, roleService,
+        deferred, deferred, watchdog);
 
     @AfterEach
     void clearUser() {
@@ -57,7 +60,7 @@ class NodeReplayServiceTest {
 
     @Test
     void creationCopiesEveryImmutableReplayBindingAndOriginalActorRole() {
-        UserContextHolder.set(new UserContextHolder.UserContext(7L, "owner", UserRoles.USER));
+        UserContextHolder.set(new UserContextHolder.UserContext(7L, "owner", TestRoles.USER));
         OrchestrationRun run = run("7");
         run.setActorRole("ANALYST");
         NodeRun node = node();
@@ -89,7 +92,7 @@ class NodeReplayServiceTest {
 
     @Test
     void anotherUserCannotCreateReplayForTheRun() {
-        UserContextHolder.set(new UserContextHolder.UserContext(8L, "other", UserRoles.USER));
+        UserContextHolder.set(new UserContextHolder.UserContext(8L, "other", TestRoles.USER));
         when(runs.selectById(10L)).thenReturn(run("7"));
 
         BusinessException error = assertThrows(BusinessException.class,
@@ -105,7 +108,7 @@ class NodeReplayServiceTest {
         run.setId(10L);
         run.setFlowVersionId(30L);
         run.setOwnerUserId(owner);
-        run.setActorRole(UserRoles.USER);
+        run.setActorRole(TestRoles.USER);
         run.setStatus(RunStatus.SUCCESS);
         return run;
     }

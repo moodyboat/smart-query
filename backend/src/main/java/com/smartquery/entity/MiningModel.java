@@ -27,6 +27,9 @@ public class MiningModel {
 
     private String modelType;
     private String algorithm;
+    /** Immutable copy of the algorithm definition used for this model version. */
+    private Integer algorithmVersion;
+    private String algorithmSnapshot;
 
     private String sourceTable;
     private String featureColumns;

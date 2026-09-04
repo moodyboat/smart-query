@@ -199,7 +199,7 @@ Word 报告中的图表使用 **ECharts 服务端渲染**，无浏览器、无�
 
 ## 已知问题（2026-06-21 代码核查，均有 file:line 证据）
 
-- **[安全·紧急] GLM API Key 泄露**：`application.yml:74,79` 把真实可用的 GLM key 作为 `${GLM_API_KEY:9c82...}` 默认值硬编码并提交进仓库。需立即在智谱控制台轮换，并从 git 历史清除。
+- **[已修复·2026-09-04] GLM API Key 默认值泄露**：`application.yml` 已改为仅从 `GLM_API_KEY` 环境变量读取；历史中暴露过的密钥仍需立即在智谱控制台轮换，并评估从 Git 历史清除。
 - **[已修复·2026-06-19] 零鉴权**：已建成 JWT 鉴权体系（`config/JwtUtil` HS256 + `config/AuthInterceptor` 拦截 `/api/**` + `entity/User`/`sq_user` 表 + `controller/AuthController` login/me/logout + `controller/UserController` 用户管理）。CORS 仍开放（`WebConfig`）。详见 `docs/DEPENDENCY_AUDIT.md`。
 - **[安全] 凭据明文**：DM8 系统库密码默认 `Dameng123`（`application.yml:13` `${SPRING_DATASOURCE_PASSWORD:Dameng123}`）；MySQL 业务库示例密码默认 `900110`（仅 docker-compose 的 mysql 容器用，非系统库）；动态数据源密码在 DB 表明文存储、读取时直传 Hikari（`DataSourceManager:161-180`）。
 - **[已修复·2026-06-19] Python docker 镜像/超时死配置**：`PythonExecutor:62,68` 现读 `smart-query.python.execution-mode` / `smart-query.python.docker-image`（与 yml 一致，可配）；`PythonExecuteTool:23` 超时 key 已由 `python-tool.*` 改为 `smart-query.python.default-timeout-ms`（与 yml 对齐，配置可达）。
@@ -239,4 +239,4 @@ Word 报告中的图表使用 **ECharts 服务端渲染**，无浏览器、无�
 
 ### 已知问题
 
-- **GLM API key 余额不足**：当前 `.env` 里的 `9c82f4...` 已耗尽，所有 LLM 调用返回 `1113 余额不足`。需要充值或换 key 才能跑通对话。
+- **GLM API key 余额不足**：当前 `.env` 中配置的旧密钥已耗尽，所有 LLM 调用返回 `1113 余额不足`。需要充值或更换密钥才能跑通对话。

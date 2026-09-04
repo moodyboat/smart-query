@@ -16,7 +16,15 @@ RUN --mount=type=cache,id=smart-query-maven,target=/root/.m2 \
 FROM node:20-bookworm-slim AS runtime
 ENV JAVA_HOME=/opt/java/openjdk
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
+ENV JAVA_TOOL_OPTIONS="-Djava.awt.headless=true"
 COPY --from=java-build /opt/java/openjdk /opt/java/openjdk
+
+# PDF/PNG result exports render governed tables server-side. Keep the runtime
+# headless, while installing FreeType and a CJK font so Chinese labels are not
+# replaced with tofu or rejected by the JDK font manager.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libfreetype6 fontconfig fonts-wqy-zenhei \
+ && rm -rf /var/lib/apt/lists/*
 
 # The backend starts short-lived Python containers through the host daemon.
 COPY --from=docker:25-cli /usr/local/bin/docker /usr/local/bin/docker

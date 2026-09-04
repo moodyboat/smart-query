@@ -16,11 +16,17 @@ import java.util.stream.Collectors;
 /**
  * 角色-场景授权服务
  *
- * <p>角色字段与 sq_user.role 对齐（字符串，当前默认 admin/user）；
- * 不引入独立角色表，避免过度设计。
+ * <p>角色编码由 sq_role 数据库目录维护，并与 sq_user.role 对齐；
+ * 场景授权仅接受当前已启用的角色编码。
  */
 @Service
 public class RoleScenarioService extends ServiceImpl<RoleScenarioMapper, RoleScenario> {
+
+    private final RoleService roleService;
+
+    public RoleScenarioService(RoleService roleService) {
+        this.roleService = roleService;
+    }
 
     /**
      * 查询某角色被授权的所有场景 ID
@@ -63,6 +69,7 @@ public class RoleScenarioService extends ServiceImpl<RoleScenarioMapper, RoleSce
         // 去重后插入
         List<String> distinctRoles = roles.stream()
             .filter(r -> r != null && !r.isBlank())
+            .map(roleService::validateEnabledRole)
             .distinct()
             .collect(Collectors.toList());
 

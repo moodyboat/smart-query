@@ -2,7 +2,7 @@ package com.smartquery.orchestration;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.smartquery.common.UserContextHolder;
-import com.smartquery.common.UserRoles;
+import com.smartquery.service.RoleService;
 import com.smartquery.entity.DraftDependency;
 import com.smartquery.entity.OutputDraft;
 import com.smartquery.entity.PolicyDraft;
@@ -32,6 +32,7 @@ public class DraftRevalidationService {
     private final RuleAuthoringService ruleAuthoringService;
     private final OutputAuthoringService outputAuthoringService;
     private final PolicyAuthoringService policyAuthoringService;
+    private final RoleService roleService;
 
     public Map<String, Object> revalidate(List<Long> requestIds, Long runtimeProfileId) {
         List<DraftDependency> links = linkMapper.selectList(new LambdaQueryWrapper<DraftDependency>()
@@ -69,7 +70,7 @@ public class DraftRevalidationService {
             }
             long ownerId = Long.parseLong(owner.userId());
             try (UserContextHolder.Scope ignored = UserContextHolder.open(
-                    new UserContextHolder.UserContext(ownerId, "runtime-revalidator", UserRoles.USER))) {
+                    new UserContextHolder.UserContext(ownerId, "runtime-revalidator", roleService.defaultRoleCode()))) {
                 String status;
                 if ("RULE".equals(link.getDraftType())) {
                     status = ruleAuthoringService.validateDraft(owner.operatorId(), link.getDraftId(), profileId)

@@ -233,6 +233,8 @@ public class RuleAuthoringService {
             但必须是纯函数：禁止网络、文件、进程、数据库和系统调用；输入为 records 数组，输出仍为 records 数组；
             每条输出必须原样保留 __sourceRefs 和 __sourceSnapshots。入口函数签名为
             evaluate(records, parameters)，返回记录数组。至少给出正常和边界两个测试。
+            测试 input 与 expected 中不得手工构造任何以 __ 开头的平台保留字段；
+            expected 必须直接是预期记录数组，不要再包一层 records 对象。
 
             只返回 JSON 对象，字段必须为：language(固定python)、entrypoint、sourceCode、inputSchema、
             outputSchema、parameterSchema、tests(数组，元素含name/input/parameters/expected)、explanation。

@@ -3,7 +3,7 @@ package com.smartquery.orchestration;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartquery.common.UserContextHolder;
-import com.smartquery.common.UserRoles;
+import com.smartquery.support.TestRoles;
 import com.smartquery.entity.FlowDefinition;
 import com.smartquery.entity.FlowVersion;
 import com.smartquery.entity.OperatorDefinition;
@@ -12,6 +12,7 @@ import com.smartquery.mapper.FlowDefinitionMapper;
 import com.smartquery.mapper.FlowVersionMapper;
 import com.smartquery.mapper.OperatorDefinitionMapper;
 import com.smartquery.mapper.OperatorVersionMapper;
+import com.smartquery.service.RoleService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -39,7 +40,8 @@ class VersionCatalogServiceTest {
         mock(RuleCompositionService.class), dagValidationService,
         mock(SchemaCompatibilityService.class), mock(SqlAstPolicyService.class),
         mock(AgentPolicyService.class), contentHashService,
-        mock(RuntimeProfileService.class), objectMapper);
+        mock(RuntimeProfileService.class), mock(OutputCapabilityRegistryService.class),
+        objectMapper, mock(RoleService.class));
 
     @AfterEach
     void tearDown() {
@@ -48,7 +50,7 @@ class VersionCatalogServiceTest {
 
     @Test
     void flowVersionWithoutLeadOutputRemainsUnchanged() throws Exception {
-        UserContextHolder.set(new UserContextHolder.UserContext(9L, "author", UserRoles.USER));
+        UserContextHolder.set(new UserContextHolder.UserContext(9L, "author", TestRoles.USER));
         FlowDefinition flow = new FlowDefinition();
         flow.setId(4L);
         flow.setOwnerUserId("9");

@@ -5,8 +5,9 @@ import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartquery.common.BusinessException;
+import com.smartquery.common.PermissionCodes;
 import com.smartquery.common.UserContextHolder;
-import com.smartquery.common.UserRoles;
+import com.smartquery.service.RoleService;
 import com.smartquery.entity.FlowVersion;
 import com.smartquery.entity.Lead;
 import com.smartquery.entity.NodeRun;
@@ -66,6 +67,7 @@ public class OrchestrationRunService {
     private final NodeRunSnapshotService nodeRunSnapshotService;
     private final TaskEventService taskEventService;
     private final ObjectMapper objectMapper;
+    private final RoleService roleService;
     private final Executor orchestrationExecutor;
     private final Executor orchestrationNodeExecutor;
     private final ScheduledExecutorService orchestrationWatchdog;
@@ -81,7 +83,8 @@ public class OrchestrationRunService {
                                    RunLeaseService runLeaseService,
                                    RunControlRegistry runControlRegistry,
                                    NodeRunSnapshotService nodeRunSnapshotService,
-                                   TaskEventService taskEventService, ObjectMapper objectMapper,
+                                    TaskEventService taskEventService, ObjectMapper objectMapper,
+                                    RoleService roleService,
                                    @Qualifier("orchestrationExecutor") Executor orchestrationExecutor,
                                    @Qualifier("orchestrationNodeExecutor") Executor orchestrationNodeExecutor,
                                    @Qualifier("orchestrationWatchdog") ScheduledExecutorService orchestrationWatchdog) {
@@ -98,6 +101,7 @@ public class OrchestrationRunService {
         this.nodeRunSnapshotService = nodeRunSnapshotService;
         this.taskEventService = taskEventService;
         this.objectMapper = objectMapper;
+        this.roleService = roleService;
         this.orchestrationExecutor = orchestrationExecutor;
         this.orchestrationNodeExecutor = orchestrationNodeExecutor;
         this.orchestrationWatchdog = orchestrationWatchdog;
@@ -116,6 +120,16 @@ public class OrchestrationRunService {
     private int defaultNodeTimeoutSeconds = 300;
 
     public OrchestrationRun submitTrial(Long flowVersionId, Map<String, Object> input) {
+        return submit(flowVersionId, input, "API", "TRIAL", null);
+    }
+
+    /** Trusted scheduler entry point. The caller must bind the task owner's user context. */
+    public OrchestrationRun submitScheduled(Long flowVersionId, Map<String, Object> input, Long scheduleTaskId) {
+        return submit(flowVersionId, input, "SCHEDULE", "FORMAL", scheduleTaskId);
+    }
+
+    private OrchestrationRun submit(Long flowVersionId, Map<String, Object> input,
+                                    String triggerType, String runMode, Long scheduleTaskId) {
         Map<String, Object> safeInput = input == null ? Map.of() : new LinkedHashMap<>(input);
         validateInput(safeInput);
         FlowVersion flowVersion = versionCatalogService.requireFlowVersion(flowVersionId);
@@ -124,10 +138,11 @@ public class OrchestrationRunService {
 
         OrchestrationRun run = new OrchestrationRun();
         run.setFlowVersionId(flowVersionId);
+        run.setScheduleTaskId(scheduleTaskId);
         run.setOwnerUserId(currentUserId());
         run.setActorRole(UserContextHolder.require().role());
-        run.setTriggerType("API");
-        run.setRunMode("TRIAL");
+        run.setTriggerType(triggerType);
+        run.setRunMode(runMode);
         run.setStatus(RunStatus.QUEUED);
         run.setAttemptNo(0);
         run.setRecoveryCount(0);
@@ -137,6 +152,19 @@ public class OrchestrationRunService {
 
         dispatch(run.getId());
         return run;
+    }
+
+    public NodeSnapshotView nodeSnapshot(Long runId, Long nodeRunId) {
+        OrchestrationRun run = requireRun(runId);
+        NodeRun node = nodeRunMapper.selectById(nodeRunId);
+        if (node == null || !run.getId().equals(node.getRunId())) {
+            throw new BusinessException(404, "节点运行不存在: " + nodeRunId);
+        }
+        NodeRunSnapshot snapshot = nodeRunSnapshotService.requireByNodeRun(nodeRunId);
+        NodeRunSnapshotService.SnapshotMaterial material = nodeRunSnapshotService.material(snapshot);
+        return new NodeSnapshotView(run.getId(), node.getId(), node.getNodeId(), node.getStatus(),
+            node.getInputHash(), node.getOutputHash(), snapshot.getStatus(), snapshot.getSnapshotBytes(),
+            material.nodeConfig(), material.runInput(), material.upstreamOutputs(), material.originalOutput());
     }
 
     public OrchestrationRun getRun(Long runId) {
@@ -276,7 +304,7 @@ public class OrchestrationRunService {
                                 executed.result().leads().forEach(draft -> pendingLeads.add(
                                     new PendingLead(draft, executed.nodeRun(), executed.version())));
                             }
-                            artifactInput(run, executed).ifPresent(pendingArtifacts::add);
+                            pendingArtifacts.addAll(artifactInputs(run, executed));
                         }));
                     }
                     try {
@@ -514,22 +542,12 @@ public class OrchestrationRunService {
     }
 
     private void preflight(FlowPlan plan) {
-        boolean hasLeadOutput = false;
         for (Map<String, Object> node : plan.nodes().values()) {
             Long versionId = DagValidationService.toLong(node.get("operatorVersionId"));
             OperatorVersion version = versionCatalogService.requireOperatorVersionVisible(versionId);
             OperatorDefinition definition = versionCatalogService.requireOperatorDefinitionForVersion(versionId);
             runtimeProfileService.requireRunnable(version, definition.getOperatorType());
             executorRegistry.require(version.getImplementationType());
-            if (OperatorTypes.OUTPUT.equals(definition.getOperatorType())) {
-                Map<String, Object> payload = object(version.getImplementationPayload(), "输出算子工件");
-                if ("LEAD".equalsIgnoreCase(String.valueOf(payload.get("outputKind")))) {
-                    hasLeadOutput = true;
-                }
-            }
-        }
-        if (!hasLeadOutput) {
-            throw new BusinessException(422, "流程版本缺少LEAD输出算子，请创建新流程版本以自动补齐");
         }
     }
 
@@ -569,19 +587,29 @@ public class OrchestrationRunService {
         return summary;
     }
 
-    private java.util.Optional<RunOutputCommitService.ArtifactInput> artifactInput(
+    private List<RunOutputCommitService.ArtifactInput> artifactInputs(
             OrchestrationRun run, NodeExecutionResult executed) {
-        Object rawKind = executed.result().output().get("outputKind");
-        if (rawKind == null || String.valueOf(rawKind).isBlank()) return java.util.Optional.empty();
-        String kind = String.valueOf(rawKind);
-        Map<String, Object> artifact = map(executed.result().output().get("artifact"));
-        Object contentSpec = artifact.getOrDefault("contentSpec", Map.of());
-        Map<String, Object> data = new LinkedHashMap<>(artifact);
-        data.put("outputHash", contentHashService.sha256(executed.result().output()));
-        data.put("sample", summary(executed.result()).getOrDefault("sample", List.of()));
-        return java.util.Optional.of(new RunOutputCommitService.ArtifactInput(
-            run.getId(), executed.nodeRun().getId(), run.getOwnerUserId(), kind, "READY",
-            contentSpec, data, outputRecords(executed.result().output().get("records"))));
+        List<Map<String, Object>> artifacts = outputRecords(executed.result().output().get("artifacts"));
+        if (artifacts.isEmpty()) {
+            Map<String, Object> legacy = map(executed.result().output().get("artifact"));
+            if (!legacy.isEmpty()) artifacts = List.of(legacy);
+        }
+        if (artifacts.isEmpty()) return List.of();
+        List<RunOutputCommitService.ArtifactInput> result = new ArrayList<>();
+        List<Map<String, Object>> records = outputRecords(executed.result().output().get("records"));
+        for (Map<String, Object> artifact : artifacts) {
+            Object rawKind = artifact.getOrDefault("kind", executed.result().output().get("outputKind"));
+            if (rawKind == null || String.valueOf(rawKind).isBlank()) continue;
+            Object contentSpec = artifact.getOrDefault("contentSpec", Map.of());
+            Map<String, Object> data = new LinkedHashMap<>(artifact);
+            data.put("outputHash", contentHashService.sha256(Map.of(
+                "runOutput", executed.result().output(), "target", artifact)));
+            data.put("sample", summary(executed.result()).getOrDefault("sample", List.of()));
+            result.add(new RunOutputCommitService.ArtifactInput(
+                run.getId(), executed.nodeRun().getId(), run.getOwnerUserId(), String.valueOf(rawKind), "READY",
+                contentSpec, data, records));
+        }
+        return List.copyOf(result);
     }
 
     private List<Map<String, Object>> outputRecords(Object raw) {
@@ -747,7 +775,7 @@ public class OrchestrationRunService {
             return new UserContextHolder.UserContext(Long.parseLong(run.getOwnerUserId()),
                 "orchestration-run-" + run.getId(),
                 run.getActorRole() == null || run.getActorRole().isBlank()
-                    ? UserRoles.USER : run.getActorRole());
+                    ? roleService.defaultRoleCode() : run.getActorRole());
         } catch (NumberFormatException e) {
             throw new BusinessException(422, "编排运行所有者标识无效: " + run.getOwnerUserId());
         }
@@ -763,12 +791,18 @@ public class OrchestrationRunService {
     }
 
     private String currentUserId() { return UserContextHolder.require().userId().toString(); }
-    private boolean isAdmin() { return UserRoles.ADMIN.equals(UserContextHolder.require().role()); }
+    private boolean isAdmin() { return roleService.currentUserHas(PermissionCodes.RESOURCE_ACCESS_ALL); }
 
     private record FlowPlan(Map<String, Map<String, Object>> nodes,
                             Map<String, List<Map<String, Object>>> incoming,
                             List<String> terminals,
                             VersionCatalogService.FlowValidationReport validation) {}
+
+    public record NodeSnapshotView(Long runId, Long nodeRunId, String nodeId, String nodeStatus,
+                                   String inputHash, String outputHash, String snapshotStatus,
+                                   Long snapshotBytes, Map<String, Object> nodeConfig,
+                                   Map<String, Object> runInput, Map<String, Object> upstreamOutputs,
+                                   Map<String, Object> output) {}
 
     private record NodeExecutionResult(OperatorExecutionResult result, NodeRun nodeRun,
                                        OperatorVersion version, String operatorType) {}

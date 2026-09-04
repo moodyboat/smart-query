@@ -1,15 +1,21 @@
 <template>
   <div :class="['page-container', 'mining-manager', { embedded: props.embedded }]">
-    <!-- Header -->
-    <div class="page-header">
+    <div v-if="!props.embedded || !props.repositoryMode" class="page-header" :class="{ 'filter-only': props.embedded }">
       <button v-if="!props.embedded" class="back-btn" @click="$emit('close')">
         <span class="back-arrow">&larr;</span> 返回问数
       </button>
-      <div class="mining-heading">
+      <div v-if="!props.embedded" class="mining-heading">
         <h2 class="page-title">{{ repositoryTitle }}</h2>
-        <p v-if="props.embedded">{{ repositorySubtitle }}</p>
       </div>
-      <el-select v-model="filterDsId" placeholder="数据源" size="small" clearable style="width: 160px; margin-left: auto">
+      <el-select
+        v-if="!props.repositoryMode || props.repositorySection === 'schedule'"
+        v-model="filterDsId"
+        :placeholder="props.repositoryMode ? '模型数据源筛选' : '数据源筛选'"
+        :aria-label="props.repositoryMode ? '模型数据源筛选' : '数据源筛选'"
+        size="small"
+        clearable
+        style="width: 190px; margin-left: auto"
+      >
         <el-option v-for="ds in dataSources" :key="ds.id" :label="ds.name" :value="ds.id" />
       </el-select>
     </div>
@@ -18,7 +24,13 @@
       <div><strong>{{ models.length }}</strong><span>模型总数</span></div>
       <div><strong>{{ artifactCount }}</strong><span>已固化制品</span></div>
       <div><strong>{{ publishedCount }}</strong><span>流程可用</span></div>
-      <div><strong>{{ scheduledCount }}</strong><span>启用调度</span></div>
+      <div><strong>{{ mlOperatorCatalog.length }}</strong><span>已发布算子版本</span></div>
+    </div>
+
+    <div v-if="!props.repositoryMode" class="ml-build-guide">
+      <div><em>1</em><span><strong>选择训练数据</strong><small>指定数据源、数据表和需要分析的字段</small></span></div>
+      <div><em>2</em><span><strong>设置分析目标</strong><small>选择要预测或识别的业务结果</small></span></div>
+      <div><em>3</em><span><strong>训练并提交</strong><small>平台自动训练、检查并生成可审批版本</small></span></div>
     </div>
 
     <el-tabs v-model="activeTab" class="mining-tabs">
@@ -28,14 +40,12 @@
           :loading="loading"
           :data-sources="dataSources"
           :catalog-items="mlOperatorCatalog"
-          :is-admin="userStore.isAdmin"
+          :is-admin="userStore.canManageAlgorithms"
           :algorithm-label="algorithmLabel"
           :model-type-label="modelTypeLabel"
           :primary-metric-label="primaryMetricLabel"
           :primary-metric-value="primaryMetricValue"
-          :schedule-interval-label="scheduleIntervalLabel"
           :format-date="formatDate"
-          @configure="openSchedule"
           @open-dag="openModelDag"
         />
       </el-tab-pane>
@@ -43,20 +53,17 @@
         <PipelineEditor ref="pipelineEditorRef" :dataSources="dataSources" repository-mode unified-dag
           @goToModel="goToModel" @openDag="openPipelineDag" />
       </el-tab-pane>
-      <el-tab-pane v-if="!props.repositoryMode" label="模型管理" name="models">
+      <el-tab-pane v-if="!props.repositoryMode" label="机器学习算子管理" name="models">
         <div class="tab-toolbar">
           <div class="toolbar-left">
-            <el-input v-model="modelSearch" placeholder="搜索模型名称、算法、表名..." size="small" clearable style="width:260px" prefix-icon="Search" />
+            <el-input v-model="modelSearch" placeholder="搜索算子名称" size="small" clearable style="width:260px" prefix-icon="Search" />
             <div v-if="selectedModels.size > 0" class="selection-info">
-              <span class="selected-count">✓ 已选择 {{ selectedModels.size }} 个模型</span>
-              <el-button type="danger" size="small" @click="handleBatchDelete">🗑️ 批量删除</el-button>
+              <span class="selected-count">已选择 {{ selectedModels.size }} 个算子</span>
+              <el-button type="danger" size="small" @click="handleBatchDelete">批量删除</el-button>
               <el-button size="small" @click="clearSelection">取消选择</el-button>
             </div>
-            <div v-else class="batch-hint">
-              <span class="hint-text">💡 提示：点击模型卡片左上角的复选框可批量选择模型进行批量删除</span>
-            </div>
           </div>
-          <el-button type="primary" size="small" @click="showCreateDialog = true">+ 新建模型</el-button>
+          <el-button type="primary" size="small" @click="showCreateDialog = true">+ 新建机器学习算子</el-button>
         </div>
         <!-- Model List -->
         <ModelList
@@ -70,8 +77,7 @@
           :modelTypeLabel="modelTypeLabel"
           :modelTypeIcon="modelTypeIcon"
           :statusLabel="statusLabel"
-          :scheduleIntervalLabel="scheduleIntervalLabel"
-          :scheduleTooltip="scheduleTooltip"
+          :isOperatorPublished="isOperatorPublished"
           :parsedMetrics="parsedMetrics"
           :primaryMetricRaw="primaryMetricRaw"
           :primaryMetricLabel="primaryMetricLabel"
@@ -95,42 +101,60 @@
           @updateSelection="handleUpdateSelection"
         />
       </el-tab-pane>
-      <el-tab-pane v-if="!props.repositoryMode" label="训练流水线" name="pipeline">
+      <el-tab-pane v-if="!props.repositoryMode" label="训练流程" name="pipeline">
         <PipelineEditor ref="pipelineEditorRef" :dataSources="dataSources" @goToModel="goToModel" />
       </el-tab-pane>
-      <el-tab-pane v-if="!props.repositoryMode" label="算法库管理" name="algorithms">
+      <el-tab-pane v-if="!props.repositoryMode" label="算法目录" name="algorithms">
         <div class="algorithm-admin-page">
           <div class="tab-toolbar">
             <div>
-              <h3>算法模板管理</h3>
-              <p>查看内置实现；管理员可新增模板、复制内置模板，并修改或删除自定义模板。</p>
+              <h3>可用算法</h3>
             </div>
-            <el-button v-if="userStore.isAdmin" type="primary" @click="openAlgorithmManager(null, 'create')">+ 新增算法模板</el-button>
+            <el-button v-if="userStore.canManageAlgorithms" type="primary" @click="openAlgorithmManager(null, 'create')">+ 新增算法模板</el-button>
           </div>
-          <el-alert v-if="!userStore.isAdmin" type="info" :closable="false" style="margin-bottom: 12px">
-            当前账号为只读权限；新增、修改和删除算法模板需要管理员账号。
+          <el-alert v-if="!userStore.canManageAlgorithms" type="info" :closable="false" style="margin-bottom: 12px">
+            当前账号为只读权限；新增、修改和删除算法模板需要算法目录管理权限。
           </el-alert>
           <el-table :data="algorithms" border stripe height="calc(100vh - 230px)">
             <el-table-column label="算法" min-width="180">
               <template #default="{ row }">
-                <span class="algorithm-name-cell"><span>{{ row.icon || '🤖' }}</span><strong>{{ row.name }}</strong></span>
+                <span class="algorithm-name-cell"><span class="algorithm-table-icon">{{ row.icon || '🤖' }}</span><strong>{{ row.name }}</strong></span>
               </template>
             </el-table-column>
             <el-table-column prop="algorithmId" label="算法标识" min-width="160" />
             <el-table-column prop="category" label="分类" width="120" />
+            <el-table-column label="版本" width="76">
+              <template #default="{ row }">版本 {{ row.versionNo || 1 }}</template>
+            </el-table-column>
+            <el-table-column label="状态" width="82">
+              <template #default="{ row }"><el-tag :type="row.enabled === 0 ? 'info' : 'success'" size="small">{{ row.enabled === 0 ? '已停用' : '已启用' }}</el-tag></template>
+            </el-table-column>
             <el-table-column label="适用类型" min-width="150">
               <template #default="{ row }">{{ modelTypeNames(row.modelTypes) }}</template>
             </el-table-column>
             <el-table-column label="来源" width="90">
               <template #default="{ row }"><el-tag :type="row.isBuiltin ? 'info' : 'success'" size="small">{{ row.isBuiltin ? '内置' : '自定义' }}</el-tag></template>
             </el-table-column>
-            <el-table-column label="操作" width="300" fixed="right">
+            <el-table-column v-if="userStore.canManageAlgorithms" label="引用" width="150">
               <template #default="{ row }">
-                <el-button link type="primary" @click="openAlgorithmManager(row, 'view')">查看实现</el-button>
-                <el-button v-if="userStore.isAdmin && row.isBuiltin" link type="primary" @click="openAlgorithmManager(row, 'clone')">复制为模板</el-button>
-                <template v-if="userStore.isAdmin && !row.isBuiltin">
+                <span class="reference-count">算子 {{ row.modelReferenceCount || 0 }} · 流程 {{ row.pipelineReferenceCount || 0 }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="360" fixed="right">
+              <template #default="{ row }">
+                <el-button link type="primary" @click="openAlgorithmManager(row, 'view')">查看详情</el-button>
+                <el-button v-if="userStore.canManageAlgorithms && row.isBuiltin" link type="primary" @click="openAlgorithmManager(row, 'clone')">复制为模板</el-button>
+                <el-button
+                  v-if="userStore.canManageAlgorithms"
+                  link
+                  :type="row.enabled === 0 ? 'success' : 'warning'"
+                  @click="toggleAlgorithmStatus(row)"
+                >{{ row.enabled === 0 ? '启用' : '停用' }}</el-button>
+                <template v-if="userStore.canManageAlgorithms && !row.isBuiltin">
                   <el-button link type="primary" @click="openAlgorithmManager(row, 'edit')">修改</el-button>
-                  <el-button link type="danger" @click="removeAlgorithmTemplate(row)">删除</el-button>
+                  <el-tooltip :content="algorithmDeleteHint(row)" placement="top">
+                    <span><el-button link type="danger" :disabled="!row.deletable" @click="removeAlgorithmTemplate(row)">删除</el-button></span>
+                  </el-tooltip>
                 </template>
               </template>
             </el-table-column>
@@ -145,7 +169,7 @@
       :categories="categories"
       :model-types="modelTypes"
       :model-type-names="modelTypeNames"
-      :is-admin="userStore.isAdmin"
+      :is-admin="userStore.canManageAlgorithms"
       :initial-algorithm="managedAlgorithm"
       :initial-mode="algorithmManagerMode"
       @refresh="refreshAlgorithmManager"
@@ -177,7 +201,7 @@
     />
 
     <!-- Hyperparameter Edit Dialog -->
-    <el-dialog v-model="showParamsDialog" title="调整超参数" width="520px" destroy-on-close>
+    <el-dialog v-model="showParamsDialog" title="调整超参数" width="min(520px, 94vw)" destroy-on-close>
       <div v-if="paramModel" class="params-editor">
         <p class="params-model-name">{{ paramModel.name }} - {{ algorithmLabel(paramModel.algorithm) }}</p>
         <div v-for="p in algorithmParams(paramModel.algorithm)" :key="p.key" class="param-row">
@@ -211,7 +235,7 @@
     </el-dialog>
 
     <!-- Add custom param dialog -->
-    <el-dialog v-model="showAddParamDialog" title="添加自定义参数" width="360px" append-to-body>
+    <el-dialog v-model="showAddParamDialog" title="添加自定义参数" width="min(360px, 94vw)" append-to-body>
       <el-form label-width="80px" size="small">
         <el-form-item label="参数名">
           <el-input v-model="newParamKey" placeholder="如: min_samples_split" />
@@ -226,25 +250,11 @@
       </template>
     </el-dialog>
 
-    <!-- Schedule Dialog -->
-    <ModelScheduleDialog
-      v-model:show="showScheduleDialog"
-      :model="scheduleModel"
-      v-model:enabled="scheduleEnabled"
-      v-model:mode="scheduleMode"
-      v-model:cron="scheduleCron"
-      v-model:inputTable="scheduleInputTable"
-      v-model:resultTable="scheduleResultTable"
-      v-model:inputFilter="scheduleInputFilter"
-      :tableOptions="scheduleTableOptions"
-      @save="doSaveSchedule"
-    />
-
     <!-- Publish Dialog -->
-    <el-dialog v-model="showPublishDialog" title="发布模型" width="560px" destroy-on-close>
+    <el-dialog v-model="showPublishDialog" title="提交机器学习算子版本" width="min(560px, 94vw)" destroy-on-close>
       <div v-if="publishModel_ref">
         <p style="margin-bottom: 16px; color: var(--text-secondary)">
-          发布「{{ publishModel_ref.name }}」后可进行批量预测和定时调度
+          当前训练制品将固化为「{{ publishModel_ref.name }}」的新算子版本并提交审批；审批通过后进入统一算子库
         </p>
         <el-form label-width="100px" size="default">
           <el-form-item label="预测输入表">
@@ -266,35 +276,11 @@
             <el-input v-model="publishConfig.predictResultTable" placeholder="如: prediction_results（表不存在时自动创建）" />
             <div style="font-size: var(--font-sm); color: var(--text-muted); margin-top: 4px">留空则每次预测时指定</div>
           </el-form-item>
-          <el-divider />
-          <el-form-item label="启用定时调度">
-            <el-switch v-model="publishConfig.scheduleEnabled" active-text="开" inactive-text="关" />
-          </el-form-item>
-          <el-form-item v-if="publishConfig.scheduleEnabled" label="调度模式">
-            <el-radio-group v-model="publishConfig.scheduleMode">
-              <el-radio value="train">定期重训</el-radio>
-              <el-radio value="predict">定期预测</el-radio>
-            </el-radio-group>
-            <div style="font-size: var(--font-sm); color: var(--text-muted); margin-top: 4px">
-              {{ publishConfig.scheduleMode === 'predict' ? '用已发布模型对新数据批量预测，结果写入结果表' : '用最新数据重新训练模型' }}
-            </div>
-          </el-form-item>
-          <el-form-item v-if="publishConfig.scheduleEnabled" label="调度间隔">
-            <el-select v-model="publishConfig.scheduleCron" style="width: 100%" :teleported="false">
-              <el-option label="每 30 分钟" value="*/30 * * * *" />
-              <el-option label="每 1 小时" value="0 * * * *" />
-              <el-option label="每天早上 6:00" value="0 6 * * *" />
-              <el-option label="每天早上 8:00" value="0 8 * * *" />
-              <el-option label="每天午夜" value="0 0 * * *" />
-              <el-option label="每周一 8:00" value="0 8 * * 1" />
-              <el-option label="每月 1 号" value="0 0 1 * *" />
-            </el-select>
-          </el-form-item>
         </el-form>
       </div>
       <template #footer>
         <el-button @click="showPublishDialog = false">取消</el-button>
-        <el-button type="primary" :loading="publishLoading" @click="doConfirmPublish">确认发布</el-button>
+        <el-button type="primary" :loading="publishLoading" @click="doConfirmPublish">提交版本审批</el-button>
       </template>
     </el-dialog>
 
@@ -344,6 +330,7 @@
       :algorithmLabel="algorithmLabel"
       :modelTypeLabel="modelTypeLabel"
       :statusLabel="statusLabel"
+      :isOperatorPublished="isOperatorPublished"
       :formatDate="formatDate"
       :execStatusLabel="execStatusLabel"
       :execTriggerLabel="execTriggerLabel"
@@ -381,7 +368,6 @@ import AlgorithmLibraryDialog from './pipeline/AlgorithmLibraryDialog.vue'
 import ModelList from './mining/ModelList.vue'
 import ModelScheduleCenter from './mining/ModelScheduleCenter.vue'
 import ModelCreateDialog from './mining/ModelCreateDialog.vue'
-import ModelScheduleDialog from './mining/ModelScheduleDialog.vue'
 import ModelPredictDialog from './mining/ModelPredictDialog.vue'
 import ModelDetail from './mining/ModelDetail.vue'
 import TrainingDialog from './mining/TrainingDialog.vue'
@@ -392,7 +378,7 @@ import {
   fetchDataSourceTables, fetchTableColumns, updateModelSchedule, predictMiningModel,
   batchPredictMiningModel, validateMiningModel, fetchModelPredictions,
   fetchMiningPipeline, previewResultTable, syncModelPipeline, rollbackModel,
-  updateModelPredictConfig, deleteAlgorithm
+  updateModelPredictConfig, deleteAlgorithm, setAlgorithmEnabled
 } from '../api'
 import { useAlgorithms } from '../composables/useAlgorithms.js'
 import { useMiningStore } from '../stores/mining'
@@ -407,6 +393,7 @@ import { fetchPublishedOperatorCatalog } from '../api/orchestration.js'
 const props = defineProps({
   embedded: { type: Boolean, default: false },
   autoCreate: { type: Boolean, default: false },
+  initialTab: { type: String, default: '' },
   repositoryMode: { type: Boolean, default: false },
   repositorySection: { type: String, default: 'schedule' }
 })
@@ -416,14 +403,14 @@ const mining = useMiningStore()
 const ui = useUIStore()
 const userStore = useUserStore()
 const repositoryTitle = computed(() => {
-  if (!props.repositoryMode) return '数据挖掘'
-  return props.repositorySection === 'pipeline' ? '模型流水线' : '调度中心'
+  if (!props.repositoryMode) return '机器学习算子构建'
+  return props.repositorySection === 'pipeline' ? '训练流水线' : '模型中心'
 })
 const repositorySubtitle = computed(() => {
-  if (!props.repositoryMode) return '在这里完成机器学习算子的模型创建、训练、评估与发布。'
+  if (!props.repositoryMode) return '配置算法与训练数据，固化训练制品，并提交机器学习算子版本审批。'
   return props.repositorySection === 'pipeline'
     ? '保存模型训练草稿，并将业务流程交给统一 DAG 编排。'
-    : '管理已发布模型成品、调度策略和生产编排入口。'
+    : '管理已注册模型、固定制品和生产编排入口；调度配置统一位于穿透式监控模型。'
 })
 
 const {
@@ -441,8 +428,6 @@ const {
 const {
   trainingId, activeCleanup,
   showPublishDialog, publishModel_ref, publishLoading, publishConfig, publishTableOptions,
-  showScheduleDialog, scheduleModel, scheduleCron, scheduleEnabled, scheduleMode,
-  scheduleInputTable, scheduleResultTable, scheduleInputFilter, scheduleTableOptions,
   showBatchPredictDialog, batchPredictModel, batchInputTable, batchResultTable,
   batchPredictLoading, batchPredictResult, resultPreview, resultPreviewColumns, batchTableOptions,
   showPredictResultsDialog, predictResultsModel, predictionResults, loadingPredictions,
@@ -450,7 +435,6 @@ const {
   handleTrain, showTrainingResult,
   handlePublish, buildPublishConfig, confirmPublish,
   handleOffline, handleDelete,
-  openSchedule, saveSchedule,
   openBatchPredict, handleBatchPredict, previewResult,
   openPredictResults, openPredict, handlePredict,
   handleValidate, cleanup: cleanupActions
@@ -460,7 +444,6 @@ const {
 const models = computed(() => mining.models)
 const artifactCount = computed(() => models.value.filter(model => model.modelPath && model.artifactSha256).length)
 const publishedCount = computed(() => models.value.filter(model => model.status === MODEL_STATUS.PUBLISHED).length)
-const scheduledCount = computed(() => models.value.filter(model => model.status === MODEL_STATUS.PUBLISHED && model.scheduleEnabled).length)
 const dataSources = computed(() => mining.dataSources)
 const loading = computed(() => mining.loading)
 const mlOperatorCatalog = ref([])
@@ -468,7 +451,7 @@ const filterDsId = computed({
   get: () => mining.filterDsId,
   set: (v) => { mining.filterDsId = v }
 })
-const activeTab = ref(props.repositoryMode ? props.repositorySection : 'models')
+const activeTab = ref(props.repositoryMode ? props.repositorySection : (props.initialTab || 'models'))
 const modelSearch = ref('')
 const selectedModels = ref(new Set())
 const saving = ref(false)
@@ -500,7 +483,7 @@ const newParamValue = ref('')
 
 function defaultForm() {
   const firstModelType = modelTypes.value.length > 0 ? modelTypes.value[0].id : DEFAULT_MODEL_TYPE
-  const firstAlgo = algorithms.value.length > 0 ? algorithms.value[0].algorithmId : DEFAULT_ALGORITHM
+  const firstAlgo = algorithms.value.find(item => item.enabled !== 0)?.algorithmId || DEFAULT_ALGORITHM
   return {
     name: '', dataSourceId: null, sourceTable: '', modelType: firstModelType,
     algorithm: firstAlgo, featureColumnsList: [], targetColumn: '',
@@ -553,6 +536,15 @@ const filteredModels = computed(() => {
 
 const modelTypeLabel = getModelTypeLabel
 
+function modelTypeIcon(type) {
+  return {
+    classification: '🏷️',
+    regression: '📈',
+    clustering: '🎯',
+    anomaly_detection: '🔍'
+  }[type] || '🤖'
+}
+
 function isPrimary(key, modelType) {
   if (key.startsWith('train_') || key.startsWith('test_') ||
       ['overfitting_gap', 'cv_mean', 'cv_std', 'confusion_matrix', 'class_labels'].includes(key)) return false
@@ -583,32 +575,15 @@ function primaryMetricRaw(model) {
   return m[key] ?? null
 }
 
-function modelTypeIcon(t) {
-  return { classification: '\u{1F3F7}️', regression: '\u{1F4C8}', clustering: '\u{1F3AF}', anomaly_detection: '\u{1F50D}' }[t] || '\u{1F916}'
+
+function isOperatorPublished(model) {
+  return mlOperatorCatalog.value.some(item => item.code === `ml_model_${model.id}`)
 }
 
 function parseJson(json, fallback) {
   try { return typeof json === 'string' ? JSON.parse(json) : json || fallback } catch { return fallback }
 }
 function formatDate(d) { return d ? new Date(d).toLocaleString('zh-CN') : '-' }
-
-const cronLabelMap = {
-  '*/5 * * * *': '每5分钟', '*/15 * * * *': '每15分钟', '*/30 * * * *': '每30分钟',
-  '0 * * * *': '每小时', '0 6 * * *': '每天6:00', '0 8 * * *': '每天8:00',
-  '0 0 * * *': '每天午夜', '0 8 * * 1': '每周一8:00', '0 0 1 * *': '每月1号',
-  '*/5': '每5分钟', '*/15': '每15分钟', '*/30': '每30分钟', '*/60': '每小时',
-  '*/360': '每6小时', '*/720': '每12小时', '*/1440': '每天', '*/10080': '每周'
-}
-function scheduleIntervalLabel(model) {
-  return cronLabelMap[model.scheduleCron] || '定期'
-}
-function scheduleTooltip(model) {
-  const mode = { train: '定期重训', predict: '定期预测' }[model.scheduleMode] || model.scheduleMode
-  const interval = cronLabelMap[model.scheduleCron] || model.scheduleCron
-  let tip = `${mode} · ${interval}`
-  if (model.nextRunAt) tip += `\n下次运行: ${formatDate(model.nextRunAt)}`
-  return tip
-}
 
 const predictRows = computed(() => {
   if (!predictResult.value) return []
@@ -711,7 +686,7 @@ watch(() => form.value.algorithm, (algo) => {
   }
 })
 onMounted(async () => {
-  await Promise.allSettled([loadAlgorithms(), loadModels(), loadMlOperatorCatalog()])
+  await Promise.allSettled([loadAlgorithms(false, userStore.canManageAlgorithms), loadModels(), loadMlOperatorCatalog()])
   const initialId = ui.consumeMiningInitialModel()
   if (initialId) {
     nextTick(() => mining.selectModel(initialId))
@@ -744,7 +719,7 @@ async function doTrain(id) {
 }
 
 function handleTrainingComplete(result) {
-  ElMessage.success('训练完成')
+  ElMessage.success('算子训练完成')
   loadModels() // 刷新模型列表
   if (detailModel.value) {
     refreshDetail()
@@ -788,16 +763,16 @@ async function handleBatchDelete() {
   const trainingModels = selectedModelsList.filter(m => m.status === MODEL_STATUS.TRAINING)
   const ghostModels = selectedModelsList.filter(m => isGhostModel(m))
 
-  let confirmMessage = `确定要删除选中的 ${selectedIds.length} 个模型吗？此操作不可恢复。`
+  let confirmMessage = `确定要删除选中的 ${selectedIds.length} 个机器学习算子吗？此操作不可恢复。`
 
   if (publishedModels.length > 0) {
-    confirmMessage += `\n\n⚠️ 包含 ${publishedModels.length} 个已发布模型，将使用强制删除`
+    confirmMessage += `\n\n包含 ${publishedModels.length} 个已发布算子，将使用强制删除`
   }
   if (trainingModels.length > 0) {
-    confirmMessage += `\n\n⚠️ 包含 ${trainingModels.length} 个训练中模型，将使用强制删除`
+    confirmMessage += `\n\n包含 ${trainingModels.length} 个训练中算子，将使用强制删除`
   }
   if (ghostModels.length > 0) {
-    confirmMessage += `\n\n👻 包含 ${ghostModels.length} 个幽灵模型（文件丢失或状态异常），将使用强制删除`
+    confirmMessage += `\n\n包含 ${ghostModels.length} 个制品异常算子，将使用强制删除`
   }
 
   if (!confirm(confirmMessage)) {
@@ -828,7 +803,7 @@ async function handleBatchDelete() {
     }
 
     if (successCount === selectedIds.length) {
-      ElMessage.success(`成功删除 ${successCount} 个模型` + (forceDeleteCount > 0 ? `（其中 ${forceDeleteCount} 个使用强制删除）` : ''))
+      ElMessage.success(`成功删除 ${successCount} 个机器学习算子` + (forceDeleteCount > 0 ? `（其中 ${forceDeleteCount} 个使用强制删除）` : ''))
     } else if (successCount > 0) {
       ElMessage.warning(`部分删除成功：${successCount}/${selectedIds.length}`)
     } else {
@@ -841,7 +816,6 @@ async function handleBatchDelete() {
     ElMessage.error('批量删除失败: ' + (e.message || '未知错误'))
   }
 }
-async function doSaveSchedule() { return saveSchedule(loadModels) }
 async function doSyncNodeChanges() {
   try {
     await syncNodeChanges()
@@ -1091,7 +1065,7 @@ async function handleSaveAndTrain() {
         showTrainingResult(trained)
       }
     } catch (e) {
-      ElMessage.warning('模型已创建(ID:' + created.id + ')，但训练启动失败: ' + (e.message || ''))
+      ElMessage.warning('机器学习算子已创建(ID:' + created.id + ')，但训练启动失败: ' + (e.message || ''))
     }
   } catch (e) {
     ElMessage.error('创建失败: ' + (e.message || ''))
@@ -1105,7 +1079,6 @@ async function handleSaveAndTrain() {
 function onActionCmd(cmd, model) {
   if (cmd === 'params') editModel(model)
   else if (cmd === 'validate') handleValidate(model.id)
-  else if (cmd === 'schedule') openSchedule(model)
   else if (cmd === 'predict') openPredict(model)
   else if (cmd === 'batchPredict') openBatchPredict(model)
   else if (cmd === 'predictResults') openPredictResults(model)
@@ -1150,7 +1123,7 @@ function openPipelineDag(pipeline) {
 
 function goToPipeline(pipelineId) {
   if (props.repositoryMode) {
-    openPipelineDag({ id: pipelineId, name: '模型流水线' })
+    openPipelineDag({ id: pipelineId, name: '训练流水线' })
     return
   }
   showDetail.value = false
@@ -1162,7 +1135,7 @@ function goToPipeline(pipelineId) {
 
 function goToModel(modelId) {
   if (props.repositoryMode) {
-    ElMessage.info('模型成品统一在调度中心管理')
+    ElMessage.info('模型成品统一在模型中心管理')
     return
   }
   activeTab.value = 'models'
@@ -1179,19 +1152,44 @@ function openAlgorithmManager(algorithm = null, mode = 'view') {
 }
 
 async function refreshAlgorithmManager(selectedId) {
-  await loadAlgorithms(true)
+  await loadAlgorithms(true, userStore.canManageAlgorithms)
   managedAlgorithm.value = selectedId ? algorithms.value.find(item => item.id === selectedId) || null : null
   algorithmManagerMode.value = 'view'
 }
 
 async function removeAlgorithmTemplate(algorithm) {
   try {
-    await ElMessageBox.confirm(`确定删除自定义算法“${algorithm.name}”吗？已有流程若引用它将无法继续训练。`, '删除算法模板', { type: 'warning' })
+    if (!algorithm.deletable) return
+    await ElMessageBox.confirm(`确定删除已停用且无引用的自定义算法“${algorithm.name}”吗？`, '删除算法模板', { type: 'warning' })
     await deleteAlgorithm(algorithm.id)
-    await loadAlgorithms(true)
+    await loadAlgorithms(true, userStore.canManageAlgorithms)
     ElMessage.success('算法模板已删除')
   } catch (error) {
     if (error !== 'cancel' && error !== 'close') ElMessage.error(error.message || '删除失败')
+  }
+}
+
+function algorithmDeleteHint(algorithm) {
+  if (algorithm.enabled !== 0) return '删除前需先停用'
+  if ((algorithm.totalReferenceCount || 0) > 0) return `仍被 ${algorithm.totalReferenceCount} 个算子或流程引用`
+  return '删除该自定义算法'
+}
+
+async function toggleAlgorithmStatus(algorithm) {
+  const enabled = algorithm.enabled === 0
+  const action = enabled ? '启用' : '停用'
+  try {
+    await ElMessageBox.confirm(
+      enabled
+        ? `启用“${algorithm.name}”后，新建算子和流程可再次选择它。`
+        : `停用“${algorithm.name}”后新建算子不再可选；已保存快照的历史算子仍可运行。`,
+      `${action}算法`, { type: enabled ? 'info' : 'warning' }
+    )
+    await setAlgorithmEnabled(algorithm.id, enabled)
+    await loadAlgorithms(true, userStore.canManageAlgorithms)
+    ElMessage.success(`算法已${action}`)
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(error.message || `${action}失败`)
   }
 }
 
@@ -1243,12 +1241,20 @@ function onDetailTuneParams(model) {
 }
 .mining-manager.embedded { max-width: none; margin: 0; padding: 0; }
 .embedded .page-header { min-height: 70px; margin: 0; padding: 12px 22px; background: var(--surface); }
+.embedded .page-header.filter-only { min-height: 48px; justify-content: flex-end; padding: 8px 16px 0; background: transparent; }
 .mining-heading { min-width: 0; }
 .mining-heading p { margin: 4px 0 0; color: var(--text-muted); font-size: var(--font-sm); }
 .repository-summary { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 10px; padding: 14px var(--space-xl) 4px; }
 .repository-summary > div { display: flex; align-items: baseline; gap: 8px; padding: 12px 15px; border: 1px solid #dfe7f1; border-radius: 10px; background: white; }
 .repository-summary strong { color: #1559b7; font-size: 22px; }
 .repository-summary span { color: #758197; font-size: 12px; }
+.ml-build-guide { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin:8px var(--space-xl) 10px;padding:10px;border:1px solid #e4e8ef;border-radius:10px;background:#fff; }
+.ml-build-guide > div { min-width:0;display:flex;align-items:center;gap:10px;padding:9px 11px;border-right:1px solid #edf0f5; }
+.ml-build-guide > div:last-child { border-right:0; }
+.ml-build-guide em { width:28px;height:28px;display:grid;place-items:center;flex:none;border-radius:7px;color:#2468f2;background:#edf3ff;font-size:11px;font-style:normal;font-weight:700; }
+.ml-build-guide span { min-width:0;display:flex;flex-direction:column;gap:3px; }
+.ml-build-guide strong { color:#344054;font-size:12px; }
+.ml-build-guide small { overflow:hidden;color:#86909c;font-size:10px;text-overflow:ellipsis;white-space:nowrap; }
 .mining-tabs {
   flex: 1; display: flex; flex-direction: column; overflow: hidden;
   padding: 0 var(--space-xl);
@@ -1260,12 +1266,26 @@ function onDetailTuneParams(model) {
 .algorithm-admin-page h3 { margin: 0 0 4px; font-size: var(--font-lg); }
 .algorithm-admin-page p { margin: 0; color: var(--text-muted); font-size: var(--font-sm); }
 .algorithm-name-cell { display: inline-flex; align-items: center; gap: 8px; }
+.algorithm-table-icon { width:26px;height:26px;display:inline-grid;place-items:center;flex:none;border-radius:6px;background:#f4f7fb;font-size:15px;line-height:1; }
+.reference-count { color: var(--text-secondary); font-size: var(--font-sm); white-space: nowrap; }
 .tab-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 .toolbar-left { display: flex; align-items: center; gap: 12px; flex: 1; flex-wrap: wrap; }
 .selection-info { display: flex; align-items: center; gap: 8px; background: var(--el-color-danger-light-9); padding: 6px 12px; border-radius: var(--radius-md); border: 1px solid var(--el-color-danger-light-5); }
 .selected-count { font-size: var(--font-base); color: var(--el-color-danger); font-weight: 600; }
-.batch-hint { display: flex; align-items: center; }
-.hint-text { font-size: var(--font-sm); color: var(--el-color-info); background: var(--el-color-info-light-9); padding: 4px 10px; border-radius: var(--radius-sm); }
+
+@media (max-width: 720px) {
+  .embedded .page-header { min-height: auto; flex-wrap: wrap; padding: 10px 12px; }
+  .embedded .page-header :deep(.el-select) { width: 100% !important; margin-left: 0 !important; }
+  .mining-tabs { padding-inline: 12px; }
+  .tab-toolbar { align-items: stretch; flex-direction: column; gap: 10px; }
+  .tab-toolbar > .el-button { width: 100%; margin-left: 0; }
+  .toolbar-left { align-items: stretch; flex-direction: column; }
+  .toolbar-left :deep(.el-input) { width: 100% !important; }
+  .selection-info { flex-wrap: wrap; }
+  .ml-build-guide { grid-template-columns:1fr;margin:8px 12px; }
+  .ml-build-guide > div { border-right:0;border-bottom:1px solid #edf0f5; }
+  .ml-build-guide > div:last-child { border-bottom:0; }
+}
 
 /* Params editor (kept inline since it's a small dialog) */
 .params-editor { padding: var(--space-sm) 0; }

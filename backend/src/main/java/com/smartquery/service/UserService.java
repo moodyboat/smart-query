@@ -2,8 +2,8 @@ package com.smartquery.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.smartquery.common.BusinessException;
+import com.smartquery.common.PermissionCodes;
 import com.smartquery.common.UserContextHolder;
-import com.smartquery.common.UserRoles;
 import com.smartquery.dto.ChangePasswordRequest;
 import com.smartquery.dto.CreateUserRequest;
 import com.smartquery.dto.UpdateUserRequest;
@@ -15,7 +15,6 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
-import java.util.Locale;
 
 @Service
 @RequiredArgsConstructor
@@ -23,13 +22,11 @@ public class UserService {
 
     private final UserMapper userMapper;
     private final PasswordEncoder passwordEncoder;
+    private final RoleService roleService;
 
-    /** 仅 admin 可调用用户管理接口（同包/外部 Controller 共用） */
+    /** User administration is granted by database permission, never by role name. */
     public void requireAdmin() {
-        UserContextHolder.UserContext ctx = UserContextHolder.get();
-        if (ctx == null || !UserRoles.ADMIN.equals(ctx.role())) {
-            throw new BusinessException(403, "无权限，仅管理员可操作");
-        }
+        roleService.requireCurrentUser(PermissionCodes.USER_MANAGE, "无权限管理平台用户");
     }
 
     public List<UserInfo> list(String keyword) {
@@ -45,7 +42,7 @@ public class UserService {
     public UserInfo create(CreateUserRequest request) {
         requireAdmin();
         if (request.getRole() == null || request.getRole().isBlank()) {
-            request.setRole(UserRoles.USER);
+            request.setRole(roleService.defaultRoleCode());
         }
         request.setRole(supportedRole(request.getRole()));
         Long existing = userMapper.selectCount(new LambdaQueryWrapper<User>()
@@ -74,13 +71,12 @@ public class UserService {
             ? user.getRole() : supportedRole(request.getRole());
         int nextEnabled = request.getEnabled() == null
             ? (user.getEnabled() == null ? 1 : user.getEnabled()) : request.getEnabled();
-        if (UserRoles.ADMIN.equals(user.getRole())
-                && (!UserRoles.ADMIN.equals(nextRole) || nextEnabled == 0)) {
-            Long adminCount = userMapper.selectCount(new LambdaQueryWrapper<User>()
-                .eq(User::getRole, UserRoles.ADMIN).eq(User::getEnabled, 1));
-            if (adminCount != null && adminCount <= 1) {
-                throw new BusinessException(400, "不能禁用或降级最后一个管理员");
-            }
+        boolean currentlyManagesUsers = roleService.hasPermission(user.getRole(), PermissionCodes.USER_MANAGE);
+        boolean willManageUsers = nextEnabled == 1
+            && roleService.hasPermission(nextRole, PermissionCodes.USER_MANAGE);
+        if (currentlyManagesUsers && !willManageUsers
+                && roleService.enabledUserCountWithPermission(PermissionCodes.USER_MANAGE) <= 1) {
+            throw new BusinessException(400, "不能移除最后一个用户管理员的权限");
         }
         if (request.getDisplayName() != null) user.setDisplayName(request.getDisplayName());
         if (request.getEmail() != null) user.setEmail(request.getEmail());
@@ -128,12 +124,9 @@ public class UserService {
         if (user == null) {
             return;
         }
-        if (UserRoles.ADMIN.equals(user.getRole())) {
-            Long adminCount = userMapper.selectCount(new LambdaQueryWrapper<User>()
-                .eq(User::getRole, UserRoles.ADMIN));
-            if (adminCount != null && adminCount <= 1) {
-                throw new BusinessException(400, "不能删除最后一个管理员");
-            }
+        if (roleService.hasPermission(user.getRole(), PermissionCodes.USER_MANAGE)
+                && roleService.enabledUserCountWithPermission(PermissionCodes.USER_MANAGE) <= 1) {
+            throw new BusinessException(400, "不能删除最后一个用户管理员");
         }
         // 不允许删除自己
         if (id.equals(UserContextHolder.getUserId())) {
@@ -143,12 +136,12 @@ public class UserService {
     }
 
     private UserInfo toUserInfo(User user) {
-        return new UserInfo(user.getId(), user.getUsername(), user.getDisplayName(), user.getEmail(), user.getRole());
+        return new UserInfo(user.getId(), user.getUsername(), user.getDisplayName(), user.getEmail(),
+            user.getRole(), roleService.roleLabel(user.getRole()),
+            roleService.permissionCodes(user.getRole()), user.getEnabled());
     }
 
     private String supportedRole(String raw) {
-        String role = raw == null ? UserRoles.USER : raw.trim().toLowerCase(Locale.ROOT);
-        if (!UserRoles.isSupported(role)) throw new BusinessException(422, "不支持的用户角色: " + role);
-        return role;
+        return roleService.validateEnabledRole(raw == null ? roleService.defaultRoleCode() : raw);
     }
 }

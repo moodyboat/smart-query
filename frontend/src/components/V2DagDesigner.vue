@@ -2,13 +2,13 @@
   <div :class="['page-container', 'dag-designer', { embedded: props.embedded }]">
     <header class="page-header dag-header">
       <button v-if="!props.embedded" class="back-btn" @click="emit('close')"><span class="back-arrow">&larr;</span> 返回问数</button>
-      <div class="dag-heading"><h2 class="page-title">流程编排</h2><span>统一 DAG · 固定版本运行</span></div>
+      <div v-if="!props.embedded" class="dag-heading"><h2 class="page-title">流程编排</h2></div>
       <el-select v-model="flowId" placeholder="选择流程" filterable class="flow-select" @change="loadVersions">
         <el-option v-for="flow in flows" :key="flow.id" :label="flow.name" :value="flow.id" />
       </el-select>
       <el-button @click="createVisible=true">新建流程</el-button>
       <el-select v-if="flowId" v-model="selectedVersionId" clearable placeholder="新草稿" class="version-select" @change="loadSelectedVersion">
-        <el-option v-for="version in versions" :key="version.id" :label="`流程 v${version.versionNo} · #${version.id}`" :value="version.id" />
+        <el-option v-for="version in versions" :key="version.id" :label="`流程版本 ${version.versionNo} · #${version.id}`" :value="version.id" />
       </el-select>
       <span class="spacer" />
       <el-button :loading="busy==='validate'" @click="validateCurrent">校验</el-button>
@@ -24,7 +24,7 @@
         <el-input v-model="catalogSearch" clearable placeholder="搜索算子" size="small" />
         <el-radio-group v-model="typeFilter" size="small" class="type-filter">
           <el-radio-button value="">全部</el-radio-button><el-radio-button value="DATA">加工</el-radio-button>
-          <el-radio-button value="RULE">规则</el-radio-button><el-radio-button value="ML">模型</el-radio-button>
+          <el-radio-button value="RULE">规则</el-radio-button><el-radio-button value="ML">机器学习</el-radio-button>
           <el-radio-button value="AGENT">智能体</el-radio-button><el-radio-button value="OUTPUT">输出</el-radio-button>
         </el-radio-group>
         <div class="palette-list" v-loading="catalogLoading">
@@ -34,7 +34,7 @@
               :class="['palette-item', `type-${item.operatorType.toLowerCase()}`]"
               @dragstart="startCatalogDrag($event,item)" @click="quickAdd(item)">
               <span class="palette-icon">{{ typeIcon(item.operatorType) }}</span>
-              <span class="palette-main"><strong>{{ item.name }}</strong><small>v{{ item.versionNo }} · {{ item.runtimeProfileCode }}</small></span>
+              <span class="palette-main"><strong>{{ item.name }}</strong><small>版本 {{ item.versionNo }} · {{ item.runtimeProfileCode }}</small></span>
               <el-tag v-if="item.operatorType==='OUTPUT'" size="small" type="success">{{ item.metadata?.outputKind }}</el-tag>
             </button>
           </div>
@@ -132,7 +132,7 @@
 
     <FlowRunHistoryDrawer v-model="historyVisible" :flow-id="flowId" :flow-name="selectedFlowName" :versions="versions" />
 
-    <el-dialog v-model="trialVisible" title="V2 DAG 试运行" width="920px" destroy-on-close>
+    <el-dialog v-model="trialVisible" title="流程试运行" width="920px" destroy-on-close>
       <div class="trial-layout">
         <section class="trial-input"><el-alert :closable="false" type="info" title="输入只用于有界试运行；正式输出会在整条 DAG 成功后原子提交。" /><el-input v-model="trialInputText" type="textarea" :rows="18" class="json-editor" /><el-button type="primary" :loading="busy==='trial'" @click="startTrial">开始运行流程版本 #{{ selectedVersionId }}</el-button></section>
         <section class="trial-status">
@@ -211,7 +211,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import V2DagCanvas from './V2DagCanvas.vue'
 import OutputArtifactViewer from './OutputArtifactViewer.vue'
 import FlowRunHistoryDrawer from './FlowRunHistoryDrawer.vue'
-import { cancelNodeReplay, cancelRun, createFlow, createFlowVersion, createNodeReplay, fetchFlowVersions, fetchFlows, fetchNodeReplay, fetchNodeReplays, fetchPublishedOperatorCatalog, fetchRun, fetchRunNodes, fetchRunOutputs, queryOutputView, submitTrialRun, validateDag } from '../api/orchestration.js'
+import { cancelNodeReplay, cancelRun, createFlow, createFlowVersion, createNodeReplay, fetchFlowVersions, fetchFlows, fetchNodeReplay, fetchNodeReplays, fetchPublishedOperatorCatalog, fetchRun, fetchRunNodes, fetchRunOutputs, queryOutputView, submitModelVersionApproval, submitTrialRun, validateDag } from '../api/orchestration.js'
 
 const props = defineProps({
   initialOperatorVersionId: { type: Number, default: null },
@@ -283,7 +283,7 @@ function serializedNodes() { return nodes.value.map(({operatorName,operatorType,
 function serializeMapping(mapping) { const {defaultValueText,...result}=mapping;if(defaultValueText!=null&&String(defaultValueText).trim()!=='')result.defaultValue=JSON.parse(defaultValueText);else delete result.defaultValue;return result }
 function serializedEdges() { return edges.value.map(edge=>({source:edge.source,target:edge.target,mappingMode:String(edge.mappingMode||'MERGE').toUpperCase(),fieldMappings:(edge.fieldMappings||[]).map(serializeMapping)})) }
 async function validateCurrent() { if(!commitNodeConfig())return false;let safeEdges;try{safeEdges=serializedEdges()}catch{ElMessage.error('边映射默认值必须是合法 JSON，例如 0、null、"未知" 或 {}');return false}busy.value='validate';try{validation.value=await validateDag(serializedNodes(),safeEdges);if(validation.value.valid)ElMessage.success('DAG 结构与边数据契约校验通过');else ElMessage.error(validation.value.errors?.[0]||'DAG 校验失败');return validation.value.valid}finally{busy.value=''} }
-async function saveVersion() { if(!await validateCurrent())return;busy.value='save';try{const version=await createFlowVersion(flowId.value,{nodes:serializedNodes(),edges:serializedEdges(),parameterMappings:{}});versions.value=await fetchFlowVersions(flowId.value);selectedVersionId.value=version.id;loadSelectedVersion();ElMessage.success(`不可变流程版本 v${version.versionNo} 已保存`)}finally{busy.value=''} }
+async function saveVersion() { if(!await validateCurrent())return;busy.value='save';try{const version=await createFlowVersion(flowId.value,{nodes:serializedNodes(),edges:serializedEdges(),parameterMappings:{}});await submitModelVersionApproval(flowId.value,version.id,'流程模型结构校验通过，提交不可变版本审批');versions.value=await fetchFlowVersions(flowId.value);selectedVersionId.value=version.id;loadSelectedVersion();ElMessage.success(`模型 v${version.versionNo} 已固化并提交版本审批`)}finally{busy.value=''} }
 
 async function startTrial() { let input;try{input=JSON.parse(trialInputText.value)}catch{ElMessage.error('试运行输入不是有效 JSON');return} busy.value='trial';runOutputs.value=[];artifactView.value=null;resetArtifactQuery();runNodes.value=[];nodeStatuses.value={};nodeReplays.value=[];replayDetail.value=null;try{currentRun.value=await submitTrialRun(selectedVersionId.value,input);await pollRun()}finally{busy.value=''} }
 async function pollRun() { clearPoll(); const tick=async()=>{if(!currentRun.value)return;currentRun.value=await fetchRun(currentRun.value.id);runNodes.value=await fetchRunNodes(currentRun.value.id);nodeStatuses.value=Object.fromEntries(runNodes.value.map(item=>[item.nodeId,item.status]));if(['SUCCESS','FAILED','CANCELED'].includes(currentRun.value.status)){nodeReplays.value=await fetchNodeReplays(currentRun.value.id);if(currentRun.value.status==='SUCCESS'){runOutputs.value=await fetchRunOutputs(currentRun.value.id);selectedArtifactId.value=runOutputs.value[0]?.id||null;resetArtifactQuery();if(selectedArtifactId.value)await loadArtifact();ElMessage.success('DAG 试运行成功')}else if(currentRun.value.status==='CANCELED')ElMessage.warning('DAG 试运行已取消');else ElMessage.error(currentRun.value.errorMessage||'DAG 试运行失败');busy.value='';return}pollTimer=setTimeout(tick,900)};await tick() }

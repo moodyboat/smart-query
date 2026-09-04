@@ -322,7 +322,7 @@ public class ChatController {
 
     @GetMapping("/admin/sessions")
     public Map<String, Object> getActiveSessions() {
-        resourceAccess.requireAdmin();
+        resourceAccess.requirePermission(com.smartquery.common.PermissionCodes.MONITOR_VIEW, "无权限查看活动会话");
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("activeConversations", sessionManager.activeCount());
         result.put("sessions", sessionManager.getActiveSessions());
@@ -331,19 +331,19 @@ public class ChatController {
 
     @GetMapping("/admin/stats")
     public Map<String, Object> getStats() {
-        resourceAccess.requireAdmin();
+        resourceAccess.requirePermission(com.smartquery.common.PermissionCodes.MONITOR_VIEW, "无权限查看系统统计");
         return statsService.getStats();
     }
 
     @GetMapping("/admin/system-monitor")
     public Map<String, Object> getSystemMonitor() {
-        resourceAccess.requireAdmin();
+        resourceAccess.requirePermission(com.smartquery.common.PermissionCodes.MONITOR_VIEW, "无权限查看系统监控");
         return systemMonitorService.snapshot();
     }
 
     @GetMapping("/admin/tools")
     public Map<String, Object> getTools() {
-        resourceAccess.requireAdmin();
+        resourceAccess.requirePermission(com.smartquery.common.PermissionCodes.MONITOR_VIEW, "无权限查看工具状态");
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("tools", toolRegistry.getToolInfoList());
         result.put("total", toolRegistry.getAllTools().size());
@@ -352,13 +352,13 @@ public class ChatController {
 
     @PostMapping("/admin/tools/health-check")
     public Map<String, Object> healthCheckTools() {
-        resourceAccess.requireAdmin();
+        resourceAccess.requirePermission(com.smartquery.common.PermissionCodes.MONITOR_VIEW, "无权限执行工具健康检查");
         return toolRegistry.healthCheckAll();
     }
 
     @GetMapping("/admin/logs")
     public Map<String, Object> getLogFiles() {
-        resourceAccess.requireAdmin();
+        resourceAccess.requirePermission(com.smartquery.common.PermissionCodes.MONITOR_VIEW, "无权限查看系统日志");
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("files", eventLogger.getLogFiles());
         return result;
@@ -366,13 +366,13 @@ public class ChatController {
 
     @PostMapping("/admin/logs/maintain")
     public Map<String, Object> maintainLogs() {
-        resourceAccess.requireAdmin();
+        resourceAccess.requirePermission(com.smartquery.common.PermissionCodes.MONITOR_VIEW, "无权限维护系统日志");
         return eventLogger.performLogMaintenance();
     }
 
     @GetMapping("/admin/diagnostics")
     public Map<String, Object> getDiagnostics() {
-        resourceAccess.requireAdmin();
+        resourceAccess.requirePermission(com.smartquery.common.PermissionCodes.MONITOR_VIEW, "无权限查看诊断信息");
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("operations", DiagnosticsTimer.getOperationStats());
         result.put("promptCache", Map.of("entries", toolPromptLoader.getCacheStats()));
@@ -393,7 +393,7 @@ public class ChatController {
 
     @GetMapping("/admin/prompts")
     public Map<String, Object> getPromptDebug() {
-        resourceAccess.requireAdmin();
+        resourceAccess.requirePermission(com.smartquery.common.PermissionCodes.MONITOR_VIEW, "无权限查看提示词调试信息");
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("promptCacheEntries", toolPromptLoader.getCacheStats());
         result.put("schemaCache", schemaContextBuilder.getCacheStats());

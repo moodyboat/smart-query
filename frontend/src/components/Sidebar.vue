@@ -1,175 +1,128 @@
 <template>
-  <aside class="sidebar">
-    <div class="sidebar-header">
-      <div class="header-top">
-        <h2>智能问数</h2>
-        <el-button
-          v-if="conversations.length > 0 && !batchMode"
-          @click="toggleBatchMode"
-          size="small"
-          text
-        >
-          批量管理
-        </el-button>
+  <aside :class="['sidebar', { 'navigation-only': props.activeDomain !== 'workbench' }]" aria-label="当前分区侧栏">
+    <nav class="section-navigation" :aria-label="`${activeDomainMeta.title}功能导航`">
+      <header class="section-navigation-heading">
+        <strong>{{ activeDomainMeta.title }}</strong>
+        <em>{{ activeDomainMeta.count }} 项功能</em>
+      </header>
+
+      <div class="section-links">
+        <template v-if="props.activeDomain === 'workbench'">
+          <button type="button" class="section-entry" :class="{ active: props.activeTool === 'chat' }" @click="emit('openChat')">
+            <span class="nav-icon"><el-icon><ChatDotRound /></el-icon></span><span>智能问数</span>
+          </button>
+        </template>
+        <template v-else-if="props.activeDomain === 'data'">
+          <button type="button" class="section-entry" :class="{ active: props.activeTool === 'data-source' }" @click="emit('openDataSource')"><span class="nav-icon"><el-icon><DataLine /></el-icon></span><span>数据源</span></button>
+          <button v-if="userStore.canManageScenarios" type="button" class="section-entry" :class="{ active: props.activeTool === 'scenarios' }" @click="emit('openScenarioManager')"><span class="nav-icon"><el-icon><Star /></el-icon></span><span>业务场景</span></button>
+        </template>
+        <template v-else-if="props.activeDomain === 'development'">
+          <button type="button" class="section-entry" :class="{ active: props.activeTool === 'pipelines' }" @click="emit('openWorkbench', 'pipelines')"><span class="nav-icon"><el-icon><Connection /></el-icon></span><span>训练流水线</span></button>
+          <button type="button" class="section-entry" :class="{ active: props.activeTool === 'operators' }" @click="emit('openWorkbench', 'operators')"><span class="nav-icon"><el-icon><Box /></el-icon></span><span>算子库</span></button>
+        </template>
+        <template v-else-if="props.activeDomain === 'models'">
+          <button type="button" class="section-entry" :class="{ active: props.activeTool === 'schedule' }" @click="emit('openWorkbench', 'schedule')"><span class="nav-icon"><el-icon><Calendar /></el-icon></span><span>模型资产</span></button>
+          <button type="button" class="section-entry" :class="{ active: props.activeTool === 'governance' }" @click="emit('openWorkbench', 'governance')"><span class="nav-icon"><el-icon><Lock /></el-icon></span><span>模型治理</span></button>
+        </template>
+        <template v-else-if="props.activeDomain === 'monitor'">
+          <button type="button" class="section-entry" :class="{ active: props.activeTool === 'monitor-operations' }" @click="emit('openMonitorSection', 'operations')"><span class="nav-icon"><el-icon><Calendar /></el-icon></span><span>调度任务与执行</span></button>
+          <button type="button" class="section-entry" :class="{ active: props.activeTool === 'monitor-view' }" @click="emit('openMonitorSection', 'view')"><span class="nav-icon"><el-icon><View /></el-icon></span><span>穿透式监控视图</span></button>
+        </template>
+        <template v-else>
+          <button type="button" class="section-entry" :class="{ active: props.activeTool === 'prompts' }" @click="emit('openPromptManager')"><span class="nav-icon"><el-icon><EditPen /></el-icon></span><span>提示词</span></button>
+          <button v-if="userStore.canManageUsers" type="button" class="section-entry" :class="{ active: props.activeTool === 'users' }" @click="emit('openUserManagement')"><span class="nav-icon"><el-icon><User /></el-icon></span><span>用户管理</span></button>
+        </template>
       </div>
-      <el-select
-        v-model="selectedScenarioCode"
-        placeholder="选择场景"
-        class="scenario-select"
-        size="small"
-        @change="onScenarioChange"
-      >
-        <el-option
-          v-for="s in availableScenarios"
-          :key="s.code"
-          :label="(s.icon ? s.icon + ' ' : '') + (s.name || s.code)"
-          :value="s.code"
-        />
-      </el-select>
-      <el-tooltip
-        :content="lockedDataSourceId != null ? '当前场景已锁定数据源，退出场景可切换' : ''"
-        :disabled="lockedDataSourceId == null"
-        placement="bottom"
-      >
-        <el-select
-          v-model="selectedDsId"
-          placeholder="选择数据源"
-          class="ds-select"
-          size="small"
-          :disabled="lockedDataSourceId != null"
-        >
-          <el-option
-            v-for="ds in qaEnabledDataSources"
-            :key="ds.id"
-            :label="ds.name"
-            :value="ds.id"
-          />
-        </el-select>
-      </el-tooltip>
-    </div>
+    </nav>
 
-    <div v-if="conversations.length > 5" class="search-bar">
-      <input
-        v-model="searchQuery"
-        class="search-input"
-        placeholder="搜索对话..."
-      />
-    </div>
-
-    <div class="conversation-list">
-      <!-- 批量操作栏 -->
-      <div v-if="batchMode" class="batch-actions">
-        <div class="batch-info">
-          <el-checkbox
-            v-model="allSelected"
-            :indeterminate="isIndeterminate"
-            @change="handleSelectAll"
-          >
-            全选 ({{ selectedCount }}/{{ filteredConversations.length }})
-          </el-checkbox>
-        </div>
-        <div class="batch-buttons">
-          <el-button
-            size="small"
-            :disabled="selectedCount === 0"
-            @click="handleBatchDelete"
-            type="danger"
-          >
-            删除选中 ({{ selectedCount }})
-          </el-button>
-          <el-button size="small" @click="exitBatchMode">取消</el-button>
-        </div>
+    <section v-if="props.activeDomain === 'workbench'" class="sidebar-context chat-context">
+      <div class="context-heading">
+        <div><small>当前上下文</small><strong>对话与数据</strong></div>
       </div>
-
-      <template v-if="!batchMode">
-        <div v-for="g in groupedConversations" :key="g.key" class="conv-group">
-          <div v-if="g.items.length" class="conv-group-label">{{ g.label }}</div>
-          <div
-            v-for="conv in g.items"
-            :key="conv.id"
-            class="conv-item"
-            :class="{ active: conv.id === currentConvId }"
-            @click="handleConvClick(conv)"
-          >
-            <span class="conv-icon">💬</span>
-            <template v-if="editingId === conv.id">
-              <input
-                ref="editInput"
-                v-model="editTitle"
-                class="conv-edit-input"
-                @keydown.enter="saveRename(conv.id)"
-                @keydown.escape="cancelRename"
-                @blur="saveRename(conv.id)"
-              />
-            </template>
-            <template v-else>
-              <span class="conv-title" @dblclick="startRename(conv)">{{ conv.title || '新对话' }}</span>
-            </template>
-            <span class="conv-delete" @click.stop="handleDelete(conv.id)" title="删除">×</span>
-          </div>
-        </div>
-      </template>
-      <template v-else>
-        <div
-          v-for="conv in filteredConversations"
-          :key="conv.id"
-          class="conv-item batch-mode"
-          :class="{ active: conv.id === currentConvId }"
-          @click="handleConvClick(conv)"
-        >
-          <el-checkbox
-            v-model="selectedConversations[conv.id]"
-            @click.stop
-            class="conv-checkbox"
-          />
-          <span class="conv-icon">💬</span>
-          <span class="conv-title">{{ conv.title || '新对话' }}</span>
-          <span class="conv-delete" @click.stop="handleDelete(conv.id)" title="删除">×</span>
-        </div>
-      </template>
-      <div v-if="!filteredConversations.length && conversations.length" class="conv-empty">未找到匹配对话</div>
-      <div v-if="!conversations.length" class="conv-empty">暂无对话</div>
-    </div>
-
-    <div class="sidebar-footer">
-      <div class="user-bar">
-        <div class="user-info">
-          <el-avatar :size="28" class="user-avatar">{{ avatarText }}</el-avatar>
-          <span class="user-name" :title="userStore.displayName">{{ userStore.displayName }}</span>
-        </div>
-        <div class="user-actions">
-          <el-tooltip content="退出登录" placement="top">
-            <el-button text circle @click="$emit('logout')">
-              <el-icon><SwitchButton /></el-icon>
-            </el-button>
+      <div class="context-selects">
+        <label>
+          <span>业务场景</span>
+          <el-select v-model="selectedScenarioCode" placeholder="选择场景" class="scenario-select" size="small" @change="onScenarioChange">
+            <el-option v-for="s in availableScenarios" :key="s.code" :label="(s.icon ? s.icon + ' ' : '') + (s.name || s.code)" :value="s.code" />
+          </el-select>
+        </label>
+        <label>
+          <span>数据源</span>
+          <el-tooltip :content="lockedDataSourceId != null ? '当前场景已锁定数据源' : ''" :disabled="lockedDataSourceId == null" placement="right">
+            <el-select v-model="selectedDsId" placeholder="选择数据源" class="ds-select" size="small" :disabled="lockedDataSourceId != null">
+              <el-option v-for="ds in qaEnabledDataSources" :key="ds.id" :label="ds.name" :value="ds.id" />
+            </el-select>
           </el-tooltip>
+        </label>
+      </div>
+
+      <div class="history-heading">
+        <span>最近对话</span>
+        <button v-if="conversations.length > 0 && !batchMode" type="button" @click="toggleBatchMode">管理</button>
+      </div>
+      <div v-if="conversations.length > 5" class="search-bar">
+        <el-icon><Search /></el-icon>
+        <input v-model="searchQuery" class="search-input" placeholder="搜索对话" />
+      </div>
+
+      <div class="conversation-list">
+        <div v-if="batchMode" class="batch-actions">
+          <el-checkbox v-model="allSelected" :indeterminate="isIndeterminate" @change="handleSelectAll">全选 {{ selectedCount }}/{{ filteredConversations.length }}</el-checkbox>
+          <div><button type="button" :disabled="selectedCount === 0" class="danger-action" @click="handleBatchDelete">删除</button><button type="button" @click="exitBatchMode">取消</button></div>
         </div>
+
+        <template v-if="!batchMode">
+          <div v-for="g in groupedConversations" :key="g.key" class="conv-group">
+            <div v-if="g.items.length" class="conv-group-label">{{ g.label }}</div>
+            <div v-for="conv in g.items" :key="conv.id" class="conv-item" :class="{ active: conv.id === currentConvId }" @click="handleConvClick(conv)">
+              <el-icon class="conv-icon"><ChatLineSquare /></el-icon>
+              <input v-if="editingId === conv.id" ref="editInput" v-model="editTitle" class="conv-edit-input" @keydown.enter="saveRename(conv.id)" @keydown.escape="cancelRename" @blur="saveRename(conv.id)" />
+              <span v-else class="conv-title" @dblclick="startRename(conv)">{{ conv.title || '新对话' }}</span>
+              <button type="button" class="conv-delete" @click.stop="handleDelete(conv.id)" title="删除对话">×</button>
+            </div>
+          </div>
+        </template>
+        <template v-else>
+          <div v-for="conv in filteredConversations" :key="conv.id" class="conv-item batch-mode" :class="{ active: conv.id === currentConvId }" @click="handleConvClick(conv)">
+            <el-checkbox v-model="selectedConversations[conv.id]" @click.stop class="conv-checkbox" />
+            <el-icon class="conv-icon"><ChatLineSquare /></el-icon>
+            <span class="conv-title">{{ conv.title || '新对话' }}</span>
+          </div>
+        </template>
+        <div v-if="!filteredConversations.length && conversations.length" class="conv-empty">没有匹配的对话</div>
+        <div v-if="!conversations.length" class="conv-empty">发送第一条消息即可创建会话</div>
       </div>
-      <div class="footer-section-label">工作台</div>
-      <div class="admin-actions">
-        <el-button class="workbench-action" @click="$emit('openWorkbench')">
-          <el-icon><Share /></el-icon> 编排与治理
-        </el-button>
-        <el-button @click="$emit('openDataSource')">
-          <el-icon><DataLine /></el-icon> 数据源
-        </el-button>
-        <el-button @click="$emit('openPromptManager')">
-          <el-icon><EditPen /></el-icon> 提示词
-        </el-button>
-        <el-button v-if="userStore.isAdmin" @click="$emit('openScenarioManager')">
-          <el-icon><Star /></el-icon> 场景
-        </el-button>
+    </section>
+
+    <div v-else class="sidebar-spacer" aria-hidden="true">
+      <div class="section-ornament">
+        <span class="ornament-orbit orbit-one"></span>
+        <span class="ornament-orbit orbit-two"></span>
+        <span class="ornament-dot dot-one"></span>
+        <span class="ornament-dot dot-two"></span>
+        <span class="ornament-dot dot-three"></span>
+        <div class="ornament-core"><el-icon :size="24"><component :is="activeDomainIcon" /></el-icon></div>
       </div>
-      <el-button type="primary" class="new-conv-btn" :loading="creating" @click="handleNewConversation">
-        <el-icon><Plus /></el-icon> 新建对话
-      </el-button>
     </div>
+
+    <footer class="sidebar-footer">
+      <div class="user-info">
+        <el-avatar :size="36" class="user-avatar">{{ avatarText }}</el-avatar>
+        <div><strong :title="userStore.displayName">{{ userStore.displayName }}</strong><small>{{ userStore.roleLabel }}</small></div>
+      </div>
+      <el-tooltip content="退出登录" placement="top">
+        <button type="button" class="logout-button" aria-label="退出登录" @click="emit('logout')"><el-icon><SwitchButton /></el-icon></button>
+      </el-tooltip>
+    </footer>
   </aside>
 </template>
 
 <script setup>
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
-import { Plus, DataLine, EditPen, SwitchButton, Star, Share } from '@element-plus/icons-vue'
+import {
+  Box, Calendar, ChatDotRound, ChatLineSquare, Connection, DataLine,
+  EditPen, Lock, Search, Star, SwitchButton, User, View
+} from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { fetchConversations, fetchDataSources, createConversation, deleteConversation, renameConversation, batchDeleteConversations } from '../api'
 import { useUserStore } from '../stores/user'
@@ -179,6 +132,27 @@ import { getScenarioConfig, getAllScenarios } from '../config/scenarios.js'
 const userStore = useUserStore()
 const convStore = useConversationStore()
 const avatarText = computed(() => (userStore.displayName || 'U').charAt(0).toUpperCase())
+const props = defineProps({
+  activeDomain: { type: String, default: 'workbench' },
+  activeSection: { type: String, default: 'chat' },
+  activeTool: { type: String, default: 'chat' }
+})
+const domainMeta = {
+  workbench: { title: 'AI 工作台', count: 1 },
+  data: { title: '数据中心', count: 2 },
+  development: { title: '开发中心', count: 2 },
+  models: { title: '模型中心', count: 2 },
+  monitor: { title: '穿透式监控模型', count: 2 },
+  platform: { title: '平台配置', count: 2 }
+}
+const activeDomainMeta = computed(() => domainMeta[props.activeDomain] || domainMeta.workbench)
+const activeDomainIcon = computed(() => ({
+  data: DataLine,
+  development: Connection,
+  models: Box,
+  monitor: View,
+  platform: EditPen
+}[props.activeDomain] || ChatDotRound))
 
 const conversations = ref([])
 const dataSources = ref([])
@@ -238,7 +212,7 @@ watch(() => convStore.getCurrentScenario(), (code) => {
 const batchMode = ref(false)
 const selectedConversations = ref({})
 
-const emit = defineEmits(['selectConversation', 'conversationCreated', 'conversationDeleted', 'dataSourceChanged', 'openWorkbench', 'openDataSource', 'openPromptManager', 'openScenarioManager', 'logout'])
+const emit = defineEmits(['selectConversation', 'conversationCreated', 'conversationDeleted', 'dataSourceChanged', 'openChat', 'openWorkbench', 'openMonitorSection', 'openDataSource', 'openPromptManager', 'openScenarioManager', 'openUserManagement', 'logout'])
 
 const filteredConversations = computed(() => {
   if (!searchQuery.value.trim()) return conversations.value
@@ -328,6 +302,7 @@ async function handleNewConversation() {
   if (creating.value) return
   creating.value = true
   try {
+    emit('openChat')
     const conv = await createConversation('新对话')
     conversations.value.unshift(conv)
     currentConvId.value = conv.id
@@ -408,6 +383,7 @@ function handleConvClick(conv) {
     // Toggle selection in batch mode
     selectedConversations.value[conv.id] = !selectedConversations.value[conv.id]
   } else {
+    emit('openChat')
     // Normal conversation selection
     currentConvId.value = conv.id
     // 恢复会话绑定的场景（刷新页面/切换会话后场景跟着会话走）
@@ -474,230 +450,429 @@ async function refreshConversations() {
   }
 }
 
-defineExpose({ setCurrentConversation, getSelectedDataSourceId, conversations, refreshConversations })
+defineExpose({ setCurrentConversation, getSelectedDataSourceId, conversations, refreshConversations, createConversation: handleNewConversation })
 </script>
 
 <style scoped>
 .sidebar {
-  width: 260px;
-  background: var(--sidebar-bg);
-  color: var(--sidebar-fg);
-  display: flex; flex-direction: column; flex-shrink: 0;
-  transition: transform 0.25s ease;
-  background-image: radial-gradient(circle at 30% 0%, var(--sidebar-brand-glow), transparent 60%);
-}
-@media (max-width: 767px) {
-  .sidebar {
-    position: fixed; left: 0; top: 0; bottom: 0; z-index: 900;
-    transform: translateX(-100%);
-    box-shadow: var(--shadow-xl);
-  }
-  .sidebar.sidebar-open { transform: translateX(0); }
-}
-.sidebar-header {
-  padding: var(--space-lg);
-  border-bottom: 1px solid var(--sidebar-border);
+  width: var(--sidebar-width, 316px);
+  height: calc(100% - var(--workspace-gap, 10px) - var(--workspace-gap, 10px));
+  margin: var(--workspace-gap, 10px);
+  padding: clamp(11px, 1vw, 14px);
   display: flex;
   flex-direction: column;
-  gap: var(--space-md);
-}
-.sidebar-header h2 {
-  font-size: var(--font-xl); font-weight: 700; color: var(--sidebar-fg-strong);
-  margin: 0;
-  letter-spacing: 0.02em;
-}
-.sidebar-header h2::before {
-  content: '◆';
-  margin-right: 6px;
-  color: var(--brand-primary);
-  font-size: 0.85em;
-}
-.sidebar :deep(.el-button.is-text),
-.sidebar :deep(.el-button.is-text:hover) {
-  color: var(--sidebar-fg);
-}
-.sidebar :deep(.el-button.is-text:hover) {
-  background: var(--sidebar-hover);
-}
-.scenario-select,
-.ds-select {
-  width: 100%;
-  margin: 0;
-}
-.sidebar :deep(.el-select .el-select__wrapper) {
-  background: var(--sidebar-bg-soft);
-  box-shadow: none;
-  border: 1px solid var(--sidebar-border);
-  color: var(--sidebar-fg);
-  min-height: 32px;
-}
-.sidebar :deep(.el-select .el-select__wrapper:hover) {
-  border-color: var(--sidebar-brand-border);
-}
-.sidebar :deep(.el-select .el-select__placeholder),
-.sidebar :deep(.el-select .el-select__selected-item) {
-  color: var(--sidebar-fg-strong);
-}
-.sidebar :deep(.el-select.is-disabled .el-select__wrapper) {
-  background: var(--sidebar-bg);
-  color: var(--sidebar-fg-muted);
-  cursor: not-allowed;
-}
-
-.search-bar { padding: var(--space-sm) var(--space-md) var(--space-xs); }
-.search-input {
-  width: 100%; padding: var(--space-xs) var(--space-sm);
-  background: var(--sidebar-bg-soft);
-  border: 1px solid var(--sidebar-border);
-  color: var(--sidebar-fg-strong);
-  border-radius: var(--radius-md); font-size: var(--font-sm); outline: none;
-  transition: border-color 0.2s;
-}
-.search-input::placeholder { color: var(--sidebar-fg-muted); }
-.search-input:focus { border-color: var(--brand-primary); background: var(--sidebar-bg); }
-
-.conversation-list {
-  flex: 1; overflow-y: auto; padding: var(--space-sm);
-}
-.conv-item {
-  display: flex; align-items: center; gap: var(--space-sm);
-  padding: var(--space-sm) var(--space-md); border-radius: var(--radius-lg);
-  cursor: pointer; transition: background 0.15s;
-  font-size: var(--font-md); color: var(--sidebar-fg);
-  border-left: 2px solid transparent;
-}
-.conv-item:hover { background: var(--sidebar-hover); }
-.conv-item.active {
-  background: var(--sidebar-active);
-  color: var(--sidebar-fg-strong);
-  font-weight: 500;
-  border-left-color: var(--brand-primary);
-}
-.conv-icon {
-  font-size: var(--font-base); flex-shrink: 0;
-  width: 18px; height: 18px;
-  display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 50%;
-  background: var(--sidebar-icon-bg);
-  color: var(--sidebar-fg-muted);
-  font-size: 10px;
-}
-.conv-item.active .conv-icon {
-  background: var(--brand-primary);
-  color: var(--on-dark-text);
-}
-.conv-title {
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
-}
-.conv-edit-input {
-  flex: 1; padding: 2px var(--space-xs); font-size: var(--font-md);
-  background: var(--sidebar-bg);
-  color: var(--sidebar-fg-strong);
-  border: 1px solid var(--brand-primary);
-  border-radius: var(--radius-sm); outline: none; min-width: 0;
-}
-.conv-delete {
-  display: none; width: 20px; height: 20px; border-radius: 50%;
-  align-items: center; justify-content: center; font-size: var(--font-base);
-  color: var(--sidebar-fg-muted); flex-shrink: 0; cursor: pointer; transition: all 0.15s;
-}
-.conv-item:hover .conv-delete { display: inline-flex; }
-.conv-delete:hover { background: var(--sidebar-danger-hover-bg); color: var(--sidebar-danger-hover-fg); }
-.conv-empty {
-  text-align: center; color: var(--sidebar-fg-muted); font-size: var(--font-md); padding: 30px 0;
-}
-.conv-group { margin-bottom: var(--space-sm); }
-.conv-group-label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--sidebar-fg-muted);
-  letter-spacing: 0.05em;
-  padding: var(--space-sm) var(--space-md) var(--space-xs);
-  text-transform: uppercase;
-}
-
-.sidebar-footer {
-  padding: var(--space-md);
-  border-top: 1px solid var(--sidebar-border);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-sm);
-}
-.user-bar {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: var(--space-xs) var(--space-sm);
-  border-radius: var(--radius-md);
-  background: var(--sidebar-bg-soft);
-}
-.user-info {
-  display: flex; align-items: center; gap: var(--space-sm); min-width: 0;
-}
-.user-avatar {
   flex-shrink: 0;
-  background: var(--brand-gradient);
-  color: var(--on-dark-text);
-  font-size: 13px; font-weight: 600;
+  overflow: hidden;
+  color: var(--text-primary);
+  background: #fff;
+  border: 1px solid #e4e8ef;
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(31,35,41,.05);
+  transition: transform .25s ease;
 }
-.user-name {
-  font-size: var(--font-sm);
-  color: var(--sidebar-fg-strong);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+.sidebar.navigation-only {
+  width: clamp(252px, 18vw, 300px);
 }
-.user-actions { display: flex; gap: 2px; }
-
-/* 2x2 网格管理按钮，节省垂直空间 */
-.admin-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--space-xs);
-}
-.admin-actions :deep(.el-button) {
-  margin: 0 !important;
-  padding: 0 var(--space-sm);
-  height: 30px;
-  font-size: var(--font-sm);
-  background: var(--sidebar-bg-soft);
-  border: 1px solid var(--sidebar-border);
-  color: var(--sidebar-fg);
-}
-.admin-actions :deep(.el-button:hover) {
-  background: var(--sidebar-hover);
-  border-color: var(--sidebar-brand-border);
-  color: var(--sidebar-fg-strong);
-}
-.admin-actions :deep(.el-button .el-icon) {
-  font-size: 14px;
-  margin-right: 2px;
-}
-.footer-section-label {
-  margin: 1px 2px -2px;
-  color: var(--sidebar-fg-muted);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: .12em;
-  text-transform: uppercase;
-}
-.admin-actions :deep(.workbench-action) {
-  grid-column: 1 / -1;
-  justify-content: flex-start;
-  height: 36px;
+.sidebar.navigation-only .section-links { grid-template-columns: 1fr; }
+.sidebar.navigation-only .section-entry {
+  min-height: 48px;
   padding-inline: 12px;
-  border-color: var(--sidebar-brand-border);
-  background: rgba(37, 99, 235, .16);
-  color: var(--sidebar-fg-strong);
+  font-size: 12px;
 }
-.admin-actions :deep(.workbench-action:hover) {
-  background: rgba(37, 99, 235, .26);
+.sidebar.navigation-only .nav-icon {
+  width: 28px;
+  height: 28px;
+  background: rgba(118,118,128,.055);
 }
+.sidebar.navigation-only .section-entry.active .nav-icon { background: white; }
+
+.section-navigation {
+  flex-shrink: 0;
+  padding: 10px;
+  border: 1px solid rgba(60,60,67,.08);
+  border-radius: 10px;
+  background: #fafbfc;
+  box-shadow: none;
+}
+.section-navigation-heading {
+  min-height: 50px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 2px 6px 9px;
+}
+.section-navigation-heading strong { color: #1d1d1f; font-size: 17px; font-weight: 670; letter-spacing: -.025em; }
+.section-navigation-heading > em {
+  flex-shrink: 0;
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: #797980;
+  background: rgba(118,118,128,.07);
+  font-size: 9px;
+  font-style: normal;
+}
+.section-links { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.section-entry {
+  position: relative;
+  min-width: 0;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  outline: none;
+  color: #64646a;
+  background: rgba(247,248,250,.82);
+  font: inherit;
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease, color .15s ease, transform .15s ease;
+}
+.section-entry:hover { color: #1d1d1f; border-color: #e4e8ef; background: #fff; transform: none; }
+.section-entry.active { color: #2468f2; border-color: #d7e3fb; background: #edf3ff; box-shadow: none; font-weight: 620; }
+.section-entry.active::after { content:'';position:absolute;top:10px;bottom:10px;left:-2px;width:3px;border-radius:3px;background:#2468f2;box-shadow:0 2px 7px rgba(36,104,242,.2); }
+.section-entry em { margin-left: auto; color: #2468f2; font-size: 8px; font-style: normal; font-weight: 750; }
+
 .new-conv-btn {
   width: 100%;
-  margin: 0 !important;
+  height: 46px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0 0;
+  padding: 0 13px;
+  border: 1px solid rgba(36, 104, 242, .16);
+  border-radius: 8px;
+  color: #fff;
+  background: #2468f2;
+  box-shadow: none;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
 }
+.new-conv-btn:hover { background: #1f5fdc; }
+.new-conv-btn:disabled { opacity: .65; cursor: wait; transform: none; }
+.new-conv-btn kbd { margin-left: auto; color: rgba(255,255,255,.64); font: 10px var(--font-family-sans); }
 
-/* 深色 Sidebar 里 el-button 主色按钮（新建对话）保持醒目 */
-.sidebar-footer :deep(.el-button--primary) {
-  background: var(--brand-gradient);
-  border-color: transparent;
-  box-shadow: var(--shadow-brand);
+.section-entry:focus-visible,
+.new-conv-btn:focus-visible,
+.logout-button:focus-visible,
+.conv-delete:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px rgba(36,104,242,.14);
+}
+.nav-icon {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  border-radius: 7px;
+  color: #74747b;
+}
+.section-entry.active .nav-icon { color: #2468f2; background: rgba(255,255,255,.7); }
+
+.sidebar-context {
+  min-height: 0;
+  flex: 1;
+  margin-top: 12px;
+  border-top: 1px solid rgba(60, 60, 67, .1);
+}
+.sidebar-spacer { min-height: 0; flex: 1; display: grid; place-items: center; }
+.section-ornament {
+  position: relative;
+  width: min(148px, 68%);
+  aspect-ratio: 1;
+  border: 1px solid rgba(36,104,242,.07);
+  border-radius: 34px;
+  overflow: hidden;
+  background: #f7f9fc;
+  box-shadow: none;
+  opacity: .48;
+  transform: rotate(-2deg);
+}
+.section-ornament::before {
+  content: '';
+  position: absolute;
+  inset: 16px;
+  border-radius: 27px;
+  background-image: radial-gradient(rgba(36,104,242,.1) 1px, transparent 1px);
+  background-size: 15px 15px;
+  mask-image: linear-gradient(135deg, rgba(0,0,0,.9), transparent 72%);
+}
+.ornament-core {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  width: 50px;
+  height: 50px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255,255,255,.8);
+  border-radius: 17px;
+  color: #5f8fce;
+  background: rgba(255,255,255,.8);
+  box-shadow: 0 7px 18px rgba(36,104,242,.08), inset 0 0 0 1px rgba(36,104,242,.06);
+  transform: translate(-50%, -50%) rotate(2deg);
+}
+.ornament-orbit { position: absolute; border: 1px solid rgba(36,104,242,.09); border-radius: 50%; }
+.orbit-one { inset: 21px; }
+.orbit-two { inset: 43px -21px -25px 48px; }
+.ornament-dot { position: absolute; width: 7px; height: 7px; border: 2px solid rgba(255,255,255,.85); border-radius: 50%; background: #91b7e8; }
+.dot-one { top: 25px; right: 34px; }
+.dot-two { right: 18px; bottom: 39px; width: 6px; height: 6px; background: #78a6df; }
+.dot-three { left: 28px; bottom: 31px; width: 5px; height: 5px; background: #b2ccea; }
+.chat-context { display: flex; flex-direction: column; overflow: hidden; }
+.context-heading, .history-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.context-heading { padding: 13px 9px 9px; }
+.context-heading > div { display: flex; flex-direction: column; gap: 1px; }
+.context-heading small { color: var(--text-muted); font-size: 10.5px; }
+.context-heading strong { font-size: 14px; font-weight: 630; }
+.context-selects {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px;
+  padding: 0 8px 10px;
+}
+.context-selects label { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.context-selects label > span { color: var(--text-muted); font-size: 10.5px; }
+.scenario-select, .ds-select { width: 100%; }
+.sidebar :deep(.el-select__wrapper) {
+  min-height: 35px;
+  padding: 0 9px;
+  border-radius: 8px !important;
+  background: rgba(255,255,255,.75);
+  box-shadow: 0 0 0 1px rgba(60,60,67,.11) inset !important;
+}
+.sidebar :deep(.el-select__selected-item),
+.sidebar :deep(.el-select__placeholder) { font-size: 11px; }
+.sidebar :deep(.el-select__wrapper:hover) { box-shadow: 0 0 0 1px rgba(36,104,242,.35) inset !important; }
+
+.history-heading {
+  padding: 9px 9px 6px;
+  color: #727278;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.history-heading button {
+  border: 0;
+  color: #86868b;
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.history-heading button:hover { color: #2468f2; }
+.search-bar {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 3px 6px;
+  padding: 0 8px;
+  border: 1px solid rgba(60,60,67,.1);
+  border-radius: 8px;
+  color: #8e8e93;
+  background: rgba(255,255,255,.62);
+}
+.search-input { min-width: 0; flex: 1; border: 0; outline: 0; color: var(--text-primary); background: transparent; font: inherit; font-size: 11.5px; }
+.search-input::placeholder { color: #aaaab0; }
+
+.conversation-list { min-height: 0; flex: 1; overflow-y: auto; padding: 2px 4px 7px; }
+.conv-group { margin-bottom: 3px; }
+.conv-group-label { padding: 8px 8px 4px; color: #a1a1a6; font-size: 10px; font-weight: 600; }
+.conv-item {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  color: #65656b;
+  font-size: 12px;
+  cursor: pointer;
+}
+.conv-item:hover { color: #1d1d1f; background: rgba(118,118,128,.075); }
+.conv-item.active { color: #174f88; background: rgba(36,104,242,.09); font-weight: 560; }
+.conv-icon { width: 16px; flex-shrink: 0; color: #929298; }
+.conv-item.active .conv-icon { color: #2468f2; }
+.conv-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv-edit-input {
+  min-width: 0;
+  flex: 1;
+  padding: 2px 4px;
+  border: 1px solid #61a8ef;
+  border-radius: 5px;
+  outline: 0;
+  color: var(--text-primary);
+  background: white;
+  font: inherit;
+}
+.conv-delete {
+  width: 18px;
+  height: 18px;
+  display: none;
+  place-items: center;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: #99999f;
+  background: transparent;
+  cursor: pointer;
+}
+.conv-item:hover .conv-delete { display: grid; }
+.conv-delete:hover { color: #d70015; background: rgba(215,0,21,.08); }
+.conv-empty { padding: 20px 8px; color: #aaaab0; font-size: 11.5px; text-align: center; }
+.batch-actions { padding: 7px; border-radius: 9px; background: rgba(255,255,255,.65); }
+.batch-actions > div { display: flex; gap: 6px; margin-top: 6px; }
+.batch-actions button { border: 0; color: #2468f2; background: transparent; font: inherit; font-size: 9px; cursor: pointer; }
+.batch-actions .danger-action { color: #d70015; }
+.batch-actions button:disabled { opacity: .4; cursor: default; }
+
+.section-context {
+  position: relative;
+  overflow: hidden;
+  padding: 24px 18px;
+  border: 1px solid #e4e8ef;
+  border-radius: 9px;
+  background: #fafbfc;
+}
+.section-context::after {
+  content: '';
+  position: absolute;
+  right: -34px;
+  bottom: -45px;
+  width: 115px;
+  height: 115px;
+  border-radius: 50%;
+  background: rgba(36,104,242,.07);
+  filter: blur(2px);
+}
+.section-orb {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 17px;
+  border-radius: 12px;
+  color: #2468f2;
+  background: white;
+  box-shadow: 0 6px 16px rgba(36,104,242,.12);
+}
+.section-context > small { color: #2468f2; font-size: 9px; font-weight: 750; letter-spacing: .14em; }
+.section-context h2 { margin: 6px 0 10px; font-size: 22px; font-weight: 660; letter-spacing: -.03em; }
+.section-context p { margin: 0; color: #6e6e73; font-size: 12px; line-height: 1.65; }
+.section-context ul { position: relative; z-index: 1; display: grid; gap: 8px; margin: 16px 0 0; padding: 0; list-style: none; }
+.section-context li { display: flex; gap: 8px; color: #4d4d52; font-size: 11.5px; }
+.section-context li::before { content: '✓'; color: #2468f2; font-weight: 700; }
+
+.sidebar-footer {
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  margin-top: 8px;
+  padding: 8px 7px;
+  border: 1px solid rgba(60,76,98,.075);
+  border-radius: 9px;
+  background: #fafbfc;
+}
+.user-info { min-width: 0; flex: 1; display: flex; align-items: center; gap: 8px; }
+.user-avatar { flex-shrink: 0; color: white; background: #2468f2; font-size: 11px; font-weight: 650; }
+.user-info > div { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.user-info strong { overflow: hidden; color: #3a3a3c; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.user-info small { color: #98989e; font-size: 9.5px; }
+.logout-button {
+  width: 29px;
+  height: 29px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 9px;
+  color: #8e8e93;
+  background: transparent;
+  cursor: pointer;
+}
+.logout-button:hover { color: #d70015; background: rgba(215,0,21,.07); }
+
+@media (max-width: 767px) {
+  .sidebar {
+    position: fixed;
+    inset: var(--platform-header-height, 62px) auto 0 0;
+    z-index: 900;
+    width: min(320px, calc(100vw - 28px));
+    height: calc(100vh - var(--platform-header-height, 62px));
+    margin: 0;
+    border-radius: 0 20px 20px 0;
+    transform: translateX(-105%);
+    box-shadow: 16px 0 48px rgba(14,35,64,.18);
+  }
+  .sidebar.navigation-only { width: min(320px, calc(100vw - 28px)); }
+  .sidebar.sidebar-open { transform: translateX(0); }
+}
+@media (min-width: 768px) and (max-width: 1180px) {
+  .sidebar { padding: 9px; }
+  .section-navigation { padding: 7px; }
+  .section-navigation-heading { min-height: 43px; padding-bottom: 7px; }
+  .section-navigation-heading strong { font-size: 15px; }
+  .section-entry { min-height: 38px; gap: 5px; padding-inline: 6px; font-size: 10.5px; }
+  .nav-icon { width: 20px; height: 20px; }
+  .new-conv-btn { height: 42px; font-size: 12px; }
+  .context-heading { padding-top: 10px; }
+  .context-heading strong { font-size: 12.5px; }
+  .context-selects { gap: 6px; padding-inline: 6px; }
+  .sidebar :deep(.el-select__wrapper) { min-height: 31px; }
+  .conv-item { min-height: 34px; font-size: 11px; }
+  .section-context { padding: 20px 15px; }
+  .section-context h2 { font-size: 19px; }
+}
+@media (min-width: 1600px) and (min-height: 850px) {
+  .sidebar { padding: 16px; }
+  .section-navigation { padding: 12px; }
+  .section-navigation-heading { min-height: 55px; }
+  .section-navigation-heading small { font-size: 9px; }
+  .section-navigation-heading strong { font-size: 19px; }
+  .section-entry { min-height: 48px; padding-inline: 11px; font-size: 12.5px; }
+  .new-conv-btn { height: 50px; font-size: 14px; }
+  .context-heading { padding-top: 15px; }
+  .context-heading small { font-size: 11px; }
+  .context-heading strong { font-size: 15px; }
+  .context-selects label > span { font-size: 11px; }
+  .sidebar :deep(.el-select__wrapper) { min-height: 38px; }
+  .sidebar :deep(.el-select__selected-item),
+  .sidebar :deep(.el-select__placeholder) { font-size: 12px; }
+  .history-heading, .history-heading button { font-size: 11px; }
+  .search-bar { height: 37px; }
+  .conv-item { min-height: 41px; font-size: 12.5px; }
+  .section-context { padding: 28px 21px; }
+  .section-context h2 { font-size: 24px; }
+  .section-context p { font-size: 13px; }
+  .section-context li { font-size: 12px; }
+}
+@media (max-height: 760px) {
+  .section-navigation { padding: 5px; }
+  .section-navigation-heading { min-height: 35px; padding-bottom: 5px; }
+  .section-entry { min-height: 34px; padding-block: 3px; }
+  .new-conv-btn { height: 38px; margin-top: 6px; }
+  .sidebar-context { margin-top: 7px; }
+  .context-heading { padding-block: 8px 5px; }
+  .sidebar :deep(.el-select__wrapper) { min-height: 29px; }
+  .history-heading { padding-top: 6px; }
+  .conv-item { min-height: 31px; padding-block: 4px; }
+  .section-ornament { width: 118px; border-radius: 28px; }
+  .ornament-core { width: 44px; height: 44px; border-radius: 15px; }
 }
 </style>

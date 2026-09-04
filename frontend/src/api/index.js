@@ -429,9 +429,13 @@ export async function rollbackModel(modelId, executionId) {
 }
 
 // Algorithm Registry
-export async function fetchAlgorithms(modelType) {
-  const params = modelType ? `?modelType=${modelType}` : ''
-  const { data } = await api.get(`/mining/algorithms${params}`)
+export async function fetchAlgorithms(modelType, includeDisabled = false) {
+  const { data } = await api.get('/mining/algorithms', {
+    params: {
+      ...(modelType ? { modelType } : {}),
+      ...(includeDisabled ? { includeDisabled: true } : {})
+    }
+  })
   return data.data
 }
 
@@ -479,6 +483,11 @@ export async function fetchAdminSessions() {
   return data
 }
 
+export async function setAlgorithmEnabled(id, enabled) {
+  const { data } = await api.put(`/mining/algorithms/${id}/enabled`, { enabled })
+  return data.data
+}
+
 export async function fetchSystemMonitor() {
   const { data } = await api.get('/admin/system-monitor')
   return data
@@ -514,6 +523,30 @@ export async function fetchUsers(keyword) {
   const params = keyword ? `?keyword=${encodeURIComponent(keyword)}` : ''
   const { data } = await api.get(`/users${params}`)
   return data.data
+}
+
+export async function fetchUserRoles() {
+  const { data } = await api.get('/users/roles')
+  return data.data
+}
+
+export async function fetchRolePermissions() {
+  const { data } = await api.get('/users/roles/permissions')
+  return data.data
+}
+
+export async function createRole(role) {
+  const { data } = await api.post('/users/roles', role)
+  return data.data
+}
+
+export async function updateRole(id, role) {
+  const { data } = await api.put(`/users/roles/${id}`, role)
+  return data.data
+}
+
+export async function deleteRole(id) {
+  await api.delete(`/users/roles/${id}`)
 }
 
 export async function createUser(user) {

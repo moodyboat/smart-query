@@ -19,7 +19,7 @@ const routes = [
     path: ROUTES.USER_MANAGEMENT,
     name: 'UserManagement',
     component: () => import('../views/admin/UserManagement.vue'),
-    meta: { requiresAuth: true, requiresAdmin: true },
+    meta: { requiresAuth: true, requiredPermission: 'platform.user.manage' },
   },
   {
     path: '/',
@@ -39,8 +39,13 @@ const router = createRouter({
   routes,
 })
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   const user = useUserStore()
+  // Permissions and role labels are database-driven. Refresh once after every
+  // page load so a stale localStorage profile cannot hide or expose functions.
+  if (user.isLoggedIn && !user.permissionsHydrated) {
+    await user.refreshUser()
+  }
   // 已登录访问登录页 → 跳工作台
   if (to.meta.public && user.isLoggedIn && to.path === ROUTES.LOGIN) {
     return { path: ROUTES.WORKSPACE }
@@ -49,8 +54,8 @@ router.beforeEach((to) => {
   if (to.meta.requiresAuth && !user.isLoggedIn) {
     return { path: ROUTES.LOGIN }
   }
-  // 需要管理员但当前非管理员 → 跳工作台
-  if (to.meta.requiresAdmin && !user.isAdmin) {
+  // 页面能力由数据库权限目录决定
+  if (to.meta.requiredPermission && !user.hasPermission(to.meta.requiredPermission)) {
     return { path: ROUTES.WORKSPACE }
   }
   return true

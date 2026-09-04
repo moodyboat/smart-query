@@ -4,8 +4,9 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartquery.common.BusinessException;
+import com.smartquery.common.PermissionCodes;
 import com.smartquery.common.UserContextHolder;
-import com.smartquery.common.UserRoles;
+import com.smartquery.service.RoleService;
 import com.smartquery.entity.FlowDefinition;
 import com.smartquery.entity.FlowVersion;
 import com.smartquery.entity.OperatorDefinition;
@@ -54,7 +55,9 @@ public class VersionCatalogService {
     private final AgentPolicyService agentPolicyService;
     private final ContentHashService contentHashService;
     private final RuntimeProfileService runtimeProfileService;
+    private final OutputCapabilityRegistryService outputCapabilityRegistryService;
     private final ObjectMapper objectMapper;
+    private final RoleService roleService;
 
     public List<OperatorDefinition> listOperators() {
         LambdaQueryWrapper<OperatorDefinition> query = new LambdaQueryWrapper<OperatorDefinition>()
@@ -92,6 +95,24 @@ public class VersionCatalogService {
         definition.setDeleted(0);
         operatorDefinitionMapper.insert(definition);
         return definition;
+    }
+
+    @Transactional
+    public OperatorDefinition updateOperatorMetadata(Long operatorId, String name, String description) {
+        OperatorDefinition definition = requireOperator(operatorId);
+        if (name == null || name.isBlank()) throw new BusinessException("算子名称不能为空");
+        definition.setName(name.trim());
+        definition.setDescription(description == null ? "" : description.trim());
+        operatorDefinitionMapper.updateById(definition);
+        return definition;
+    }
+
+    @Transactional
+    public void archiveOperator(Long operatorId) {
+        OperatorDefinition definition = requireOperator(operatorId);
+        definition.setStatus("ARCHIVED");
+        definition.setDeleted(1);
+        operatorDefinitionMapper.updateById(definition);
     }
 
     public List<OperatorVersion> listOperatorVersions(Long operatorId) {
@@ -190,7 +211,17 @@ public class VersionCatalogService {
         } else if (OperatorTypes.OUTPUT.equals(definition.getOperatorType())) {
             Map<String, Object> outputSpec = payloadObject;
             validateOutputSpec(outputSpec);
-            validationReport = Map.of("valid", true, "outputKind", outputSpec.get("outputKind"));
+            List<Map<String, Object>> outputTargets = listOfMapsOptional(outputSpec.get("targets"));
+            if (outputTargets.isEmpty()) {
+                validationReport = Map.of("valid", true, "specVersion", 1,
+                    "outputKind", outputSpec.get("outputKind"));
+            } else {
+                List<String> capabilityCodes = outputTargets.stream()
+                    .map(target -> String.valueOf(target.get("capabilityCode"))).toList();
+                capabilityCodes.stream().map(code -> "output-capability:" + code).forEach(requirements::add);
+                validationReport = Map.of("valid", true, "specVersion", 2,
+                    "targetCount", outputTargets.size(), "capabilityCodes", capabilityCodes);
+            }
         }
 
         Long requestedRuntimeProfileId = DagValidationService.toLong(body.get("runtimeProfileId"));
@@ -491,6 +522,31 @@ public class VersionCatalogService {
     }
 
     private void validateOutputSpec(Map<String, Object> spec) {
+        if ("2".equals(String.valueOf(spec.get("specVersion"))) || spec.get("targets") instanceof List<?>) {
+            List<Map<String, Object>> transformations = listOfMapsOptional(spec.get("transformations"));
+            List<Map<String, Object>> targets = listOfMapsOptional(spec.get("targets"));
+            if (targets.isEmpty()) throw new BusinessException(422, "输出算子至少需要一个输出目标");
+            for (Map<String, Object> transformation : transformations) {
+                OutputCapabilityRegistryService.CapabilitySnapshot capability =
+                    outputCapabilityRegistryService.requireRunnableSnapshot(transformation);
+                if (!"TRANSFORM".equals(capability.capabilityType())) {
+                    throw new BusinessException(422, capability.code() + "不是转换能力");
+                }
+            }
+            for (Map<String, Object> target : targets) {
+                OutputCapabilityRegistryService.CapabilitySnapshot capability =
+                    outputCapabilityRegistryService.requireRunnableSnapshot(target);
+                if ("TRANSFORM".equals(capability.capabilityType())) {
+                    throw new BusinessException(422, capability.code() + "不能作为输出目标");
+                }
+            }
+            if (spec.get("draftId") != null
+                    && (!Boolean.TRUE.equals(spec.get("sandboxShaped"))
+                    || !Boolean.TRUE.equals(spec.get("previewValidated")))) {
+                throw new BusinessException(422, "对话生成的输出工件必须通过整形和预览门禁");
+            }
+            return;
+        }
         String kind = requiredText(spec, "outputKind").toUpperCase(Locale.ROOT);
         if (!Set.of("LEAD", "CHART", "TABLE", "EXCEL").contains(kind)) {
             throw new BusinessException(422, "outputKind仅支持LEAD/CHART/TABLE/EXCEL");
@@ -529,10 +585,21 @@ public class VersionCatalogService {
         Map<String, Object> result = new LinkedHashMap<>();
         Map<String, Object> payload = object(version.getImplementationPayload(), "算子工件");
         if (OperatorTypes.OUTPUT.equals(definition.getOperatorType())) {
-            result.put("outputKind", payload.get("outputKind"));
-            Map<String, Object> contentSpec = object(payload.getOrDefault("contentSpec", Map.of()), "contentSpec");
-            if (contentSpec.get("title") != null) result.put("title", contentSpec.get("title"));
-            if (contentSpec.get("sheetName") != null) result.put("sheetName", contentSpec.get("sheetName"));
+            List<Map<String, Object>> targets = listOfMapsOptional(payload.get("targets"));
+            if (!targets.isEmpty()) {
+                result.put("specVersion", 2);
+                result.put("targetCount", targets.size());
+                result.put("capabilityCodes", targets.stream()
+                    .map(target -> target.get("capabilityCode")).toList());
+                Map<String, Object> firstConfig = object(targets.get(0).getOrDefault("config", Map.of()), "config");
+                result.put("outputKind", targetKind(targets.get(0)));
+                if (firstConfig.get("title") != null) result.put("title", firstConfig.get("title"));
+            } else {
+                result.put("outputKind", payload.get("outputKind"));
+                Map<String, Object> contentSpec = object(payload.getOrDefault("contentSpec", Map.of()), "contentSpec");
+                if (contentSpec.get("title") != null) result.put("title", contentSpec.get("title"));
+                if (contentSpec.get("sheetName") != null) result.put("sheetName", contentSpec.get("sheetName"));
+            }
         } else if (OperatorTypes.DATA.equals(definition.getOperatorType())
                 && "SQL_AST".equals(version.getImplementationType())) {
             result.put("dataSourceId", payload.get("dataSourceId"));
@@ -553,10 +620,33 @@ public class VersionCatalogService {
         if (!VersionStatus.PUBLISHED.equals(versionStatus)) {
             errors.add("输出节点[" + nodeId + "]只能绑定已发布算子版本");
         }
-        if (authoredVersion && (config.containsKey("contentSpec") || config.containsKey("leadPolicy"))) {
-            errors.add("输出节点[" + nodeId + "]不能覆盖已发布版本的展示规格或线索策略");
+        if (authoredVersion && (config.containsKey("contentSpec") || config.containsKey("leadPolicy")
+                || config.containsKey("targets") || config.containsKey("transformations"))) {
+            errors.add("输出节点[" + nodeId + "]不能覆盖已发布版本的转换、输出目标或策略");
         }
         return List.copyOf(errors);
+    }
+
+    private List<Map<String, Object>> listOfMapsOptional(Object raw) {
+        if (!(raw instanceof List<?> list)) return List.of();
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Object item : list) {
+            if (!(item instanceof Map<?, ?>)) throw new BusinessException(422, "输出能力条目必须是对象");
+            result.add(object(item, "输出能力条目"));
+        }
+        return List.copyOf(result);
+    }
+
+    private String targetKind(Map<String, Object> target) {
+        Map<String, Object> config = object(target.getOrDefault("config", Map.of()), "target.config");
+        if (config.get("legacyOutputKind") != null) return String.valueOf(config.get("legacyOutputKind"));
+        return switch (String.valueOf(target.get("implementationType"))) {
+            case "LEAD" -> "LEAD";
+            case "ECHARTS" -> "CHART";
+            case "TABLE" -> "TABLE";
+            case "COMPOSED_PAGE" -> "DASHBOARD";
+            default -> String.valueOf(target.get("capabilityType"));
+        };
     }
 
     static List<String> nodeTimeoutErrors(String nodeId, Map<String, Object> config) {
@@ -632,7 +722,7 @@ public class VersionCatalogService {
     }
 
     private boolean isAdmin() {
-        return UserRoles.ADMIN.equals(UserContextHolder.require().role());
+        return roleService.currentUserHas(PermissionCodes.RESOURCE_ACCESS_ALL);
     }
 
     private void requireOwner(String owner, String message) {

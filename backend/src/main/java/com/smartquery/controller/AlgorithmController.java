@@ -2,6 +2,7 @@ package com.smartquery.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartquery.common.BusinessException;
+import com.smartquery.common.PermissionCodes;
 import com.smartquery.common.Result;
 import com.smartquery.entity.Algorithm;
 import com.smartquery.service.AlgorithmService;
@@ -31,7 +32,17 @@ public class AlgorithmController {
 
     @GetMapping("/algorithms")
     public Result<List<Algorithm>> listAlgorithms(
-            @RequestParam(required = false) String modelType) {
+            @RequestParam(required = false) String modelType,
+            @RequestParam(defaultValue = "false") boolean includeDisabled) {
+        if (includeDisabled) {
+            resourceAccess.requirePermission(PermissionCodes.ALGORITHM_MANAGE, "无权查看完整算法治理信息");
+            if (modelType != null && !modelType.isBlank()) {
+                return Result.ok(algorithmService.getAllForManagement().stream()
+                    .filter(a -> supportsModelType(a, modelType))
+                    .toList());
+            }
+            return Result.ok(algorithmService.getAllForManagement());
+        }
         if (modelType != null && !modelType.isBlank()) {
             return Result.ok(algorithmService.getByModelType(modelType));
         }
@@ -52,19 +63,29 @@ public class AlgorithmController {
 
     @PostMapping("/algorithms")
     public Result<Algorithm> createAlgorithm(@RequestBody Algorithm algorithm) {
-        resourceAccess.requireAdmin();
+        resourceAccess.requirePermission(PermissionCodes.ALGORITHM_MANAGE, "无权限新增算法模板");
         return Result.ok(algorithmService.createCustomAlgorithm(algorithm));
     }
 
     @PutMapping("/algorithms/{id}")
     public Result<Algorithm> updateAlgorithm(@PathVariable Long id, @RequestBody Algorithm updates) {
-        resourceAccess.requireAdmin();
+        resourceAccess.requirePermission(PermissionCodes.ALGORITHM_MANAGE, "无权限修改算法模板");
         return Result.ok(algorithmService.updateAlgorithm(id, updates));
+    }
+
+    @PutMapping("/algorithms/{id}/enabled")
+    public Result<Algorithm> setAlgorithmEnabled(
+            @PathVariable Long id, @RequestBody Map<String, Boolean> request) {
+        resourceAccess.requirePermission(PermissionCodes.ALGORITHM_MANAGE, "无权停用或启用算法模板");
+        if (!request.containsKey("enabled") || request.get("enabled") == null) {
+            throw new BusinessException("enabled 不能为空");
+        }
+        return Result.ok(algorithmService.setEnabled(id, request.get("enabled")));
     }
 
     @DeleteMapping("/algorithms/{id}")
     public Result<Void> deleteAlgorithm(@PathVariable Long id) {
-        resourceAccess.requireAdmin();
+        resourceAccess.requirePermission(PermissionCodes.ALGORITHM_MANAGE, "无权限删除算法模板");
         algorithmService.deleteAlgorithm(id);
         return Result.ok();
     }
@@ -85,5 +106,14 @@ public class AlgorithmController {
             .map(id -> Map.of("id", id, "name", TYPE_LABELS.getOrDefault(id, id), "description", TYPE_DESCS.getOrDefault(id, id)))
             .collect(Collectors.toList());
         return Result.ok(result);
+    }
+
+    @SuppressWarnings("unchecked")
+    private boolean supportsModelType(Algorithm algorithm, String modelType) {
+        try {
+            return objectMapper.readValue(algorithm.getModelTypes(), List.class).contains(modelType);
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 }

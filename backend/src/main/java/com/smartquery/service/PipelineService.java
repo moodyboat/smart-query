@@ -9,7 +9,6 @@ import com.smartquery.logging.ConversationEventLogger;
 import com.smartquery.logging.DiagnosticsTimer;
 import com.smartquery.mapper.*;
 import com.smartquery.python.PythonResult;
-import com.smartquery.python.PythonSandbox;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -199,7 +198,7 @@ public class PipelineService {
             throw e;
         }
 
-        MiningModel model = createOrUpdatePipelineModel(pipeline, result, cfg, modelPath);
+        MiningModel model = createOrUpdatePipelineModel(pipeline, result, cfg, modelPath, runtimeRequest);
 
         ModelExecution execution = new ModelExecution();
         execution.setModelId(model.getId());
@@ -207,6 +206,9 @@ public class PipelineService {
         execution.setTriggerType("manual");
         execution.setStatus(ModelStatus.EXEC_SUCCESS);
         execution.setHyperparameters(toJson(cfg.hyperparams));
+        execution.setAlgorithmId(model.getAlgorithm());
+        execution.setAlgorithmVersion(model.getAlgorithmVersion());
+        execution.setAlgorithmSnapshot(model.getAlgorithmSnapshot());
         execution.setMetrics(toJson(result.get("metrics")));
         execution.setExecutionLog(truncateLog(execLog, executionLogTruncation));
         execution.setExecutionTimeMs((int)(System.currentTimeMillis() - pipelineStartMs));
@@ -351,7 +353,7 @@ public class PipelineService {
             result.put("algorithm", cfg.algorithm);
             result.put("sourceTable", cfg.sourceTable);
 
-            MiningModel model = createOrUpdatePipelineModel(pipeline, result, cfg, modelPath);
+            MiningModel model = createOrUpdatePipelineModel(pipeline, result, cfg, modelPath, runtimeRequest);
 
             ModelExecution execution = new ModelExecution();
             execution.setModelId(model.getId());
@@ -359,6 +361,9 @@ public class PipelineService {
             execution.setTriggerType("manual");
             execution.setStatus(ModelStatus.EXEC_SUCCESS);
             execution.setHyperparameters(toJson(cfg.hyperparams));
+            execution.setAlgorithmId(model.getAlgorithm());
+            execution.setAlgorithmVersion(model.getAlgorithmVersion());
+            execution.setAlgorithmSnapshot(model.getAlgorithmSnapshot());
             execution.setMetrics(toJson(result.get("metrics")));
             execution.setExecutionLog(truncateLog(pr.stdout(), executionLogTruncation));
             execution.setExecutionTimeMs((int)(System.currentTimeMillis() - pipelineStartMs));
@@ -682,12 +687,8 @@ public class PipelineService {
         if (filter != null && !filter.isBlank()) {
             com.smartquery.common.IdentifierValidator.validateFilter(filter);
         }
-        Algorithm algorithm = algorithmService.getByAlgorithmId(cfg.algorithm);
-        if (algorithm == null || algorithm.getPythonCodeTemplate() == null
-                || algorithm.getPythonCodeTemplate().isBlank()) {
-            throw new IllegalStateException("算法配置缺失: " + cfg.algorithm);
-        }
-        PythonSandbox.validate(algorithm.getPythonCodeTemplate());
+        String modelType = cfg.modelType != null ? cfg.modelType : "classification";
+        AlgorithmService.AlgorithmBinding algorithm = algorithmService.activeBinding(cfg.algorithm, modelType);
 
         Map<String, Object> preprocessing = new LinkedHashMap<>(cfg.preprocessing);
         if (cfg.transforms != null && !cfg.transforms.isEmpty()) {
@@ -704,9 +705,11 @@ public class PipelineService {
         validation.put("randomState", randomState);
 
         Map<String, Object> request = new LinkedHashMap<>();
-        request.put("modelType", cfg.modelType != null ? cfg.modelType : "classification");
-        request.put("algorithmId", cfg.algorithm);
-        request.put("algorithmCode", algorithm.getPythonCodeTemplate());
+        request.put("modelType", modelType);
+        request.put("algorithmId", algorithm.algorithmId());
+        request.put("algorithmVersion", algorithm.versionNo());
+        request.put("algorithmSnapshot", algorithm.snapshot());
+        request.put("algorithmCode", algorithm.pythonCodeTemplate());
         request.put("sourceTable", cfg.sourceTable);
         request.put("featureColumns", cfg.featureColumns);
         request.put("targetColumn", cfg.targetColumn);
@@ -730,7 +733,8 @@ public class PipelineService {
     // ===== Pipeline → Model sync =====
 
     private MiningModel createOrUpdatePipelineModel(MiningPipeline pipeline, Map<String, Object> result,
-                                                     PipelineConfig cfg, String modelPath) {
+                                                     PipelineConfig cfg, String modelPath,
+                                                     Map<String, Object> runtimeRequest) {
         var wrapper = new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<MiningModel>()
             .eq(MiningModel::getPipelineId, pipeline.getId())
             .eq(MiningModel::getDeleted, 0);
@@ -743,7 +747,11 @@ public class PipelineService {
         model.setDataSourceId(pipeline.getDataSourceId());
         model.setConversationId(pipeline.getConversationId());
         model.setModelType(cfg.modelType != null ? cfg.modelType : "classification");
-        model.setAlgorithm(cfg.algorithm);
+        model.setAlgorithm(String.valueOf(runtimeRequest.get("algorithmId")));
+        if (runtimeRequest.get("algorithmVersion") instanceof Number version) {
+            model.setAlgorithmVersion(version.intValue());
+        }
+        model.setAlgorithmSnapshot(String.valueOf(runtimeRequest.get("algorithmSnapshot")));
         model.setSourceTable(cfg.sourceTable != null ? cfg.sourceTable : "");
         model.setFeatureColumns(result.get("feature_columns") instanceof List<?>
             ? toJson(result.get("feature_columns"))
@@ -945,13 +953,11 @@ public class PipelineService {
         request.put("outputTable", cfg.outputTable);
         request.put("overfittingGapThreshold", overfittingGapThreshold);
         if (cfg.algorithm != null && !cfg.algorithm.isBlank()) {
-            Algorithm algorithm = algorithmService.getByAlgorithmId(cfg.algorithm);
-            if (algorithm == null || algorithm.getPythonCodeTemplate() == null) {
-                throw new IllegalStateException("算法配置缺失: " + cfg.algorithm);
-            }
-            PythonSandbox.validate(algorithm.getPythonCodeTemplate());
-            request.put("algorithmId", cfg.algorithm);
-            request.put("algorithmCode", algorithm.getPythonCodeTemplate());
+            AlgorithmService.AlgorithmBinding algorithm = algorithmService.activeBinding(
+                cfg.algorithm, cfg.modelType != null ? cfg.modelType : "classification");
+            request.put("algorithmId", algorithm.algorithmId());
+            request.put("algorithmVersion", algorithm.versionNo());
+            request.put("algorithmCode", algorithm.pythonCodeTemplate());
         }
         return request;
     }

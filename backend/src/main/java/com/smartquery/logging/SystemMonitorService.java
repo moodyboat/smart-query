@@ -50,7 +50,7 @@ public class SystemMonitorService {
         result.put("errors", errorAggregation(operations, executions));
         result.put("trainingResources", trainingResources(executions));
         result.put("alerts", alerts(result, executions));
-        result.put("permissionScope", "system-admin");
+        result.put("permissionScope", "database-rbac");
         return result;
     }
 

@@ -25,7 +25,7 @@
       <button v-if="node.implementationType !== 'SQL_AST'" class="input-port" title="连接到此节点" @pointerdown.stop @click.stop="completeConnection(node)" />
       <div class="node-type-bar" />
       <div class="node-main">
-        <div class="node-head"><span>{{ typeIcon(node.operatorType) }}</span><strong>{{ node.name }}</strong><small>v{{ node.versionNo }}</small></div>
+        <div class="node-head"><span>{{ typeIcon(node.operatorType) }}</span><strong>{{ node.name }}</strong><small>版本 {{ node.versionNo }}</small></div>
         <div class="node-meta">{{ typeLabel(node.operatorType) }} · #{{ node.operatorVersionId }}</div>
         <div v-if="node.operatorType === 'OUTPUT'" class="output-chip">{{ node.metadata?.outputKind || 'OUTPUT' }} 可视化</div>
         <div v-if="node.implementationType === 'SQL_AST'" class="capability-chip sql-chip">SQL · DS #{{ node.metadata?.dataSourceId }} · {{ tableCount(node) }} 表</div>
@@ -92,7 +92,7 @@ function moving(event) { if (move) emit('moveNode', move.id, { x: Math.max(10, m
 function stopMove() { move = null; window.removeEventListener('pointermove', moving); window.removeEventListener('pointerup', stopMove) }
 function onKey(event) { if (event.key === 'Escape') emit('cancelConnection') }
 function typeIcon(type) { return ({ DATA: '⇥', RULE: '◇', ML: '✦', AGENT: '◎', OUTPUT: '▦' }[type] || '□') }
-function typeLabel(type) { return ({ DATA: '输入', RULE: '规则', ML: '模型', AGENT: '智能体', OUTPUT: '输出' }[type] || type) }
+function typeLabel(type) { return ({ DATA: '输入', RULE: '规则', ML: '机器学习算子', AGENT: '智能体', OUTPUT: '输出' }[type] || type) }
 function typeClass(node) { return `type-${String(node.operatorType || '').toLowerCase()}` }
 function tableCount(node) { return Array.isArray(node.metadata?.allowedTables) ? node.metadata.allowedTables.length : 0 }
 function toolCount(node) { return Array.isArray(node.metadata?.allowedTools) ? node.metadata.allowedTools.length : 0 }

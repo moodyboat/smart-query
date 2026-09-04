@@ -8,10 +8,10 @@ import com.smartquery.dto.ScenarioDTO;
 import com.smartquery.entity.Scenario;
 import com.smartquery.service.PromptTemplateService;
 import com.smartquery.service.RoleScenarioService;
-import com.smartquery.common.UserRoles;
+import com.smartquery.common.PermissionCodes;
+import com.smartquery.service.RoleService;
 import com.smartquery.service.ScenarioAuthService;
 import com.smartquery.service.ScenarioService;
-import com.smartquery.service.UserService;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
@@ -24,8 +24,8 @@ import java.util.stream.Collectors;
  *
  * <p>权限规则：
  * <ul>
- *   <li>GET /scenarios：按当前用户角色过滤（admin 全量，其他角色仅授权场景）</li>
- *   <li>CRUD + 角色授权：仅 admin（依赖 UserService.requireAdmin）</li>
+ *   <li>GET /scenarios：按当前用户角色授权过滤；具备场景管理权限时可查看全量</li>
+ *   <li>CRUD + 角色授权：需要数据库配置的场景管理权限</li>
  * </ul>
  */
 @RestController
@@ -45,7 +45,7 @@ public class ScenarioController {
     private ScenarioAuthService scenarioAuthService;
 
     @Autowired
-    private UserService userService;
+    private RoleService roleService;
 
     @Autowired
     private ObjectMapper objectMapper;
@@ -56,7 +56,7 @@ public class ScenarioController {
     @GetMapping
     public Result<List<ScenarioDTO>> list() {
         String role = currentRole();
-        List<Scenario> scenarios = UserRoles.ADMIN.equals(role)
+        List<Scenario> scenarios = roleService.hasPermission(role, PermissionCodes.SCENARIO_MANAGE)
             ? scenarioService.getEnabledScenarios()
             : scenarioService.getEnabledScenariosByIds(roleScenarioService.getScenarioIdsByRole(role));
         List<ScenarioDTO> dtos = scenarios.stream().map(this::convertToDTO).collect(Collectors.toList());
@@ -68,7 +68,7 @@ public class ScenarioController {
      */
     @GetMapping("/system")
     public Result<List<ScenarioDTO>> getSystemScenarios() {
-        userService.requireAdmin();
+        requireScenarioManager();
         List<Scenario> scenarios = scenarioService.getSystemScenarios();
         List<ScenarioDTO> dtos = scenarios.stream().map(this::convertToDTO).collect(Collectors.toList());
         return Result.ok(dtos);
@@ -79,7 +79,7 @@ public class ScenarioController {
      */
     @GetMapping("/admin/all")
     public Result<List<ScenarioDTO>> getAllForAdmin() {
-        userService.requireAdmin();
+        requireScenarioManager();
         List<Scenario> scenarios = scenarioService.list();
         List<ScenarioDTO> dtos = scenarios.stream().map(this::convertToDTO).collect(Collectors.toList());
         return Result.ok(dtos);
@@ -138,7 +138,7 @@ public class ScenarioController {
      */
     @GetMapping("/{id}/roles")
     public Result<List<String>> getRolesByScenario(@PathVariable Long id) {
-        userService.requireAdmin();
+        requireScenarioManager();
         return Result.ok(roleScenarioService.getRolesByScenario(id));
     }
 
@@ -147,7 +147,7 @@ public class ScenarioController {
      */
     @PutMapping("/{id}/roles")
     public Result<Void> setScenarioRoles(@PathVariable Long id, @RequestBody java.util.Map<String, List<String>> body) {
-        userService.requireAdmin();
+        requireScenarioManager();
         List<String> roles = body.get("roles");
         roleScenarioService.setScenarioRoles(id, roles);
         return Result.ok();
@@ -158,7 +158,7 @@ public class ScenarioController {
      */
     @PostMapping
     public Result<ScenarioDTO> create(@RequestBody ScenarioDTO dto) {
-        userService.requireAdmin();
+        requireScenarioManager();
         Scenario scenario = new Scenario();
         BeanUtils.copyProperties(dto, scenario, "uiConfig", "promptTemplates", "allowedTableList");
         serializeUiConfig(dto, scenario);
@@ -174,7 +174,7 @@ public class ScenarioController {
      */
     @PutMapping("/{id}")
     public Result<ScenarioDTO> update(@PathVariable Long id, @RequestBody ScenarioDTO dto) {
-        userService.requireAdmin();
+        requireScenarioManager();
         Scenario scenario = scenarioService.getById(id);
         if (scenario == null) {
             return Result.error("场景不存在");
@@ -191,7 +191,7 @@ public class ScenarioController {
      */
     @DeleteMapping("/{id}")
     public Result<Void> delete(@PathVariable Long id) {
-        userService.requireAdmin();
+        requireScenarioManager();
         Scenario scenario = scenarioService.getById(id);
         if (scenario == null) {
             return Result.error("场景不存在");
@@ -207,6 +207,10 @@ public class ScenarioController {
     private String currentRole() {
         UserContextHolder.UserContext ctx = UserContextHolder.get();
         return ctx == null ? null : ctx.role();
+    }
+
+    private void requireScenarioManager() {
+        roleService.requireCurrentUser(PermissionCodes.SCENARIO_MANAGE, "无权限管理业务场景");
     }
 
     private void serializeUiConfig(ScenarioDTO dto, Scenario scenario) {
